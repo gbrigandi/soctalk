@@ -1,0 +1,522 @@
+{
+  "project": "soctalk",
+  "description": "SecOps LLM Agent using LangGraph with Wazuh, Cortex, and TheHive integration via MCP",
+  "version": "0.2.0",
+  "last_updated": "2025-12-09",
+  "implementation_status": "in_progress",
+  "architecture": {
+    "pattern": "Supervisor + Specialized Workers",
+    "llm_tiers": {
+      "fast": "claude-sonnet-4-20250514 or claude-haiku",
+      "reasoning": "claude-sonnet-4-20250514 or claude-opus-4-5-20250514"
+    },
+    "mcp_servers": [
+      "../mcp-server-wazuh",
+      "../mcp-server-cortex",
+      "../mcp-server-thehive",
+      "../mcp-server-misp"
+    ],
+    "persistence": {
+      "database": "postgresql",
+      "orm": "sqlmodel",
+      "pattern": "event_sourcing_with_cqrs",
+      "graph_checkpointing": "langgraph-checkpoint-postgres"
+    },
+    "frontend": {
+      "framework": "sveltekit",
+      "ui_library": "skeleton_ui",
+      "charts": "layerchart",
+      "css": "tailwindcss",
+      "realtime": "server_sent_events"
+    }
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "Project Setup & MCP Client Infrastructure",
+      "status": "completed",
+      "tasks": [
+        {"name": "Create project structure", "status": "completed"},
+        {"name": "Create requirements.json", "status": "completed"},
+        {"name": "Set up pyproject.toml", "status": "completed"},
+        {"name": "Implement config module", "status": "completed"},
+        {"name": "Implement MCP client wrapper", "status": "completed"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "State Management & Data Models",
+      "status": "completed",
+      "tasks": [
+        {"name": "Core data models (Observable, Alert, etc.)", "status": "completed"},
+        {"name": "LangGraph state schema", "status": "completed"},
+        {"name": "State persistence interface", "status": "completed"}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Worker Nodes Implementation",
+      "status": "completed",
+      "tasks": [
+        {"name": "WazuhWorker (poll, forensics)", "status": "completed"},
+        {"name": "CortexWorker (enrichment)", "status": "completed"},
+        {"name": "TheHiveWorker (incidents)", "status": "completed"},
+        {"name": "MISPWorker (threat intel)", "status": "completed"}
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Supervisor & Verdict Nodes",
+      "status": "completed",
+      "tasks": [
+        {"name": "Supervisor node with routing", "status": "completed"},
+        {"name": "Verdict node (reasoning LLM)", "status": "completed"},
+        {"name": "Routing functions", "status": "completed"}
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Alert Polling & Correlation",
+      "status": "completed",
+      "tasks": [
+        {"name": "Alert poller (continuous loop)", "status": "completed"},
+        {"name": "Alert correlator", "status": "completed"},
+        {"name": "Priority queue (critical first)", "status": "completed"}
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Human-in-the-Loop Gate",
+      "status": "completed",
+      "tasks": [
+        {"name": "HIL node implementation", "status": "completed"},
+        {"name": "Review summary generator", "status": "completed"},
+        {"name": "CLI interface for approval", "status": "completed"},
+        {"name": "Slack HIL backend", "status": "completed"}
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Graph Assembly & Main Loop",
+      "status": "completed",
+      "tasks": [
+        {"name": "LangGraph definition", "status": "completed"},
+        {"name": "Main orchestrator", "status": "completed"},
+        {"name": "Entry point (main.py)", "status": "completed"}
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Persistence Layer - Event Store",
+      "status": "completed",
+      "tasks": [
+        {"id": "8.1", "name": "Create persistence module structure", "status": "completed"},
+        {"id": "8.2", "name": "Add PostgreSQL dependencies to pyproject.toml", "status": "completed"},
+        {"id": "8.3", "name": "Implement database connection (database.py)", "status": "completed"},
+        {"id": "8.4", "name": "Define Event SQLModel table", "status": "completed"},
+        {"id": "8.5", "name": "Define EventType enum", "status": "completed"},
+        {"id": "8.6", "name": "Implement EventStore class with append/get_events", "status": "completed"},
+        {"id": "8.7", "name": "Add idempotency key support", "status": "completed"},
+        {"id": "8.8", "name": "Add optimistic concurrency (version checking)", "status": "completed"}
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Persistence Layer - Read Models & Projections",
+      "status": "completed",
+      "tasks": [
+        {"id": "9.1", "name": "Define Investigation read model table", "status": "completed"},
+        {"id": "9.2", "name": "Define metrics_hourly table", "status": "completed"},
+        {"id": "9.3", "name": "Define ioc_stats table", "status": "completed"},
+        {"id": "9.4", "name": "Define rule_stats table", "status": "completed"},
+        {"id": "9.5", "name": "Define analyzer_stats table", "status": "completed"},
+        {"id": "9.6", "name": "Implement Projector class", "status": "completed"},
+        {"id": "9.7", "name": "Project investigation lifecycle events", "status": "completed"},
+        {"id": "9.8", "name": "Project metrics and stats events", "status": "completed"},
+        {"id": "9.9", "name": "Create Alembic migrations", "status": "completed"}
+      ]
+    },
+    {
+      "id": 10,
+      "name": "LangGraph Checkpointing",
+      "status": "completed",
+      "tasks": [
+        {"id": "10.1", "name": "Add langgraph-checkpoint-postgres dependency", "status": "completed"},
+        {"id": "10.2", "name": "Configure AsyncPostgresSaver", "status": "completed"},
+        {"id": "10.3", "name": "Integrate checkpointer with graph builder", "status": "completed"},
+        {"id": "10.4", "name": "Implement recovery logic on startup", "status": "pending"},
+        {"id": "10.5", "name": "Handle orphaned investigations", "status": "pending"}
+      ]
+    },
+    {
+      "id": 11,
+      "name": "Worker Event Emission",
+      "status": "completed",
+      "tasks": [
+        {"id": "11.1", "name": "Add EventStore to worker context", "status": "completed"},
+        {"id": "11.2", "name": "Emit INVESTIGATION_CREATED in orchestrator", "status": "completed"},
+        {"id": "11.3", "name": "Emit ALERT_CORRELATED when alerts correlated", "status": "completed"},
+        {"id": "11.4", "name": "Emit OBSERVABLE_EXTRACTED in alert processing", "status": "completed"},
+        {"id": "11.5", "name": "Emit ENRICHMENT_* events in cortex_worker", "status": "completed"},
+        {"id": "11.6", "name": "Emit SUPERVISOR_DECISION in supervisor_node", "status": "completed"},
+        {"id": "11.7", "name": "Emit VERDICT_RENDERED in verdict_node", "status": "completed"},
+        {"id": "11.8", "name": "Emit HUMAN_* events in hil_node", "status": "completed"},
+        {"id": "11.9", "name": "Emit THEHIVE_CASE_CREATED in thehive_worker", "status": "completed"},
+        {"id": "11.10", "name": "Emit INVESTIGATION_CLOSED in close_node", "status": "completed"},
+        {"id": "11.11", "name": "Add idempotency keys for external API calls", "status": "completed"}
+      ]
+    },
+    {
+      "id": 12,
+      "name": "FastAPI Backend - Foundation",
+      "status": "completed",
+      "tasks": [
+        {"id": "12.1", "name": "Create api module structure", "status": "completed"},
+        {"id": "12.2", "name": "Setup FastAPI app with lifespan", "status": "completed"},
+        {"id": "12.3", "name": "Configure async SQLModel session", "status": "completed"},
+        {"id": "12.4", "name": "Add CORS middleware", "status": "completed"},
+        {"id": "12.5", "name": "Implement in-memory event bus", "status": "completed"},
+        {"id": "12.6", "name": "GET /api/events/stream (SSE endpoint)", "status": "completed"}
+      ]
+    },
+    {
+      "id": 13,
+      "name": "FastAPI Backend - Investigation Endpoints",
+      "status": "completed",
+      "tasks": [
+        {"id": "13.1", "name": "GET /api/investigations (list with filters)", "status": "completed"},
+        {"id": "13.2", "name": "GET /api/investigations/{id} (detail)", "status": "completed"},
+        {"id": "13.3", "name": "GET /api/investigations/{id}/events (timeline)", "status": "completed"},
+        {"id": "13.4", "name": "POST /api/investigations/{id}/pause", "status": "completed"},
+        {"id": "13.5", "name": "POST /api/investigations/{id}/resume", "status": "completed"},
+        {"id": "13.6", "name": "POST /api/investigations/{id}/cancel", "status": "completed"}
+      ]
+    },
+    {
+      "id": 14,
+      "name": "FastAPI Backend - Human Review Endpoints",
+      "status": "completed",
+      "tasks": [
+        {"id": "14.1", "name": "GET /api/review/pending", "status": "completed"},
+        {"id": "14.2", "name": "GET /api/review/{id}", "status": "completed"},
+        {"id": "14.3", "name": "POST /api/review/{id}/approve", "status": "completed"},
+        {"id": "14.4", "name": "POST /api/review/{id}/reject", "status": "completed"},
+        {"id": "14.5", "name": "POST /api/review/{id}/request-info", "status": "completed"}
+      ]
+    },
+    {
+      "id": 15,
+      "name": "FastAPI Backend - Dashboard & Audit Endpoints",
+      "status": "completed",
+      "tasks": [
+        {"id": "15.1", "name": "GET /api/metrics/overview", "status": "completed"},
+        {"id": "15.2", "name": "GET /api/metrics/hourly", "status": "completed"},
+        {"id": "15.3", "name": "GET /api/stats/iocs", "status": "completed"},
+        {"id": "15.4", "name": "GET /api/stats/rules", "status": "completed"},
+        {"id": "15.5", "name": "GET /api/stats/analyzers", "status": "completed"},
+        {"id": "15.6", "name": "GET /api/audit (with filters)", "status": "completed"},
+        {"id": "15.7", "name": "GET /api/audit/investigation/{id}", "status": "completed"}
+      ]
+    },
+    {
+      "id": 16,
+      "name": "SvelteKit Frontend - Setup",
+      "status": "completed",
+      "tasks": [
+        {"id": "16.1", "name": "Create SvelteKit project (frontend/)", "status": "completed"},
+        {"id": "16.2", "name": "Install Skeleton UI + Tailwind", "status": "completed"},
+        {"id": "16.3", "name": "Install LayerChart", "status": "completed"},
+        {"id": "16.4", "name": "Configure API proxy in vite.config", "status": "completed"},
+        {"id": "16.5", "name": "Create app shell layout with sidebar", "status": "completed"},
+        {"id": "16.6", "name": "Setup SSE event listener in layout", "status": "completed"},
+        {"id": "16.7", "name": "Add toast notifications for events", "status": "completed"}
+      ]
+    },
+    {
+      "id": 17,
+      "name": "SvelteKit Frontend - Dashboard Page",
+      "status": "completed",
+      "tasks": [
+        {"id": "17.1", "name": "KPI cards (open, closed, MTTV, MTTT)", "status": "completed"},
+        {"id": "17.2", "name": "Investigation throughput chart (hourly)", "status": "completed"},
+        {"id": "17.3", "name": "Verdict distribution chart", "status": "completed"},
+        {"id": "17.4", "name": "Recent investigations table", "status": "completed"},
+        {"id": "17.5", "name": "Active investigations status board", "status": "completed"}
+      ]
+    },
+    {
+      "id": 18,
+      "name": "SvelteKit Frontend - Investigations Pages",
+      "status": "completed",
+      "tasks": [
+        {"id": "18.1", "name": "Investigations list with filters", "status": "completed"},
+        {"id": "18.2", "name": "Investigation detail page", "status": "completed"},
+        {"id": "18.3", "name": "Action buttons (pause/resume/cancel)", "status": "completed"},
+        {"id": "18.4", "name": "Timeline view of events", "status": "completed"},
+        {"id": "18.5", "name": "Observables and enrichments display", "status": "completed"}
+      ]
+    },
+    {
+      "id": 19,
+      "name": "SvelteKit Frontend - Human Review Page",
+      "status": "completed",
+      "tasks": [
+        {"id": "19.1", "name": "Pending reviews list", "status": "completed"},
+        {"id": "19.2", "name": "Review detail modal/page", "status": "completed"},
+        {"id": "19.3", "name": "Approve/Reject/Request Info actions", "status": "completed"},
+        {"id": "19.4", "name": "Comment input for decisions", "status": "completed"},
+        {"id": "19.5", "name": "Investigation context display", "status": "completed"}
+      ]
+    },
+    {
+      "id": 20,
+      "name": "SvelteKit Frontend - Analytics & Audit Pages",
+      "status": "completed",
+      "tasks": [
+        {"id": "20.1", "name": "IOC stats page with charts", "status": "completed"},
+        {"id": "20.2", "name": "Rule performance page", "status": "completed"},
+        {"id": "20.3", "name": "Analyzer performance page", "status": "completed"},
+        {"id": "20.4", "name": "Audit log list with filters", "status": "completed"},
+        {"id": "20.5", "name": "Event detail expandable rows", "status": "completed"}
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Testing & Documentation",
+      "status": "pending",
+      "tasks": [
+        {"id": "21.1", "name": "EventStore unit tests", "status": "pending"},
+        {"id": "21.2", "name": "Projector unit tests", "status": "pending"},
+        {"id": "21.3", "name": "API endpoint integration tests", "status": "pending"},
+        {"id": "21.4", "name": "Recovery flow integration test", "status": "pending"},
+        {"id": "21.5", "name": "Setup Playwright for E2E", "status": "pending"},
+        {"id": "21.6", "name": "Dashboard page E2E tests", "status": "pending"},
+        {"id": "21.7", "name": "Update README.md", "status": "pending"}
+      ]
+    }
+  ],
+  "key_decisions": {
+    "investigation_mode": "one_at_a_time",
+    "alert_correlation": true,
+    "priority_order": "critical_first",
+    "polling_mode": "continuous_loop",
+    "state_persistence": "postgresql_event_sourcing",
+    "graph_persistence": "langgraph_postgres_checkpointer",
+    "projections": "sync_same_transaction",
+    "retention": "keep_forever",
+    "hil_trigger": "before_incident_creation",
+    "verdict_gate": "before_hil_using_reasoning_llm",
+    "dashboard_tech": "sveltekit_layerchart",
+    "realtime_updates": "server_sent_events"
+  },
+  "milestones": [
+    {
+      "id": "M1",
+      "name": "Persistence Foundation",
+      "phases": [8, 9, 10],
+      "status": "pending",
+      "description": "Event store, projections, and LangGraph checkpointing working"
+    },
+    {
+      "id": "M2",
+      "name": "API Layer",
+      "phases": [11, 12, 13, 14, 15],
+      "status": "pending",
+      "description": "FastAPI endpoints operational, workers emitting events"
+    },
+    {
+      "id": "M3",
+      "name": "Control Plane MVP",
+      "phases": [16, 17, 18, 19],
+      "status": "pending",
+      "description": "SvelteKit app with dashboard, investigations, and human review"
+    },
+    {
+      "id": "M4",
+      "name": "Full Feature Set",
+      "phases": [20, 21],
+      "status": "pending",
+      "description": "Analytics, audit, and testing complete"
+    }
+  ],
+  "new_dependencies": {
+    "python": [
+      {"name": "sqlmodel", "version": ">=0.0.22", "purpose": "ORM"},
+      {"name": "asyncpg", "version": ">=0.29.0", "purpose": "Async PostgreSQL driver"},
+      {"name": "alembic", "version": ">=1.13.0", "purpose": "Database migrations"},
+      {"name": "fastapi", "version": ">=0.115.0", "purpose": "REST API framework"},
+      {"name": "uvicorn", "version": ">=0.32.0", "purpose": "ASGI server"},
+      {"name": "sse-starlette", "version": ">=2.1.0", "purpose": "Server-Sent Events"},
+      {"name": "langgraph-checkpoint-postgres", "version": ">=2.0.0", "purpose": "LangGraph PostgreSQL checkpointer"}
+    ],
+    "frontend": [
+      {"name": "@skeletonlabs/skeleton", "version": "^2.0.0", "purpose": "UI components"},
+      {"name": "@skeletonlabs/tw-plugin", "version": "^0.4.0", "purpose": "Tailwind plugin"},
+      {"name": "layerchart", "version": "^0.50.0", "purpose": "Charts"},
+      {"name": "tailwindcss", "version": "^3.4.0", "purpose": "CSS framework"}
+    ]
+  },
+  "new_files": {
+    "backend": [
+      "src/soctalk/persistence/__init__.py",
+      "src/soctalk/persistence/database.py",
+      "src/soctalk/persistence/models.py",
+      "src/soctalk/persistence/events.py",
+      "src/soctalk/persistence/store.py",
+      "src/soctalk/persistence/projections.py",
+      "src/soctalk/api/__init__.py",
+      "src/soctalk/api/app.py",
+      "src/soctalk/api/deps.py",
+      "src/soctalk/api/routes/__init__.py",
+      "src/soctalk/api/routes/investigations.py",
+      "src/soctalk/api/routes/review.py",
+      "src/soctalk/api/routes/metrics.py",
+      "src/soctalk/api/routes/events.py",
+      "src/soctalk/api/routes/audit.py",
+      "alembic.ini",
+      "alembic/env.py",
+      "alembic/versions/"
+    ],
+    "frontend": [
+      "frontend/package.json",
+      "frontend/svelte.config.js",
+      "frontend/vite.config.ts",
+      "frontend/tailwind.config.ts",
+      "frontend/src/app.html",
+      "frontend/src/app.css",
+      "frontend/src/routes/+layout.svelte",
+      "frontend/src/routes/+page.svelte",
+      "frontend/src/routes/investigations/+page.svelte",
+      "frontend/src/routes/investigations/[id]/+page.svelte",
+      "frontend/src/routes/review/+page.svelte",
+      "frontend/src/routes/analytics/+page.svelte",
+      "frontend/src/routes/audit/+page.svelte",
+      "frontend/src/lib/stores/index.ts",
+      "frontend/src/lib/api/client.ts",
+      "frontend/src/lib/components/KpiCard.svelte",
+      "frontend/src/lib/components/InvestigationTable.svelte",
+      "frontend/src/lib/components/EventTimeline.svelte"
+    ]
+  },
+  "database_schema": {
+    "events": {
+      "description": "Append-only event store",
+      "columns": ["id UUID PK", "aggregate_id UUID", "aggregate_type TEXT", "event_type TEXT", "version INT", "timestamp TIMESTAMPTZ", "data JSONB", "metadata JSONB", "idempotency_key TEXT UNIQUE"]
+    },
+    "investigations": {
+      "description": "Read model for investigation state",
+      "columns": ["id UUID PK", "title TEXT", "status TEXT", "phase TEXT", "created_at TIMESTAMPTZ", "updated_at TIMESTAMPTZ", "closed_at TIMESTAMPTZ", "time_to_triage_seconds INT", "time_to_verdict_seconds INT", "alert_count INT", "observable_count INT", "malicious_count INT", "max_severity TEXT", "verdict_decision TEXT", "verdict_confidence REAL", "thehive_case_id TEXT", "threat_actor TEXT", "tags TEXT[]"]
+    },
+    "metrics_hourly": {
+      "description": "Hourly aggregated metrics",
+      "columns": ["hour TIMESTAMPTZ PK", "investigations_created INT", "investigations_closed INT", "escalations INT", "auto_closed INT", "avg_time_to_verdict_seconds INT", "total_alerts INT", "total_observables INT", "malicious_observables INT"]
+    },
+    "ioc_stats": {
+      "description": "IOC statistics",
+      "columns": ["value TEXT", "type TEXT", "times_seen INT", "last_seen TIMESTAMPTZ", "malicious_count INT", "benign_count INT", "threat_actors TEXT[]"]
+    },
+    "rule_stats": {
+      "description": "Wazuh rule statistics",
+      "columns": ["rule_id TEXT PK", "times_triggered INT", "escalation_count INT", "auto_close_count INT", "precision_rate REAL"]
+    },
+    "analyzer_stats": {
+      "description": "Cortex analyzer statistics",
+      "columns": ["analyzer TEXT PK", "invocations INT", "successes INT", "failures INT", "avg_response_time_ms REAL"]
+    }
+  },
+  "event_types": [
+    "investigation.created",
+    "investigation.closed",
+    "alert.added",
+    "observable.extracted",
+    "enrichment.requested",
+    "enrichment.completed",
+    "enrichment.failed",
+    "supervisor.decision",
+    "verdict.rendered",
+    "human.review_requested",
+    "human.decision_received",
+    "thehive.case_created",
+    "phase.changed"
+  ],
+  "mcp_tools": {
+    "wazuh": [
+      "get_wazuh_alert_summary",
+      "get_wazuh_agents",
+      "get_wazuh_agent_processes",
+      "get_wazuh_agent_ports",
+      "get_wazuh_vulnerability_summary"
+    ],
+    "cortex": [
+      "analyze_ip_with_abuseipdb",
+      "scan_url_with_virustotal",
+      "analyze_url_with_urlscan_io",
+      "scan_hash_with_virustotal",
+      "analyze_with_abusefinder"
+    ],
+    "thehive": [
+      "get_thehive_alerts",
+      "get_thehive_alert_by_id",
+      "get_thehive_cases",
+      "create_thehive_case",
+      "promote_alert_to_case"
+    ],
+    "misp": [
+      "search_misp_ioc",
+      "get_misp_event_context",
+      "check_misp_warninglist",
+      "get_misp_sightings",
+      "get_misp_threat_actor_iocs"
+    ]
+  },
+  "files_created": [
+    "pyproject.toml",
+    "requirements.json",
+    ".env.example",
+    "src/soctalk/__init__.py",
+    "src/soctalk/config.py",
+    "src/soctalk/main.py",
+    "src/soctalk/mcp/__init__.py",
+    "src/soctalk/mcp/client.py",
+    "src/soctalk/mcp/bindings.py",
+    "src/soctalk/models/__init__.py",
+    "src/soctalk/models/enums.py",
+    "src/soctalk/models/observables.py",
+    "src/soctalk/models/alerts.py",
+    "src/soctalk/models/investigation.py",
+    "src/soctalk/models/verdict.py",
+    "src/soctalk/models/state.py",
+    "src/soctalk/workers/__init__.py",
+    "src/soctalk/workers/wazuh.py",
+    "src/soctalk/workers/cortex.py",
+    "src/soctalk/workers/thehive.py",
+    "src/soctalk/workers/misp.py",
+    "src/soctalk/supervisor/__init__.py",
+    "src/soctalk/supervisor/prompts.py",
+    "src/soctalk/supervisor/node.py",
+    "src/soctalk/supervisor/verdict.py",
+    "src/soctalk/polling/__init__.py",
+    "src/soctalk/polling/poller.py",
+    "src/soctalk/polling/correlator.py",
+    "src/soctalk/polling/queue.py",
+    "src/soctalk/graph/__init__.py",
+    "src/soctalk/graph/hil.py",
+    "src/soctalk/graph/close.py",
+    "src/soctalk/graph/builder.py",
+    "src/soctalk/hil/__init__.py",
+    "src/soctalk/hil/service.py",
+    "src/soctalk/hil/base.py",
+    "src/soctalk/hil/models.py",
+    "src/soctalk/hil/inquiry.py",
+    "src/soctalk/hil/backends/__init__.py",
+    "src/soctalk/hil/backends/slack.py",
+    "src/soctalk/api/__init__.py",
+    "src/soctalk/api/app.py",
+    "src/soctalk/api/deps.py",
+    "src/soctalk/api/event_bus.py",
+    "src/soctalk/api/routes/__init__.py",
+    "src/soctalk/api/routes/events.py",
+    "src/soctalk/api/routes/investigations.py",
+    "src/soctalk/api/routes/review.py"
+  ]
+}

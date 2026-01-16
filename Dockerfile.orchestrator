@@ -1,0 +1,93 @@
+# =============================================================================
+# SocTalk Orchestrator - Download pre-built MCP server binaries
+# =============================================================================
+
+FROM python:3.13-slim
+
+LABEL maintainer="soctalk"
+LABEL description="SocTalk Orchestrator - Alert polling and investigation processing"
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    jq \
+    ca-certificates \
+    libssl3 \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create MCP servers directory
+RUN mkdir -p /opt/mcp-servers
+
+# GitHub org/user for MCP servers
+ARG MCP_GITHUB_ORG=gbrigandi
+
+# Download mcp-server-wazuh (linux-amd64)
+ARG WAZUH_MCP_VERSION=latest
+RUN REPO="${MCP_GITHUB_ORG}/mcp-server-wazuh" && \
+    if [ "$WAZUH_MCP_VERSION" = "latest" ]; then \
+      API_URL="https://api.github.com/repos/${REPO}/releases/latest"; \
+    else \
+      API_URL="https://api.github.com/repos/${REPO}/releases/tags/${WAZUH_MCP_VERSION}"; \
+    fi && \
+    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    echo "Downloading mcp-server-wazuh from: $URL" && \
+    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-wazuh && \
+    chmod +x /opt/mcp-servers/mcp-server-wazuh
+
+# Download mcp-server-cortex (linux-amd64)
+ARG CORTEX_MCP_VERSION=latest
+RUN REPO="${MCP_GITHUB_ORG}/mcp-server-cortex" && \
+    if [ "$CORTEX_MCP_VERSION" = "latest" ]; then \
+      API_URL="https://api.github.com/repos/${REPO}/releases/latest"; \
+    else \
+      API_URL="https://api.github.com/repos/${REPO}/releases/tags/${CORTEX_MCP_VERSION}"; \
+    fi && \
+    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    echo "Downloading mcp-server-cortex from: $URL" && \
+    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-cortex && \
+    chmod +x /opt/mcp-servers/mcp-server-cortex
+
+# Download mcp-server-thehive (linux-amd64)
+ARG THEHIVE_MCP_VERSION=latest
+RUN REPO="${MCP_GITHUB_ORG}/mcp-server-thehive" && \
+    if [ "$THEHIVE_MCP_VERSION" = "latest" ]; then \
+      API_URL="https://api.github.com/repos/${REPO}/releases/latest"; \
+    else \
+      API_URL="https://api.github.com/repos/${REPO}/releases/tags/${THEHIVE_MCP_VERSION}"; \
+    fi && \
+    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    echo "Downloading mcp-server-thehive from: $URL" && \
+    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-thehive && \
+    chmod +x /opt/mcp-servers/mcp-server-thehive
+
+# Download mcp-server-misp (linux-amd64)
+ARG MISP_MCP_VERSION=latest
+RUN REPO="${MCP_GITHUB_ORG}/mcp-server-misp" && \
+    if [ "$MISP_MCP_VERSION" = "latest" ]; then \
+      API_URL="https://api.github.com/repos/${REPO}/releases/latest"; \
+    else \
+      API_URL="https://api.github.com/repos/${REPO}/releases/tags/${MISP_MCP_VERSION}"; \
+    fi && \
+    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    echo "Downloading mcp-server-misp from: $URL" && \
+    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-misp && \
+    chmod +x /opt/mcp-servers/mcp-server-misp
+
+# Copy Python project files
+COPY pyproject.toml README.md ./
+COPY src/soctalk ./src/soctalk
+
+# Install Python dependencies (with slack HIL backend)
+RUN pip install --no-cache-dir .[slack]
+
+# Set MCP server paths
+ENV WAZUH_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-wazuh
+ENV CORTEX_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-cortex
+ENV THEHIVE_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-thehive
+ENV MISP_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-misp
+
+# Run the orchestrator
+CMD ["python", "-m", "soctalk.main"]

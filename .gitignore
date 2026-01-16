@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+.venv/
+.venv*/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Runtime files
+.pids/
+*.pid
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Screenshots (test artifacts)
+screenshots/
+
+# Node/Frontend (handled by frontend/.gitignore)
+node_modules/
+
+# Database
+*.db
+*.sqlite3
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+backups/

@@ -1,0 +1,14 @@
+# Mock Endpoint Attack Schedule
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=""
+
+# Random attack every 15 minutes
+*/15 * * * * root /opt/scripts/run-attack.sh random >> /var/log/attack-simulator/cron.log 2>&1
+
+# Discovery every hour
+0 * * * * root /opt/scripts/run-attack.sh T1082 >> /var/log/attack-simulator/cron.log 2>&1
+
+# Credential access every 2 hours
+0 */2 * * * root /opt/scripts/run-attack.sh T1003.008 >> /var/log/attack-simulator/cron.log 2>&1
+

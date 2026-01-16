@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles for security dashboard */
+:root {
+	--color-primary: 220 90% 56%;
+	--color-secondary: 160 84% 39%;
+	--color-tertiary: 255 90% 60%;
+	--color-success: 142 76% 36%;
+	--color-warning: 38 92% 50%;
+	--color-error: 0 72% 51%;
+	--color-surface: 210 40% 98%;
+}
+
+.dark {
+	--color-surface: 222 47% 11%;
+}
+
+/* Toast notification styles */
+.toast-container {
+	position: fixed;
+	bottom: 1rem;
+	right: 1rem;
+	z-index: 9999;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+/* Status indicator animations */
+@keyframes pulse-green {
+	0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+	50% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+}
+
+@keyframes pulse-red {
+	0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+	50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
+
+.status-indicator-active {
+	animation: pulse-green 2s infinite;
+}
+
+.status-indicator-error {
+	animation: pulse-red 2s infinite;
+}
+
+/* AppRail - increase width for longer labels */
+.app-rail {
+	width: 5.5rem !important;
+}
+
+/* AppRail navigation label styling */
+.app-rail a span.text-xs {
+	font-size: 0.7rem;
+	line-height: 1;
+	max-width: 100%;
+	text-align: center;
+}

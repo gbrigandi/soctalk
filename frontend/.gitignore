@@ -1,0 +1,41 @@
+# OS files
+.DS_Store
+
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+/build
+/.svelte-kit
+/package
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Testing
+/screenshots
+/playwright-report
+/test-results
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo

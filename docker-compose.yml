@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: soctalk-postgres
+    environment:
+      POSTGRES_USER: soctalk
+      POSTGRES_PASSWORD: soctalk
+      POSTGRES_DB: soctalk
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soctalk -d soctalk"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soctalk-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      CORS_ORIGINS: http://localhost:5173,http://frontend:5173
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: soctalk-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      API_URL: http://api:8000
+      PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    container_name: soctalk-orchestrator
+    environment:
+      DATABASE_URL: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      SOCTALK_DATABASE_URL: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      SOCTALK_DB_ENABLED: "true"
+      # Override local paths from .env with container paths
+      WAZUH_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-wazuh
+      CORTEX_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-cortex
+      THEHIVE_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-thehive
+      MISP_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-misp
+      # Pass through from .env (z.ai compatible endpoint)
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mock-endpoint:
+    build:
+      context: ./attack-simulator
+      dockerfile: Dockerfile
+    container_name: soctalk-mock-endpoint
+    hostname: mock-endpoint-01
+    privileged: true
+    environment:
+      WAZUH_MANAGER: ${WAZUH_API_HOST}
+      WAZUH_AGENT_NAME: mock-endpoint-01
+      ATTACK_DELAY: 10
+      ATTACK_INTERVAL: 300
+    env_file:
+      - .env
+    volumes:
+      - attack_logs:/var/log/attack-simulator
+    restart: unless-stopped
+    profiles:
+      - testing
+
+volumes:
+  postgres_data:
+  attack_logs:

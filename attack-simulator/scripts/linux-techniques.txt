@@ -1,0 +1,55 @@
+# Linux-specific MITRE ATT&CK techniques for Atomic Red Team
+# Format: TECHNIQUE_ID:TEST_NUMBER:DESCRIPTION
+# Use TEST_NUMBER=0 for random test selection within technique
+
+# Persistence
+T1053.003:1:Cron - Create cron job
+T1136.001:1:Create Account - Local Account
+T1543.002:1:Systemd Service
+T1546.004:1:.bash_profile and .bashrc modification
+
+# Privilege Escalation
+T1548.001:1:Setuid and Setgid
+T1548.003:1:Sudo and Sudo Caching
+
+# Defense Evasion
+T1070.004:1:File Deletion
+T1070.003:1:Clear Command History
+T1222.002:1:Linux File and Directory Permissions Modification
+T1564.001:1:Hidden Files and Directories
+
+# Credential Access
+T1003.008:1:/etc/passwd and /etc/shadow
+T1552.001:1:Credentials In Files
+T1552.004:1:Private Keys
+
+# Discovery
+T1082:1:System Information Discovery
+T1083:1:File and Directory Discovery
+T1057:1:Process Discovery
+T1049:1:System Network Connections Discovery
+T1016:1:System Network Configuration Discovery
+T1033:1:System Owner/User Discovery
+T1087.001:1:Account Discovery - Local Account
+T1007:1:System Service Discovery
+T1518.001:1:Security Software Discovery
+
+# Lateral Movement
+T1021.004:1:SSH
+
+# Collection
+T1005:1:Data from Local System
+T1119:1:Automated Collection
+T1074.001:1:Local Data Staging
+
+# Command and Control
+T1071.004:1:DNS
+T1105:1:Ingress Tool Transfer
+
+# Exfiltration
+T1048.003:1:Exfiltration Over Unencrypted Non-C2 Protocol
+
+# Impact
+T1485:1:Data Destruction
+T1489:1:Service Stop
+T1529:1:System Shutdown/Reboot
