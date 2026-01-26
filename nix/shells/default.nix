@@ -93,7 +93,8 @@ in pkgs.mkShell {
     # Install Python dependencies if needed
     if [ ! -f .venv/.installed ]; then
       echo "Installing Python dependencies..."
-      pip install -e ".[dev,slack]" --quiet
+      # Temporarily set LD_LIBRARY_PATH for pip install (native deps may need it)
+      LD_LIBRARY_PATH="$NIX_LD_LIBRARY_PATH" pip install -e ".[dev,slack]" --quiet
       touch .venv/.installed
     fi
     
@@ -141,10 +142,15 @@ in pkgs.mkShell {
   RUST_LOG = "info";
   SOCTALK_LOG_LEVEL = "DEBUG";
   
-  # Needed for some Python packages to compile
-  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+  # Note: We intentionally do NOT set LD_LIBRARY_PATH globally as it breaks
+  # system tools like `nix`. If you need it for pip install, set it locally:
+  #   LD_LIBRARY_PATH=$NIX_LD_LIBRARY_PATH pip install ...
+  
+  # For packages that need native libs during pip install
+  NIX_LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
     pkgs.stdenv.cc.cc.lib
     pkgs.openssl
     pkgs.postgresql.lib
+    pkgs.zlib
   ];
 }
