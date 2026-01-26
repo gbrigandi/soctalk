@@ -60,3 +60,7 @@ htmlcov/
 # mypy
 .mypy_cache/
 backups/
+
+# Nix
+result
+result-*

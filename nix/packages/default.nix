@@ -1,4 +1,4 @@
-{ pkgs, pkgs-unstable, lib, rev ? "dev" }:
+{ pkgs, lib, rev ? "dev" }:
 
 {
   soctalk-api = import ./soctalk-api.nix { 

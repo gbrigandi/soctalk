@@ -78,8 +78,8 @@ in pkgs.dockerTools.buildLayeredImage {
     mkdir -p var/log/nginx
     mkdir -p var/cache/nginx
     
-    # Copy built frontend assets
-    cp -r ${soctalk-frontend}/share/soctalk-frontend/* var/www/soctalk/ || true
+    # Copy built frontend static assets (from SvelteKit client output)
+    cp -r ${soctalk-frontend}/client/* var/www/soctalk/ || true
   '';
 
   config = {

@@ -2,7 +2,7 @@
 
 let
   python = pkgs.python311;
-  
+
   # Python environment with orchestrator dependencies
   pythonEnv = python.withPackages (ps: with ps; [
     # Core dependencies (from pyproject.toml)
@@ -11,14 +11,14 @@ let
     aiohttp
     rich
     structlog
-    
+
     # Database
     sqlalchemy
     asyncpg
     greenlet
     alembic
     psycopg2
-    
+
     # Web framework (for API calls)
     fastapi
     uvicorn
@@ -30,18 +30,19 @@ let
   # MCP server binaries - fetch from GitHub releases
   # NOTE: These use fakeHash and will fail on first build.
   # Update with the correct hash from the error message.
-  
+
   mcpServerWazuh = pkgs.stdenv.mkDerivation {
     pname = "mcp-server-wazuh";
     version = "latest";
-    
+
     src = pkgs.fetchurl {
       url = "https://github.com/gbrigandi/mcp-server-wazuh/releases/latest/download/mcp-server-wazuh-linux-amd64";
-      sha256 = pkgs.lib.fakeHash;
+      #sha256 = pkgs.lib.fakeHash;
+      sha256 = "sha256-ihjLRAB9SDTud66JdTVfQExJvajA1oblNJlONRQTSDQ=";
     };
-    
+
     dontUnpack = true;
-    
+
     installPhase = ''
       mkdir -p $out/bin
       cp $src $out/bin/mcp-server-wazuh
@@ -52,14 +53,15 @@ let
   mcpServerCortex = pkgs.stdenv.mkDerivation {
     pname = "mcp-server-cortex";
     version = "latest";
-    
+
     src = pkgs.fetchurl {
       url = "https://github.com/gbrigandi/mcp-server-cortex/releases/latest/download/mcp-server-cortex-linux-amd64";
-      sha256 = pkgs.lib.fakeHash;
+      #sha256 = pkgs.lib.fakeHash;
+      sha256 = "sha256-qWINP8Hmo8aSTcLsAWXoVTNwgsUHrnrPho3GL1o36N4=";
     };
-    
+
     dontUnpack = true;
-    
+
     installPhase = ''
       mkdir -p $out/bin
       cp $src $out/bin/mcp-server-cortex
@@ -70,14 +72,15 @@ let
   mcpServerThehive = pkgs.stdenv.mkDerivation {
     pname = "mcp-server-thehive";
     version = "latest";
-    
+
     src = pkgs.fetchurl {
       url = "https://github.com/gbrigandi/mcp-server-thehive/releases/latest/download/mcp-server-thehive-linux-amd64";
-      sha256 = pkgs.lib.fakeHash;
+      #sha256 = pkgs.lib.fakeHash;
+      sha256 = "sha256-Vxv2vxzV5TOhXB28t2ys1cNAATdV/hMu0ddPrYVKMmI=";
     };
-    
+
     dontUnpack = true;
-    
+
     installPhase = ''
       mkdir -p $out/bin
       cp $src $out/bin/mcp-server-thehive
@@ -88,14 +91,15 @@ let
   mcpServerMisp = pkgs.stdenv.mkDerivation {
     pname = "mcp-server-misp";
     version = "latest";
-    
+
     src = pkgs.fetchurl {
       url = "https://github.com/gbrigandi/mcp-server-misp/releases/latest/download/mcp-server-misp-linux-amd64";
-      sha256 = pkgs.lib.fakeHash;
+      #sha256 = pkgs.lib.fakeHash;
+      sha256 = "sha256-3JoqknzBYKYe8xEVLWspvStthQOvFAonUnPMsEPVbHA=";
     };
-    
+
     dontUnpack = true;
-    
+
     installPhase = ''
       mkdir -p $out/bin
       cp $src $out/bin/mcp-server-misp

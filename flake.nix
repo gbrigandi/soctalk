@@ -2,20 +2,14 @@
   description = "SocTalk - LLM-powered SOC agent for security alert triage and investigation";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
       let
         pkgs = import nixpkgs {
-          inherit system;
-          config.allowUnfree = true;
-        };
-        
-        pkgs-unstable = import nixpkgs-unstable {
           inherit system;
           config.allowUnfree = true;
         };
@@ -25,7 +19,7 @@
         
         # Package definitions
         packages = import ./nix/packages { 
-          inherit pkgs pkgs-unstable lib; 
+          inherit pkgs lib; 
           rev = self.rev or "dev";
         };
         
@@ -36,7 +30,7 @@
         
         # Development shell
         devShell = import ./nix/shells { 
-          inherit pkgs pkgs-unstable; 
+          inherit pkgs; 
         };
 
       in {

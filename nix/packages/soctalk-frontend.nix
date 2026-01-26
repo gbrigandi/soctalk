@@ -1,6 +1,9 @@
 { pkgs }:
 
-pkgs.stdenv.mkDerivation rec {
+# Build frontend as a fixed-output derivation
+# This allows network access during build for pnpm install
+# The hash must be updated when source or dependencies change
+pkgs.stdenv.mkDerivation {
   pname = "soctalk-frontend";
   version = "0.1.0";
 
@@ -8,54 +11,51 @@ pkgs.stdenv.mkDerivation rec {
 
   nativeBuildInputs = [
     pkgs.nodejs_20
-    pkgs.nodePackages.pnpm
-    pkgs.cacert  # For HTTPS during pnpm install
+    pkgs.pnpm
+    pkgs.cacert
   ];
 
-  # Disable default phases that don't apply
-  dontConfigure = true;
+  # Fixed-output derivation - allows network during build
+  outputHashMode = "recursive";
+  outputHashAlgo = "sha256";
+  # Update this hash when dependencies or source change:
+  # nix build .#soctalk-frontend 2>&1 | grep "got:"
+  outputHash = "sha256-eG/L5jdkCNaGNmPBAMKBXejeX1QTKq9ECg9CFVVBI8Q=";
 
-  # pnpm needs a writable home and store
   buildPhase = ''
     runHook preBuild
-    
+
     export HOME=$TMPDIR
-    export PNPM_HOME=$TMPDIR/.pnpm-home
-    export PNPM_STORE_DIR=$TMPDIR/.pnpm-store
-    mkdir -p $PNPM_HOME $PNPM_STORE_DIR
-    
+    export PNPM_HOME=$TMPDIR/.pnpm
+    mkdir -p $PNPM_HOME
+
     # Install dependencies
     pnpm install --frozen-lockfile
-    
-    # Build for production
+
+    # Build SvelteKit app
     pnpm build
-    
+
     runHook postBuild
   '';
 
   installPhase = ''
     runHook preInstall
-    
-    mkdir -p $out/share/soctalk-frontend
-    
-    # SvelteKit with adapter-auto typically outputs to build/
+
+    mkdir -p $out
+
+    # SvelteKit adapter-auto outputs vary; check common locations
     if [ -d "build" ]; then
-      cp -r build/* $out/share/soctalk-frontend/
+      cp -r build/* $out/
+    elif [ -d ".svelte-kit/output" ]; then
+      cp -r .svelte-kit/output/* $out/
     fi
-    
-    # For adapter-node, also copy the handler
-    if [ -d "build/server" ]; then
-      mkdir -p $out/lib/soctalk-frontend
-      cp -r build/server/* $out/lib/soctalk-frontend/
-      cp package.json $out/lib/soctalk-frontend/
-    fi
-    
+
+    # List what was produced for debugging
+    echo "Build output contents:"
+    ls -la $out/ || true
+
     runHook postInstall
   '';
-
-  # Allow network access during build for pnpm (needed in sandbox)
-  # Note: For pure builds, you'd need to pre-fetch deps with pnpm2nix or similar
-  __noChroot = true;
 
   meta = with pkgs.lib; {
     description = "SocTalk Frontend - SvelteKit dashboard for the SOC agent";

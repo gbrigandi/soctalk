@@ -1,4 +1,4 @@
-{ pkgs, pkgs-unstable }:
+{ pkgs }:
 
 let
   python = pkgs.python311;
