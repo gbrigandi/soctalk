@@ -63,7 +63,7 @@ in pkgs.mkShell {
     # Runtime dependencies for Python packages
     pkgs.openssl
     pkgs.openssl.dev
-    pkgs.postgresql.lib
+    pkgs.postgresql_16.lib
     pkgs.libffi
 
     # Utilities
@@ -150,7 +150,7 @@ in pkgs.mkShell {
   NIX_LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
     pkgs.stdenv.cc.cc.lib
     pkgs.openssl
-    pkgs.postgresql.lib
+    pkgs.postgresql_16.lib
     pkgs.zlib
   ];
 }

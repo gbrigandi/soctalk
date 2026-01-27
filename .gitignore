@@ -37,6 +37,7 @@ logs/
 # AI
 .opencode
 .ai
+k8s
 
 # OS
 .DS_Store
