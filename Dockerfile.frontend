@@ -1,0 +1,98 @@
+# =============================================================================
+# SocTalk Frontend - Multi-stage production build
+# =============================================================================
+
+# Stage 1: Build the SvelteKit application
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install pnpm
+RUN npm install -g pnpm
+
+# Copy package files first for better layer caching
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY frontend/ .
+
+# Build the static site
+RUN pnpm build
+
+# Stage 2: Serve with nginx
+FROM nginx:alpine
+
+LABEL maintainer="soctalk"
+LABEL description="SocTalk Frontend - SvelteKit dashboard for SOC agent"
+
+# Copy built static files from builder stage
+COPY --from=builder /app/build /var/www/soctalk
+
+# Copy nginx configuration
+COPY <<'EOF' /etc/nginx/nginx.conf
+user nginx;
+worker_processes auto;
+error_log /dev/stderr warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /dev/stdout main;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
+
+    server {
+        listen 5173;
+        server_name localhost;
+        root /var/www/soctalk;
+
+        # SvelteKit SPA routing - try files, then fall back to index.html
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Cache static assets
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        # Health check endpoint
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+    }
+}
+EOF
+
+# Expose port
+EXPOSE 5173
+
+# Run nginx in foreground
+CMD ["nginx", "-g", "daemon off;"]
