@@ -70,6 +70,7 @@ in pkgs.mkShell {
     pkgs.curl
     pkgs.jq
     pkgs.git
+    pkgs.just
 
     # For building MCP servers locally (optional)
     pkgs.rustc
@@ -116,6 +117,14 @@ in pkgs.mkShell {
     echo "    cd frontend && pnpm dev      # Start dev server"
     echo "    cd frontend && pnpm check    # Type check"
     echo "    cd frontend && pnpm test     # Run Playwright tests"
+    echo ""
+    echo "  Docker (via just):"
+    echo "    just build-api               # Build & load API image"
+    echo "    just build-orchestrator      # Build & load orchestrator image"
+    echo "    just build-frontend          # Build & load frontend image"
+    echo "    just build-all               # Build all images"
+    echo "    just run                     # Run all services"
+    echo "    just                         # Show all targets"
     echo ""
     echo "  Nix:"
     echo "    nix build .#soctalk-api      # Build API package"

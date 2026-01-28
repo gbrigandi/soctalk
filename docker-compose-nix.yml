@@ -1,0 +1,109 @@
+# Docker Compose configuration using Nix-built images
+#
+# This file is designed to work with pre-built Nix images instead of building
+# from Dockerfiles. Before running this compose file, you must load the Nix
+# images into Docker.
+#
+# Loading Nix images:
+#   1. Build images with Nix:
+#      nix build .#dockerImages.soctalk-api
+#      nix build .#dockerImages.soctalk-frontend
+#      nix build .#dockerImages.soctalk-orchestrator
+#      nix build .#dockerImages.soctalk-mock-endpoint
+#
+#   2. Load images into Docker:
+#      docker load < result
+#
+#   Or use the convenience script (if available):
+#      ./scripts/load-nix-images.sh
+#
+# Usage:
+#   docker compose -f docker-compose-nix.yml up
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: soctalk-postgres
+    environment:
+      POSTGRES_USER: soctalk
+      POSTGRES_PASSWORD: soctalk
+      POSTGRES_DB: soctalk
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soctalk -d soctalk"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: soctalk-api:latest
+    container_name: soctalk-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      CORS_ORIGINS: http://localhost:5173,http://frontend:5173
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: soctalk-frontend:latest
+    container_name: soctalk-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      API_URL: http://api:8000
+      PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  orchestrator:
+    image: soctalk-orchestrator:latest
+    container_name: soctalk-orchestrator
+    environment:
+      DATABASE_URL: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      SOCTALK_DATABASE_URL: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      SOCTALK_DB_ENABLED: "true"
+      # Override local paths from .env with container paths
+      WAZUH_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-wazuh
+      CORTEX_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-cortex
+      THEHIVE_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-thehive
+      MISP_MCP_SERVER_PATH: /opt/mcp-servers/mcp-server-misp
+      # Pass through from .env (z.ai compatible endpoint)
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mock-endpoint:
+    image: soctalk-mock-endpoint:latest
+    container_name: soctalk-mock-endpoint
+    hostname: mock-endpoint-01
+    privileged: true
+    environment:
+      WAZUH_MANAGER: ${WAZUH_API_HOST}
+      WAZUH_AGENT_NAME: mock-endpoint-01
+      ATTACK_DELAY: 10
+      ATTACK_INTERVAL: 300
+    env_file:
+      - .env
+    volumes:
+      - attack_logs:/var/log/attack-simulator
+    restart: unless-stopped
+    profiles:
+      - testing
+
+volumes:
+  postgres_data:
+  attack_logs:

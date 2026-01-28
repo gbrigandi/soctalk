@@ -39,9 +39,9 @@ importers:
       '@skeletonlabs/tw-plugin':
         specifier: ^0.4.0
         version: 0.4.1(tailwindcss@3.4.18)
-      '@sveltejs/adapter-auto':
+      '@sveltejs/adapter-static':
         specifier: ^3.0.0
-        version: 3.3.1(@sveltejs/kit@2.49.2(@sveltejs/vite-plugin-svelte@3.1.2(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))
+        version: 3.0.10(@sveltejs/kit@2.49.2(@sveltejs/vite-plugin-svelte@3.1.2(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))
       '@sveltejs/kit':
         specifier: ^2.0.0
         version: 2.49.2(@sveltejs/vite-plugin-svelte@3.1.2(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2))
@@ -422,8 +422,8 @@ packages:
     peerDependencies:
       acorn: ^8.9.0
 
-  '@sveltejs/adapter-auto@3.3.1':
-    resolution: {integrity: sha512-5Sc7WAxYdL6q9j/+D0jJKjGREGlfIevDyHSQ2eNETHcB1TKlQWHcAo8AS8H1QdjNvSXpvOwNjykDUHPEAyGgdQ==}
+  '@sveltejs/adapter-static@3.0.10':
+    resolution: {integrity: sha512-7D9lYFWJmB7zxZyTE/qxjksvMqzMuYrrsyh1f4AlZqeZeACPRySjbC3aFiY55wb1tWUaKOQG9PVbm74JcN2Iew==}
     peerDependencies:
       '@sveltejs/kit': ^2.0.0
 
@@ -786,9 +786,6 @@ packages:
 
   immer@10.2.0:
     resolution: {integrity: sha512-d/+XTN3zfODyjr89gM3mPq1WNX2B8pYsu7eORitdwyA2sBubnTl3laYlBk4sXY5FUa5qTZGBDPJICVbvqzjlbw==}
-
-  import-meta-resolve@4.2.0:
-    resolution: {integrity: sha512-Iqv2fzaTQN28s/FwZAoFq0ZSs/7hMAHJVX+w8PZl3cY19Pxk6jFFalxQoIfW2826i/fDLXv8IiEZRIT0lDuWcg==}
 
   internmap@1.0.1:
     resolution: {integrity: sha512-lDB5YccMydFBtasVtxnZ3MRBHuaoE8GKsppq+EchKL2U4nK/DmEpPHNH8MZe5HkMtpSiTSOZwfN0tzYjO/lJEw==}
@@ -1434,10 +1431,9 @@ snapshots:
     dependencies:
       acorn: 8.15.0
 
-  '@sveltejs/adapter-auto@3.3.1(@sveltejs/kit@2.49.2(@sveltejs/vite-plugin-svelte@3.1.2(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))':
+  '@sveltejs/adapter-static@3.0.10(@sveltejs/kit@2.49.2(@sveltejs/vite-plugin-svelte@3.1.2(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))':
     dependencies:
       '@sveltejs/kit': 2.49.2(@sveltejs/vite-plugin-svelte@3.1.2(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2))
-      import-meta-resolve: 4.2.0
 
   '@sveltejs/kit@2.49.2(@sveltejs/vite-plugin-svelte@3.1.2(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2)))(svelte@4.2.20)(vite@5.4.21(@types/node@22.19.2))':
     dependencies:
@@ -1802,8 +1798,6 @@ snapshots:
       safer-buffer: 2.1.2
 
   immer@10.2.0: {}
-
-  import-meta-resolve@4.2.0: {}
 
   internmap@1.0.1: {}
 

@@ -20,7 +20,7 @@ pkgs.stdenv.mkDerivation {
   outputHashAlgo = "sha256";
   # Update this hash when dependencies or source change:
   # nix build .#soctalk-frontend 2>&1 | grep "got:"
-  outputHash = "sha256-eG/L5jdkCNaGNmPBAMKBXejeX1QTKq9ECg9CFVVBI8Q=";
+  outputHash = "sha256-FbITXd0Z9orW+Vqfm5r1kQultl/AYKa9xHSQg6RJwOw=";
 
   buildPhase = ''
     runHook preBuild
@@ -43,16 +43,21 @@ pkgs.stdenv.mkDerivation {
 
     mkdir -p $out
 
-    # SvelteKit adapter-auto outputs vary; check common locations
+    # Static adapter outputs to build/ directory
     if [ -d "build" ]; then
       cp -r build/* $out/
-    elif [ -d ".svelte-kit/output" ]; then
-      cp -r .svelte-kit/output/* $out/
     fi
 
-    # List what was produced for debugging
+    # Verify index.html exists (required for static adapter)
+    if [ ! -f "$out/index.html" ]; then
+      echo "ERROR: index.html not found in build output!"
+      echo "Build directory contents:"
+      ls -la build/ || true
+      exit 1
+    fi
+
     echo "Build output contents:"
-    ls -la $out/ || true
+    ls -la $out/
 
     runHook postInstall
   '';

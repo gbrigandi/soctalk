@@ -12,6 +12,13 @@ pkgs.dockerTools.buildLayeredImage {
     pkgs.coreutils     # Basic utilities
     pkgs.curl          # For health checks
     pkgs.jq            # For JSON processing
+    pkgs.iana-etc      # /etc/protocols, /etc/services
+    pkgs.glibc         # NSS libraries for DNS resolution (libnss_dns.so, libnss_files.so)
+    
+    # NSS configuration for DNS resolution in glibc-based binaries (Rust MCP servers)
+    (pkgs.writeTextDir "etc/nsswitch.conf" ''
+      hosts: files dns
+    '')
   ];
 
   config = {

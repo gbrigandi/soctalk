@@ -1,7 +1,7 @@
 { pkgs, lib, rev }:
 
 let
-  python = pkgs.python311;
+  python = pkgs.python313;
 
   # Python environment with orchestrator dependencies
   pythonEnv = python.withPackages (ps: with ps; [
@@ -14,6 +14,7 @@ let
 
     # Database
     sqlalchemy
+    sqlmodel
     asyncpg
     greenlet
     alembic
@@ -25,6 +26,18 @@ let
     httpx
     anyio
     starlette
+
+    # LangChain/LangGraph ecosystem
+    langgraph
+    langchain
+    langchain-core
+    langchain-anthropic
+    langchain-openai
+    langgraph-checkpoint-postgres
+    mcp
+    
+    # HIL backends
+    slack-bolt
   ]);
 
   # MCP server binaries - fetch from GitHub releases

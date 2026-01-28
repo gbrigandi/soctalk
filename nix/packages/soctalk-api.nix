@@ -1,7 +1,7 @@
 { pkgs, lib, rev }:
 
 let
-  python = pkgs.python311;
+  python = pkgs.python313;
   
   # Create a Python environment with the package and its dependencies
   pythonEnv = python.withPackages (ps: with ps; [
@@ -14,6 +14,7 @@ let
     
     # Database
     sqlalchemy
+    sqlmodel
     asyncpg
     greenlet
     alembic
@@ -23,6 +24,15 @@ let
     fastapi
     uvicorn
     sse-starlette
+    
+    # LangChain/LangGraph ecosystem
+    langgraph
+    langchain
+    langchain-core
+    langchain-anthropic
+    langchain-openai
+    langgraph-checkpoint-postgres
+    mcp
     
     # Additional deps that may be needed
     httpx
