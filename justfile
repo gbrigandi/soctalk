@@ -11,7 +11,7 @@ default:
 # Build and tag the API image
 build-api:
     @echo "Building API image..."
-    docker build -f Dockerfile -t soctalk-api:latest .
+    docker build -f Dockerfile --network=host -t soctalk-api:latest .
     @echo "Tagging image for registry..."
     docker tag soctalk-api:latest {{registry}}/soctalk-api:latest
     @echo "API image ready: {{registry}}/soctalk-api:latest"
@@ -19,7 +19,7 @@ build-api:
 # Build and tag the orchestrator image
 build-orchestrator:
     @echo "Building orchestrator image..."
-    docker build -f Dockerfile.orchestrator -t soctalk-orchestrator:latest .
+    docker build -f Dockerfile.orchestrator --network=host -t soctalk-orchestrator:latest .
     @echo "Tagging image for registry..."
     docker tag soctalk-orchestrator:latest {{registry}}/soctalk-orchestrator:latest
     @echo "Orchestrator image ready: {{registry}}/soctalk-orchestrator:latest"
@@ -27,7 +27,7 @@ build-orchestrator:
 # Build and tag the frontend image
 build-frontend:
     @echo "Building frontend image..."
-    docker build -f Dockerfile.frontend -t soctalk-frontend:latest .
+    docker build -f Dockerfile.frontend --network=host -t soctalk-frontend:latest .
     @echo "Tagging image for registry..."
     docker tag soctalk-frontend:latest {{registry}}/soctalk-frontend:latest
     @echo "Frontend image ready: {{registry}}/soctalk-frontend:latest"
@@ -35,7 +35,7 @@ build-frontend:
 # Build and tag the mock-endpoint image
 build-mock-endpoint:
     @echo "Building mock-endpoint image..."
-    docker build -f attack-simulator/Dockerfile -t soctalk-mock-endpoint:latest attack-simulator/
+    docker build -f attack-simulator/Dockerfile --network=host -t soctalk-mock-endpoint:latest attack-simulator/
     @echo "Tagging image for registry..."
     docker tag soctalk-mock-endpoint:latest {{registry}}/soctalk-mock-endpoint:latest
     @echo "Mock-endpoint image ready: {{registry}}/soctalk-mock-endpoint:latest"
