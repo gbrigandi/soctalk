@@ -317,6 +317,57 @@ async def _get_supervisor_decision(config: Any, context_summary: str) -> Supervi
     )
 
 
+def _sanitize_json_string(json_str: str) -> str:
+    """Sanitize JSON string by escaping literal newlines inside string values.
+    
+    LLMs sometimes return JSON with unescaped newlines in string values,
+    which causes JSON decode errors. This function escapes them.
+    
+    Args:
+        json_str: Raw JSON string that may have unescaped newlines.
+        
+    Returns:
+        Sanitized JSON string with escaped newlines.
+    """
+    # Replace literal newlines that are inside strings with escaped versions
+    # This regex finds content between quotes and escapes newlines within
+    result = []
+    in_string = False
+    escape_next = False
+    
+    for char in json_str:
+        if escape_next:
+            result.append(char)
+            escape_next = False
+            continue
+            
+        if char == '\\':
+            result.append(char)
+            escape_next = True
+            continue
+            
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            result.append(char)
+            continue
+            
+        if in_string and char == '\n':
+            result.append('\\n')
+            continue
+            
+        if in_string and char == '\r':
+            result.append('\\r')
+            continue
+            
+        if in_string and char == '\t':
+            result.append('\\t')
+            continue
+            
+        result.append(char)
+    
+    return ''.join(result)
+
+
 def _parse_decision_response(response_text: str) -> dict[str, Any]:
     """Parse LLM response to extract decision JSON.
 
@@ -330,7 +381,7 @@ def _parse_decision_response(response_text: str) -> dict[str, Any]:
     json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
     if json_match:
         try:
-            result = json.loads(json_match.group(1))
+            result = json.loads(_sanitize_json_string(json_match.group(1)))
             logger.debug("parsed_json_from_markdown_block")
             return result
         except json.JSONDecodeError as e:
@@ -340,7 +391,7 @@ def _parse_decision_response(response_text: str) -> dict[str, Any]:
     json_match = re.search(r"\{(?:[^{}]|\{[^{}]*\})*\}", response_text, re.DOTALL)
     if json_match:
         try:
-            result = json.loads(json_match.group(0))
+            result = json.loads(_sanitize_json_string(json_match.group(0)))
             logger.debug("parsed_json_from_raw")
             return result
         except json.JSONDecodeError as e:
@@ -348,7 +399,7 @@ def _parse_decision_response(response_text: str) -> dict[str, Any]:
 
     # Fallback: try to parse entire response as JSON
     try:
-        result = json.loads(response_text)
+        result = json.loads(_sanitize_json_string(response_text))
         logger.debug("parsed_json_from_full_response")
         return result
     except json.JSONDecodeError as e:
