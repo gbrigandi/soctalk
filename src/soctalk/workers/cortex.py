@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.mcp.bindings import get_cortex_client
 from soctalk.models.enums import ObservableType, Verdict, Phase
@@ -49,7 +49,6 @@ ANALYZER_MAP = {
 
 async def cortex_worker_node(
     state: dict[str, Any],
-    run_config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """Cortex worker node - handles threat intelligence enrichment.
 
@@ -65,6 +64,11 @@ async def cortex_worker_node(
     Returns:
         Updated state dictionary.
     """
+    try:
+        config = get_langgraph_config()
+    except RuntimeError:
+        config = None
+
     logger.info("cortex_worker_started")
 
     client = get_cortex_client()
@@ -72,7 +76,7 @@ async def cortex_worker_node(
     pending_observables = state.get("pending_observables", [])
 
     # Get emitter for event emission
-    emitter = get_emitter_from_config(run_config)
+    emitter = get_emitter_from_config(config)
     investigation_id = get_investigation_id_from_state(state)
 
     # Convert dict observables back to Observable objects if needed

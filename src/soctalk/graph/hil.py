@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Optional, TYPE_CHECKING
 
 import structlog
-from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_config as get_langgraph_config
 from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
@@ -27,7 +27,6 @@ _HUMAN_REVIEW_REQUESTED_FLAG = "_human_review_requested_emitted"
 
 async def human_review_node(
     state: dict[str, Any],
-    run_config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """Human-in-the-Loop review node.
 
@@ -45,6 +44,11 @@ async def human_review_node(
     Returns:
         Updated state with human decision.
     """
+    try:
+        config = get_langgraph_config()
+    except RuntimeError:
+        config = None
+
     logger.info("human_review_started")
 
     state["awaiting_human_approval"] = True
@@ -53,7 +57,7 @@ async def human_review_node(
     investigation_data = state.get("investigation", {})
     verdict_data = state.get("verdict", {})
 
-    emitter = get_emitter_from_config(run_config)
+    emitter = get_emitter_from_config(config)
     investigation_id = get_investigation_id_from_state(state)
     if emitter and investigation_id and not state.get(_HUMAN_REVIEW_REQUESTED_FLAG):
         try:
@@ -77,8 +81,8 @@ async def human_review_node(
 
     hil_service: Optional[HILService] = None
     hil_backend = "cli"
-    if run_config:
-        configurable = run_config.get("configurable") or {}
+    if config:
+        configurable = config.get("configurable") or {}
         hil_service = configurable.get("hil_service")
         hil_backend = configurable.get("hil_backend") or hil_backend
 

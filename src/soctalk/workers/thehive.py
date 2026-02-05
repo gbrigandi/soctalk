@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.mcp.bindings import get_thehive_client
 from soctalk.models.enums import Phase, InvestigationStatus, Severity
@@ -19,7 +19,6 @@ logger = structlog.get_logger()
 
 async def thehive_worker_node(
     state: dict[str, Any],
-    run_config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """TheHive worker node - handles incident response operations.
 
@@ -34,6 +33,11 @@ async def thehive_worker_node(
     Returns:
         Updated state dictionary.
     """
+    try:
+        config = get_langgraph_config()
+    except RuntimeError:
+        config = None
+
     logger.info("thehive_worker_started")
 
     client = get_thehive_client()
@@ -43,7 +47,7 @@ async def thehive_worker_node(
     investigation = Investigation(**investigation_data) if isinstance(investigation_data, dict) else investigation_data
 
     # Get emitter for event emission
-    emitter = get_emitter_from_config(run_config)
+    emitter = get_emitter_from_config(config)
     investigation_id = get_investigation_id_from_state(state)
 
     try:

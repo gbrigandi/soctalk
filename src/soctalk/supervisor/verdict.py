@@ -8,7 +8,7 @@ from typing import Any
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.config import get_config
 from soctalk.llm import create_chat_model
@@ -98,7 +98,6 @@ Provide your final verdict as JSON.
 
 async def verdict_node(
     state: dict[str, Any],
-    run_config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """Verdict node - reasoning LLM provides final decision.
 
@@ -113,6 +112,11 @@ async def verdict_node(
     Returns:
         Updated state with verdict.
     """
+    try:
+        config = get_langgraph_config()
+    except RuntimeError:
+        config = None
+
     logger.info("verdict_node_started")
 
     app_config = get_config()
@@ -143,7 +147,7 @@ async def verdict_node(
         )
 
         # Emit verdict event
-        emitter = get_emitter_from_config(run_config)
+        emitter = get_emitter_from_config(config)
         investigation_id = get_investigation_id_from_state(state)
         if emitter and investigation_id:
             try:

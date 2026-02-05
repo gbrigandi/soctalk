@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.models.enums import InvestigationStatus, Phase, HumanDecision, VerdictDecision
 from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
@@ -16,7 +16,6 @@ logger = structlog.get_logger()
 
 async def close_investigation_node(
     state: dict[str, Any],
-    run_config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """Close investigation node.
 
@@ -28,6 +27,11 @@ async def close_investigation_node(
     Returns:
         Updated state with closed investigation.
     """
+    try:
+        config = get_langgraph_config()
+    except RuntimeError:
+        config = None
+
     logger.info("closing_investigation")
 
     investigation = state.get("investigation", {})
@@ -63,7 +67,7 @@ async def close_investigation_node(
     state["last_updated"] = datetime.now().isoformat()
 
     # Emit investigation closed event
-    emitter = get_emitter_from_config(run_config)
+    emitter = get_emitter_from_config(config)
     investigation_id = get_investigation_id_from_state(state)
     if emitter and investigation_id:
         try:
