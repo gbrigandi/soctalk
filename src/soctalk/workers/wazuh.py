@@ -36,7 +36,7 @@ async def wazuh_worker_node(state: dict[str, Any]) -> dict[str, Any]:
     client = get_wazuh_client()
     investigation = state.get("investigation", {})
     supervisor_decision = state.get("supervisor_decision", {})
-    specific_instructions = supervisor_decision.get("specific_instructions", "") if supervisor_decision else ""
+    specific_instructions = (supervisor_decision.get("specific_instructions") or "") if supervisor_decision else ""
 
     try:
         # Determine what action to take based on instructions

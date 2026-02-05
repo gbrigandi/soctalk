@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -325,37 +326,48 @@ def _parse_decision_response(response_text: str) -> dict[str, Any]:
     Returns:
         Parsed decision dictionary.
     """
-    # Try to find JSON in response
-    import re
-
-    # Look for JSON block
+    # Look for JSON block in markdown
     json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
     if json_match:
         try:
-            return json.loads(json_match.group(1))
-        except json.JSONDecodeError:
-            pass
+            result = json.loads(json_match.group(1))
+            logger.debug("parsed_json_from_markdown_block")
+            return result
+        except json.JSONDecodeError as e:
+            logger.warning("json_decode_failed_markdown", error=str(e), content=json_match.group(1)[:500])
 
-    # Try to find raw JSON object
-    json_match = re.search(r"\{[^{}]*\}", response_text, re.DOTALL)
+    # Try to find raw JSON object (improved regex for nested objects)
+    json_match = re.search(r"\{(?:[^{}]|\{[^{}]*\})*\}", response_text, re.DOTALL)
     if json_match:
         try:
-            return json.loads(json_match.group(0))
-        except json.JSONDecodeError:
-            pass
+            result = json.loads(json_match.group(0))
+            logger.debug("parsed_json_from_raw")
+            return result
+        except json.JSONDecodeError as e:
+            logger.warning("json_decode_failed_raw", error=str(e), content=json_match.group(0)[:500])
 
     # Fallback: try to parse entire response as JSON
     try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        pass
+        result = json.loads(response_text)
+        logger.debug("parsed_json_from_full_response")
+        return result
+    except json.JSONDecodeError as e:
+        logger.warning("json_decode_failed_full", error=str(e))
 
     # Last resort: extract fields manually
+    # Log the full response so we can debug why parsing failed
+    logger.error(
+        "llm_response_parse_failed",
+        response_text=response_text[:1000],
+        response_length=len(response_text),
+    )
+
     result = {
         "next_action": "ENRICH",
         "action_reasoning": "Failed to parse LLM response",
         "tp_confidence": 0.5,
         "confidence_reasoning": "Unable to determine",
+        "specific_instructions": "",  # Add default to prevent None
     }
 
     # Try to extract action
