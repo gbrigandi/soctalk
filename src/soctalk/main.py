@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from datetime import datetime
@@ -52,7 +53,7 @@ from soctalk.polling.queue import InvestigationQueue
 # Configure Python logging to write to file
 LOG_FILE = Path(__file__).parent.parent.parent / "soctalk.log"
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.getenv("SOCTALK_LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE, mode="a"),
@@ -836,6 +837,9 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     # Load config
     if args.config:
