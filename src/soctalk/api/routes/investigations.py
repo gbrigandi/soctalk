@@ -281,7 +281,7 @@ async def get_investigation_events(
     query = (
         select(Event)
         .where(Event.aggregate_id == investigation_id)
-        .order_by(Event.timestamp)
+        .order_by(Event.timestamp.desc())
         .offset(offset)
         .limit(limit)
     )
