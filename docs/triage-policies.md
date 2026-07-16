@@ -19,9 +19,10 @@ tenant-authored policies; the sixth is built-in-only:
 1. **Required evidence steps** (`required_steps`) — deterministic graph nodes that MUST run
    before a verdict is legal (e.g. `gather_authorization_context`). Adds rigor; never
    closes.
-2. **Deterministic decision modules** (`decision_modules`) — vetted engines the graph must
-   consult while triaging (today: `authorization_engine`). Feeds structured signal into the
-   verdict; never decides on its own.
+2. **Deterministic decision modules** (`decision_modules`) — declares the vetted engines a
+   policy relies on (today: `authorization_engine`), validated against known modules. It is
+   declarative metadata today; the runtime consultation is driven by `required_steps` (e.g.
+   `gather_authorization_context`), not by this field.
 3. **Per-phase legal action sets** (`legal_actions`) — which supervisor actions are
    permitted in the `triage` vs `decide` phase. An unlisted phase is unconstrained;
    authored policies may not grant `CLOSE` (see below).
@@ -153,7 +154,8 @@ Click any guardrail node to jump to it.
 
 ![Decision-flow projection](images/triage-policy-tutorial/09-decision-flow.png)
 
-The **“Try it”** panel runs a sample verdict context through the same guard the worker uses.
+The **“Try it”** panel previews the guardrail + floor logic the editor can model over a sample
+verdict context — a subset of the full worker/server/ingest enforcement path, for authoring feedback.
 Set a contradicted-authorization, critical-asset scenario and the outcome is `escalate` —
 but notice it comes from the **safety floor**, not this policy. That is the core invariant
 made visible: contradicted authorization is a non-overridable floor veto, and the policy’s
