@@ -19,6 +19,7 @@ build/
 .env
 .env.*
 !.env.example
+aditya-dev
 
 # Logs
 *.log

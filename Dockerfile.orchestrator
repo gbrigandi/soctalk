@@ -34,9 +34,9 @@ RUN REPO="${MCP_GITHUB_ORG}/mcp-server-wazuh" && \
     else \
       API_URL="https://api.github.com/repos/${REPO}/releases/tags/${WAZUH_MCP_VERSION}"; \
     fi && \
-    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    URL=$(curl -sk "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
     echo "Downloading mcp-server-wazuh from: $URL" && \
-    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-wazuh && \
+    curl -skL "$URL" -o /opt/mcp-servers/mcp-server-wazuh && \
     chmod +x /opt/mcp-servers/mcp-server-wazuh
 
 # Download mcp-server-cortex (linux-amd64)
@@ -47,9 +47,9 @@ RUN REPO="${MCP_GITHUB_ORG}/mcp-server-cortex" && \
     else \
       API_URL="https://api.github.com/repos/${REPO}/releases/tags/${CORTEX_MCP_VERSION}"; \
     fi && \
-    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    URL=$(curl -sk "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
     echo "Downloading mcp-server-cortex from: $URL" && \
-    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-cortex && \
+    curl -skL "$URL" -o /opt/mcp-servers/mcp-server-cortex && \
     chmod +x /opt/mcp-servers/mcp-server-cortex
 
 # Download mcp-server-thehive (linux-amd64)
@@ -60,9 +60,9 @@ RUN REPO="${MCP_GITHUB_ORG}/mcp-server-thehive" && \
     else \
       API_URL="https://api.github.com/repos/${REPO}/releases/tags/${THEHIVE_MCP_VERSION}"; \
     fi && \
-    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    URL=$(curl -sk "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
     echo "Downloading mcp-server-thehive from: $URL" && \
-    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-thehive && \
+    curl -skL "$URL" -o /opt/mcp-servers/mcp-server-thehive && \
     chmod +x /opt/mcp-servers/mcp-server-thehive
 
 # Download mcp-server-misp (linux-amd64)
@@ -73,9 +73,9 @@ RUN REPO="${MCP_GITHUB_ORG}/mcp-server-misp" && \
     else \
       API_URL="https://api.github.com/repos/${REPO}/releases/tags/${MISP_MCP_VERSION}"; \
     fi && \
-    URL=$(curl -s "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
+    URL=$(curl -sk "$API_URL" | jq -r '.assets[] | select(.name | test("linux.*amd64$")) | .browser_download_url' | head -1) && \
     echo "Downloading mcp-server-misp from: $URL" && \
-    curl -sL "$URL" -o /opt/mcp-servers/mcp-server-misp && \
+    curl -skL "$URL" -o /opt/mcp-servers/mcp-server-misp && \
     chmod +x /opt/mcp-servers/mcp-server-misp
 
 # Copy Python project files
@@ -88,7 +88,7 @@ COPY src/soctalk_wire ./src/soctalk_wire
 COPY src/soctalk_entities ./src/soctalk_entities
 
 # Install Python dependencies
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org .
 
 # Set MCP server paths
 ENV WAZUH_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-wazuh

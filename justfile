@@ -11,7 +11,12 @@ default:
 # Build and tag the API image
 build-api:
     @echo "Building API image..."
-    docker build -f Dockerfile --network=host -t soctalk-api:latest .
+    @if [ -n "${HELM_CA_PATH:-}" ]; then \
+        echo "Using BuildKit secret from HELM_CA_PATH=${HELM_CA_PATH}"; \
+        DOCKER_BUILDKIT=1 docker build --secret id=helm_ca,src="${HELM_CA_PATH}" -f Dockerfile --network=host -t soctalk-api:latest .; \
+    else \
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile --network=host -t soctalk-api:latest .; \
+    fi
     @echo "Tagging image for registry..."
     docker tag soctalk-api:latest {{registry}}/soctalk-api:latest
     @echo "API image ready: {{registry}}/soctalk-api:latest"

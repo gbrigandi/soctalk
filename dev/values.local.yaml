@@ -74,11 +74,11 @@ ingress:
   tenantWildcard: '*.soctalk.local'
 
 auth:
-  # The browser hits ``http://devlab.soctalk.local:8080`` (no TLS, port
+  # The browser hits ``http://devlab.soctalk.local:9080`` (no TLS, port
   # in the origin). Session cookies must not require Secure; CSRF must
   # accept the port-suffixed origin.
   cookieSecure: false
-  publicOriginOverride: 'http://devlab.soctalk.local:8080,http://customer.soctalk.local:8080'
+  publicOriginOverride: 'http://devlab.soctalk.local:9080,http://customer.soctalk.local:9080'
 
 admission:
   # k3s 1.29 doesn't serve admissionregistration.k8s.io/v1

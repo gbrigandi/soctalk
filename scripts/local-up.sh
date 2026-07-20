@@ -98,7 +98,7 @@ local profile up
     --set ingress.className=nginx \\
     --set ingress.tls.issuerRef='' \\
     --set auth.cookieSecure=false \\
-    --set auth.publicOriginOverride=http://<slug>.soctalk.ai:8080 \\
+    --set auth.publicOriginOverride=http://<slug>.soctalk.ai:9080 \\
     --set preInstallCheck.enabled=false \\
     --set networkPolicy.cilium=false
   so Ingress routes through nginx, the session cookie isn't dropped
@@ -107,7 +107,7 @@ local profile up
   install on a CNI-less local cluster.
   registry:   127.0.0.1:5500   (push: 127.0.0.1:5500/<image>:<tag>)
                               (cluster-side: soctalk-local-registry:5500)
-  ingress:    127.0.0.1:8080   (no port-forward needed)
+  ingress:    127.0.0.1:9080   (no port-forward needed)
 
 use it:
   export KUBECONFIG=${KCFG}

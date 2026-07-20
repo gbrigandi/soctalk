@@ -12,8 +12,11 @@
 FROM node:22-alpine AS builder
 
 WORKDIR /app
-
+ENV NODE_TLS_REJECT_UNAUTHORIZED=0
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+# Force pnpm to trust your corporate network certificates:
+RUN pnpm config set strict-ssl false
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile

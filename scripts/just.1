@@ -1,0 +1,305 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH just 1  "just 1.56.0" 
+.SH NAME
+just \- 🤖 Just a command runner \- https://github.com/casey/just
+.SH SYNOPSIS
+\fBjust\fR [\fB\-\-alias\-style\fR] [\fB\-\-allow\-missing\fR] [\fB\-\-ceiling\fR] [\fB\-\-check\fR] [\fB\-\-chooser\fR] [\fB\-\-clear\-shell\-args\fR] [\fB\-\-color\fR] [\fB\-\-command\-color\fR] [\fB\-\-complete\-aliases\fR] [\fB\-\-cygpath\fR] [\fB\-\-default\-list\fR] [\fB\-\-dotenv\-command\fR] [\fB\-F\fR|\fB\-\-dotenv\-filename\fR] [\fB\-E\fR|\fB\-\-dotenv\-path\fR] [\fB\-n\fR|\fB\-\-dry\-run\fR] [\fB\-\-dump\-format\fR] [\fB\-\-evaluate\-format\fR] [\fB\-\-explain\fR] [\fB\-g\fR|\fB\-\-global\-justfile\fR] [\fB\-\-group\fR] [\fB\-\-highlight\fR] [\fB\-\-indentation\fR] [\fB\-\-jobs\fR] [\fB\-f\fR|\fB\-\-justfile\fR] [\fB\-\-justfile\-name\fR] [\fB\-\-list\-heading\fR] [\fB\-\-list\-prefix\fR] [\fB\-\-list\-submodules\fR] [\fB\-\-no\-aliases\fR] [\fB\-\-no\-cache\fR] [\fB\-\-no\-deps\fR] [\fB\-\-no\-dotenv\fR] [\fB\-\-no\-highlight\fR] [\fB\-\-one\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-\-set\fR] [\fB\-\-shell\fR] [\fB\-\-shell\-arg\fR] [\fB\-\-shell\-command\fR] [\fB\-\-changelog\fR] [\fB\-\-choose\fR] [\fB\-\-clean\fR] [\fB\-c\fR|\fB\-\-command\fR] [\fB\-\-completions\fR] [\fB\-\-dump\fR] [\fB\-e\fR|\fB\-\-edit\fR] [\fB\-\-evaluate\fR] [\fB\-\-fmt\fR] [\fB\-\-groups\fR] [\fB\-\-init\fR] [\fB\-\-json\fR] [\fB\-l\fR|\fB\-\-list\fR] [\fB\-\-man\fR] [\fB\-s\fR|\fB\-\-show\fR] [\fB\-\-summary\fR] [\fB\-\-usage\fR] [\fB\-\-variables\fR] [\fB\-\-tempdir\fR] [\fB\-\-time\fR] [\fB\-\-timestamp\fR] [\fB\-\-timestamp\-format\fR] [\fB\-u\fR|\fB\-\-unsorted\fR] [\fB\-\-unstable\fR] [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-d\fR|\fB\-\-working\-directory\fR] [\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIARGUMENTS\fR] 
+.SH DESCRIPTION
+🤖 Just a command runner \- https://github.com/casey/just
+.SH OPTIONS
+.TP
+\fB\-\-alias\-style\fR \fI<ALIAS_STYLE>\fR [default: right]
+Set list command alias display style
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+left
+.IP \(bu 2
+right
+.IP \(bu 2
+separate
+.RE
+.TP
+\fB\-\-allow\-missing\fR
+Ignore missing recipe and module errors
+.TP
+\fB\-\-ceiling\fR \fI<CEILING>\fR
+Do not ascend above <CEILING> directory when searching for a justfile.
+.TP
+\fB\-\-check\fR
+Run `\-\-fmt` in \*(Aqcheck\*(Aq mode. Exits with 0 if justfile is formatted correctly. Exits with 1 and prints a diff if formatting is required.
+.TP
+\fB\-\-chooser\fR \fI<CHOOSER>\fR
+Override binary invoked by `\-\-choose`
+.TP
+\fB\-\-clear\-shell\-args\fR
+Clear shell arguments
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Print colorful output
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+always
+.IP \(bu 2
+auto
+.IP \(bu 2
+never
+.RE
+.TP
+\fB\-\-command\-color\fR \fI<COMMAND_COLOR>\fR
+Echo recipe lines in <COMMAND\-COLOR>
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+black
+.IP \(bu 2
+blue
+.IP \(bu 2
+cyan
+.IP \(bu 2
+green
+.IP \(bu 2
+purple
+.IP \(bu 2
+red
+.IP \(bu 2
+yellow
+.RE
+.TP
+\fB\-\-complete\-aliases\fR
+Auto\-complete recipe aliases
+.TP
+\fB\-\-cygpath\fR \fI<CYGPATH>\fR [default: cygpath]
+Use binary at <CYGPATH> to convert between unix and Windows paths
+.TP
+\fB\-\-default\-list\fR
+List recipes when no arguments are provided
+.TP
+\fB\-\-dotenv\-command\fR \fI<COMMAND>\fR
+Run <COMMAND> and load its output as an environment file
+.TP
+\fB\-F\fR, \fB\-\-dotenv\-filename\fR \fI<DOTENV_FILENAME>\fR
+Search for an environment file named <DOTENV\-FILENAME> instead of `.env`
+.TP
+\fB\-E\fR, \fB\-\-dotenv\-path\fR \fI<DOTENV_PATH>\fR
+Load <DOTENV\-PATH> as an environment file instead of searching for one
+.TP
+\fB\-n\fR, \fB\-\-dry\-run\fR
+Print what just would do without doing it
+.TP
+\fB\-\-dump\-format\fR \fI<FORMAT>\fR [default: just]
+Dump justfile as <FORMAT>
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+json
+.IP \(bu 2
+just
+.RE
+.TP
+\fB\-\-evaluate\-format\fR \fI<FORMAT>\fR [default: just]
+Print evaluated variables in <FORMAT>
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+just
+.IP \(bu 2
+shell
+.RE
+.TP
+\fB\-\-explain\fR
+Print recipe doc comment before running it
+.TP
+\fB\-g\fR, \fB\-\-global\-justfile\fR
+Use global justfile
+.TP
+\fB\-\-group\fR \fI<GROUP>\fR
+Only list recipes in <GROUP>
+.TP
+\fB\-\-highlight\fR
+Highlight echoed recipe lines in bold
+.TP
+\fB\-\-indentation\fR \fI<INDENTATION>\fR
+Indent recipes bodies with <INDENTATION>
+.TP
+\fB\-\-jobs\fR \fI<N>\fR
+Run at most <N> recipes simultaneously with the [parallel] attribute
+.TP
+\fB\-f\fR, \fB\-\-justfile\fR \fI<JUSTFILE>\fR
+Use <JUSTFILE> as justfile or `\-` to read from standard input
+.TP
+\fB\-\-justfile\-name\fR \fI<NAME>\fR
+Search for justfile named <NAME>
+.TP
+\fB\-\-list\-heading\fR \fI<TEXT>\fR [default: Available recipes:
+]
+Print <TEXT> before list
+.TP
+\fB\-\-list\-prefix\fR \fI<TEXT>\fR [default:     ]
+Print <TEXT> before each list item
+.TP
+\fB\-\-list\-submodules\fR
+List recipes in submodules
+.TP
+\fB\-\-no\-aliases\fR
+Don\*(Aqt show aliases in list
+.TP
+\fB\-\-no\-cache\fR
+Bypass recipe cache
+.TP
+\fB\-\-no\-deps\fR
+Don\*(Aqt run recipe dependencies
+.TP
+\fB\-\-no\-dotenv\fR
+Don\*(Aqt load `.env` file
+.TP
+\fB\-\-no\-highlight\fR
+Don\*(Aqt highlight echoed recipe lines in bold
+.TP
+\fB\-\-one\fR
+Forbid multiple recipes from being invoked on the command line
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress all output
+.TP
+\fB\-\-set\fR \fI<VARIABLE>\fR\fI \fR\fI<VALUE>\fR
+Override <VARIABLE> with <VALUE>
+.TP
+\fB\-\-shell\fR \fI<SHELL>\fR
+Invoke <SHELL> to run recipes
+.TP
+\fB\-\-shell\-arg\fR \fI<SHELL_ARG>\fR
+Invoke shell with <SHELL\-ARG> as an argument
+.TP
+\fB\-\-shell\-command\fR
+Invoke <COMMAND> with the shell used to run recipe lines and backticks
+.TP
+\fB\-\-tempdir\fR \fI<TEMPDIR>\fR
+Save temporary files to <TEMPDIR>.
+.TP
+\fB\-\-time\fR
+Print recipe execution time
+.TP
+\fB\-\-timestamp\fR
+Print recipe command timestamps
+.TP
+\fB\-\-timestamp\-format\fR \fI<TIMESTAMP_FORMAT>\fR [default: %H:%M:%S]
+Timestamp format string
+.TP
+\fB\-u\fR, \fB\-\-unsorted\fR
+Return list and summary entries in source order
+.TP
+\fB\-\-unstable\fR
+Enable unstable features
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Use verbose output
+.TP
+\fB\-d\fR, \fB\-\-working\-directory\fR \fI<WORKING_DIRECTORY>\fR
+Use <WORKING\-DIRECTORY> as working directory. \-\-justfile must also be set
+.TP
+\fB\-\-yes\fR
+Automatically confirm all recipes.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.TP
+[\fIARGUMENTS\fR]
+Overrides and recipe(s) to run, defaulting to the first recipe in the justfile
+.SH COMMANDS
+.TP
+\fB\-\-changelog\fR
+Print changelog
+.TP
+\fB\-\-choose\fR
+Select one or more recipes to run using a binary chooser. If `\-\-chooser` is not passed the chooser defaults to the value of $JUST_CHOOSER, falling back to `fzf`
+.TP
+\fB\-\-clean\fR [\fI<RECIPE_PATH>...\fR]
+Clear recipe cache, optionally restricted to recipes whose path begins with <RECIPE_PATH>
+.TP
+\fB\-c\fR, \fB\-\-command\fR \fI<COMMAND>...\fR
+Run an arbitrary command with the working directory, `.env`, overrides, and exports set
+.TP
+\fB\-\-completions\fR \fI<SHELL>\fR
+Print shell completion script for <SHELL>
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+bash
+.IP \(bu 2
+elvish
+.IP \(bu 2
+fish
+.IP \(bu 2
+nushell
+.IP \(bu 2
+powershell
+.IP \(bu 2
+zsh
+.RE
+.TP
+\fB\-\-dump\fR
+Print justfile
+.TP
+\fB\-e\fR, \fB\-\-edit\fR
+Edit justfile with editor given by $VISUAL or $EDITOR, falling back to `vim`
+.TP
+\fB\-\-evaluate\fR
+Evaluate and print all variables. If a variable name is given as an argument, only print that variable\*(Aqs value.
+.TP
+\fB\-\-fmt\fR
+Format and overwrite justfile
+.TP
+\fB\-\-groups\fR
+List recipe groups
+.TP
+\fB\-\-init\fR
+Initialize new justfile in project root
+.TP
+\fB\-\-json\fR
+Print justfile as JSON
+.TP
+\fB\-l\fR, \fB\-\-list\fR [\fI<MODULE>...\fR]
+List available recipes in <MODULE> or root if omitted
+.TP
+\fB\-\-man\fR
+Print man page
+.TP
+\fB\-s\fR, \fB\-\-show\fR \fI<RECIPE_PATH>...\fR
+Show recipe at <RECIPE_PATH>
+.TP
+\fB\-\-summary\fR
+List names of available recipes
+.TP
+\fB\-\-usage\fR \fI<RECIPE_PATH>...\fR
+Print usage information for recipe at <RECIPE_PATH>
+.TP
+\fB\-\-variables\fR
+List names of variables
+.SH VERSION
+v1.56.0
+.SH AUTHORS
+Casey Rodarmor <casey@rodarmor.com>
