@@ -1,10 +1,19 @@
 # dev/values.local.yaml — overrides for the slim k3d 'soctalk-local' profile
 # Used by ``just system-up`` / ``just system-reload``. Brings up
 # soctalk-system on top of scripts/local-up.sh's cluster (nginx-only,
-# no Cilium, no cert-manager, ingress on 127.0.0.1:8080).
+# no Cilium, no cert-manager, ingress on 127.0.0.1:9080).
 #
-# /etc/hosts entries required (see CONTRIBUTING.md):
-#   127.0.0.1 devlab.soctalk.local customer.soctalk.local
+# HOSTNAME CONFIG OPTIONS:
+#   Option A (requires /etc/hosts or admin): Add to /etc/hosts:
+#     127.0.0.1 devlab.soctalk.local customer.soctalk.local
+#     Then revert ingress.hostnames to: mssp: devlab.soctalk.local, customer: customer.soctalk.local
+#
+#   Option B (no admin required): Use localhost:9080 (current default)
+#     URL: http://localhost:9080
+#     Works on Windows without admin if using browser host-resolver-rules:
+#       "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+#         --host-resolver-rules="MAP devlab.soctalk.local 127.0.0.1" ^
+#         "http://devlab.soctalk.local:9080"
 #
 # LLM credentials: NOT committed. Either edit this file locally and
 # leave the edit unstaged, or pass via ``--set`` at install time:
@@ -67,18 +76,24 @@ ingress:
     secretName: ''
     issuerRef: ''
   hostnames:
-    mssp: devlab.soctalk.local
-    customer: customer.soctalk.local
+    # mssp: devlab.soctalk.local
+    # customer: customer.soctalk.local
+    # NOTE: Using localhost:9080 for non-admin environments
+    # If /etc/hosts is available, change back to: devlab.soctalk.local
+    mssp: localhost
+    customer: localhost
   # Slug-driven per-tenant landing: anything matching the wildcard
   # routes to /api/public/scope-by-slug.
   tenantWildcard: '*.soctalk.local'
 
 auth:
-  # The browser hits ``http://devlab.soctalk.local:9080`` (no TLS, port
+  ## The browser hits ``http://devlab.soctalk.local:9080`` (no TLS, port
+  # The browser hits ``http://localhost:9080`` (no TLS, port
   # in the origin). Session cookies must not require Secure; CSRF must
   # accept the port-suffixed origin.
   cookieSecure: false
-  publicOriginOverride: 'http://devlab.soctalk.local:9080,http://customer.soctalk.local:9080'
+  # publicOriginOverride: 'http://devlab.soctalk.local:9080,http://customer.soctalk.local:9080'
+  publicOriginOverride: 'http://localhost:9080'
 
 admission:
   # k3s 1.29 doesn't serve admissionregistration.k8s.io/v1
