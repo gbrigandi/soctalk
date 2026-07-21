@@ -106,7 +106,7 @@ def _default_chat_model() -> str:
     # alpha identifier that Anthropic retired, and shipping it as the
     # built-in default 404'd every chat turn on fresh installs. The
     # canonical Sonnet 4 series alias is ``claude-sonnet-4-6``.
-    return os.getenv("SOCTALK_CHAT_MODEL", "claude-sonnet-4-6")
+    return os.getenv("SOCTALK_CHAT_MODEL", "gpt-4o")
 
 
 async def _default_chat_model_for_tenant(
