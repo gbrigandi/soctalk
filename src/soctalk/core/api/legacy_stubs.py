@@ -21,7 +21,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -1175,7 +1175,7 @@ async def settings_get() -> dict[str, Any]:
 
     return {
         "id": "v1-readonly",
-        "readonly": True,
+        "readonly": False,
         "sources": {},
         "llm_provider": "openai",
         "llm_fast_model": "gpt-4o-mini",
@@ -1212,6 +1212,17 @@ async def settings_get() -> dict[str, Any]:
         "slack_webhook_configured": False,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.post("/api/settings")
+async def settings_post(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Accept settings updates from the legacy UI and return success.
+
+    This stub persists nothing — the V1 flow stores per-tenant values in
+    `integration_configs`/other tables. The UI expects a 200+success payload
+    when it posts here; mirror back the body for debugging.
+    """
+    return {"success": True, "updated": body}
 
 
 __all__ = ["router"]

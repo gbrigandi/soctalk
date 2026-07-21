@@ -281,7 +281,10 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
             select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant_id)
         )).scalar_one_or_none()
     if cfg is None:
-        raise HTTPException(404, "tenant has no integration config")
+        # Return a read-only default view when the tenant hasn't been
+        # configured yet rather than 404 — the UI expects sensible defaults.
+        default_cfg = IntegrationConfig(tenant_id=tenant_id)
+        cfg = default_cfg
     # Postgres column is the sole source of truth for has_api_key.
     # A lingering K8s Secret (e.g. clear happened but the best-effort
     # delete was skipped) must NOT resurrect the flag — the install
@@ -333,7 +336,11 @@ async def update_tenant_llm(
             select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant_id)
         )).scalar_one_or_none()
         if cfg is None:
-            raise HTTPException(404, "tenant has no integration config")
+            # Initialize a default row so subsequent renders / provisioning
+            # operate against a concrete IntegrationConfig instead of 404.
+            cfg = IntegrationConfig(tenant_id=tenant_id)
+            session.add(cfg)
+            await session.flush()
         # Heal historical rows that may have stored ``openai`` directly
         # before the LlmConfigUpdate normalizer landed. Without this,
         # a PATCH that doesn't touch ``provider`` (e.g. a model-only
@@ -708,7 +715,10 @@ async def clear_tenant_llm_api_key(
             )
         )).scalar_one_or_none()
         if cfg is None:
-            raise HTTPException(404, "tenant has no integration config")
+            # Create the row if missing so the clear operation is idempotent
+            cfg = IntegrationConfig(tenant_id=tenant_id)
+            session.add(cfg)
+            await session.flush()
         cfg.llm_api_key_plain = None
         await session.flush()
     # Same DB-first ordering as PATCH: commit the Postgres clear
@@ -869,7 +879,9 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
             )
         )).scalar_one_or_none()
     if cfg is None:
-        raise HTTPException(404, "tenant has no integration config")
+        # Tenant hasn't been configured yet — return a default view instead
+        default_cfg = IntegrationConfig(tenant_id=identity.tenant_id)
+        cfg = default_cfg
     return LlmConfigRead(
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
@@ -921,7 +933,11 @@ async def tenant_put_llm_key(
             )
         )).scalar_one_or_none()
         if cfg is None:
-            raise HTTPException(404, "tenant has no integration config")
+            # Create the integration_configs row if it doesn't exist so the
+            # tenant can set their BYOK key in one step.
+            cfg = IntegrationConfig(tenant_id=tenant_id)
+            session.add(cfg)
+            await session.flush()
         cfg.llm_api_key_plain = payload.api_key
         await session.flush()
     # DB-first ordering — see update_tenant_llm above for the same
@@ -986,7 +1002,10 @@ async def tenant_clear_llm_key(request: Request) -> LlmConfigRead:
             )
         )).scalar_one_or_none()
         if cfg is None:
-            raise HTTPException(404, "tenant has no integration config")
+            # Create a default row so the revert/clear path can operate.
+            cfg = IntegrationConfig(tenant_id=tenant_id)
+            session.add(cfg)
+            await session.flush()
         cfg.llm_api_key_plain = None
         await session.flush()
     await session.commit()
