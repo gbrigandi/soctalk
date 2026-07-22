@@ -1248,20 +1248,28 @@ async def settings_get(db: AsyncSession = Depends(get_session)) -> dict[str, Any
 async def _upsert_settings(
     db: AsyncSession, body: dict[str, Any]
 ) -> dict[str, Any]:
-    valid_columns = {col.name for col in UserSettings.__table__.columns} - {"id", "updated_at"}
-    update_values = {k: v for k, v in body.items() if k in valid_columns}
-    stmt = pg_insert(UserSettings.__table__).values(
-        id="system_global_settings",
-        **update_values,
-        updated_at=datetime.now(timezone.utc),
-    )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[UserSettings.__table__.c.id],
-        set_={**update_values, "updated_at": datetime.now(timezone.utc)},
-    )
-    await db.execute(stmt)
-    await db.commit()
-    return {"success": True, "updated": body}
+    try:
+        valid_columns = {col.name for col in UserSettings.__table__.columns} - {"id", "updated_at"}
+        update_values = {k: v for k, v in body.items() if k in valid_columns}
+        
+        # Use naive UTC datetime to match PostgreSQL 'TIMESTAMP WITHOUT TIME ZONE'
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        
+        stmt = pg_insert(UserSettings.__table__).values(
+            id="system_global_settings",
+            **update_values,
+            updated_at=now,  # ✅ Fixed: passing 'now'
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[UserSettings.__table__.c.id],
+            set_={**update_values, "updated_at": now},  # ✅ Fixed: passing 'now'
+        )
+        await db.execute(stmt)
+        await db.commit()
+        return {"success": True, "updated": body}
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save settings: {str(e)}")
 
 
 @router.put("/api/settings")
