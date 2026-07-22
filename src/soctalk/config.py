@@ -23,8 +23,8 @@ class LLMConfig(BaseModel):
     """Configuration for LLM models."""
 
     provider: Literal["anthropic", "openai"] = "anthropic"
-    fast_model: str = "claude-sonnet-4-6"
-    reasoning_model: str = "claude-sonnet-4-6"
+    fast_model: str = "gpt-4o-mini"
+    reasoning_model: str = "gpt-4o"
     chat_model: str = ""
     # Per-tier overlay for the InferenceRequest resolver (issue #32). Keyed by
     # InferenceTier value ('router'|'reasoning'|'chat'|'extraction'); each value
@@ -363,9 +363,9 @@ def load_config(env_file: Optional[Path] = None) -> Config:
     # LLM config
     llm_config = LLMConfig(
         provider=provider,  # type: ignore[arg-type]
-        fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
-        reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
-        chat_model=os.getenv("SOCTALK_CHAT_MODEL", ""),
+        fast_model=os.getenv("SOCTALK_FAST_MODEL", "gpt-4o-mini"),
+        reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "gpt-4o"),
+        chat_model=os.getenv("SOCTALK_CHAT_MODEL", "gpt-4o"),
         chat_temperature=float(os.getenv("SOCTALK_CHAT_TEMPERATURE", "0.2")),
         chat_max_tokens=int(os.getenv("SOCTALK_CHAT_MAX_TOKENS", "2048")),
         tiers=tier_configs,

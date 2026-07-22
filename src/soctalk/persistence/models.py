@@ -154,8 +154,8 @@ class UserSettings(SQLModel, table=True):
 
     # LLM settings (non-secret; secrets are env-only)
     llm_provider: str = Field(default="anthropic", max_length=20)
-    llm_fast_model: str = Field(default="claude-sonnet-4-6", max_length=255)
-    llm_reasoning_model: str = Field(default="claude-sonnet-4-6", max_length=255)
+    llm_fast_model: str = Field(default="gpt-4o-mini", max_length=255)
+    llm_reasoning_model: str = Field(default="gpt-4o", max_length=255)
     llm_temperature: float = Field(default=0.0)
     llm_max_tokens: int = Field(default=4096)
     llm_anthropic_base_url: str | None = Field(default=None, max_length=500)

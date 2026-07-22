@@ -21,11 +21,15 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.tenancy.auth import current_identity
+from soctalk.persistence.models import UserSettings
 
 
 # All stubs sit behind the same session middleware as the rest of the
@@ -1162,67 +1166,111 @@ async def audit_investigation(
 # ---------------------------------------------------------------------------
 
 
+DEFAULT_SETTINGS: dict[str, Any] = {
+    "id": "v1-readonly",
+    "readonly": False,
+    "sources": {},
+    "llm_provider": "openai",
+    "llm_fast_model": "gpt-4o-mini",
+    "llm_reasoning_model": "gpt-4o",
+    "llm_temperature": 0.2,
+    "llm_max_tokens": 4096,
+    "llm_anthropic_base_url": None,
+    "llm_openai_base_url": None,
+    "llm_openai_organization": None,
+    "anthropic_api_key_configured": False,
+    "openai_api_key_configured": True,
+    "llm_keys_conflict": False,
+    "wazuh_enabled": True,
+    "wazuh_url": None,
+    "wazuh_verify_ssl": True,
+    "wazuh_credentials_configured": True,
+    "cortex_enabled": False,
+    "cortex_url": None,
+    "cortex_verify_ssl": True,
+    "cortex_api_key_configured": False,
+    "thehive_enabled": False,
+    "thehive_url": None,
+    "thehive_organisation": None,
+    "thehive_verify_ssl": True,
+    "thehive_api_key_configured": False,
+    "misp_enabled": False,
+    "misp_url": None,
+    "misp_verify_ssl": True,
+    "misp_api_key_configured": False,
+    "slack_enabled": False,
+    "slack_channel": None,
+    "slack_notify_on_escalation": False,
+    "slack_notify_on_verdict": False,
+    "slack_webhook_configured": False,
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+
+
+def _db(request: Request) -> AsyncSession:
+    session = getattr(request.state, "db", None)
+    if session is None:
+        raise HTTPException(500, "db session not attached to request")
+    return session
+
+
+def get_session(request: Request) -> AsyncSession:
+    return _db(request)
+
+
 @router.get("/api/settings")
-async def settings_get() -> dict[str, Any]:
-    """Read-only settings snapshot.
+async def settings_get(db: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Read-only settings snapshot backed by the DB.
 
-    The full settings UX edits MCP integration credentials in the legacy
-    single-tenant install; in V1 those live in per-tenant
-    IntegrationConfig (see /api/llm/* and the MSSP tenants UI). We
-    return a non-empty shape with everything ``readonly=True`` so the
-    page renders the read-only view rather than an error.
+    Fetches the system global settings row and merges it over the default
+    settings shape so the UI gets the current persisted values.
     """
+    row = (
+        await db.execute(
+            select(UserSettings).where(UserSettings.id == "system_global_settings")
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return DEFAULT_SETTINGS.copy()
 
-    return {
-        "id": "v1-readonly",
-        "readonly": False,
-        "sources": {},
-        "llm_provider": "openai",
-        "llm_fast_model": "gpt-4o-mini",
-        "llm_reasoning_model": "gpt-4o",
-        "llm_temperature": 0.2,
-        "llm_max_tokens": 4096,
-        "llm_anthropic_base_url": None,
-        "llm_openai_base_url": None,
-        "llm_openai_organization": None,
-        "anthropic_api_key_configured": False,
-        "openai_api_key_configured": True,
-        "llm_keys_conflict": False,
-        "wazuh_enabled": True,
-        "wazuh_url": None,
-        "wazuh_verify_ssl": True,
-        "wazuh_credentials_configured": True,
-        "cortex_enabled": False,
-        "cortex_url": None,
-        "cortex_verify_ssl": True,
-        "cortex_api_key_configured": False,
-        "thehive_enabled": False,
-        "thehive_url": None,
-        "thehive_organisation": None,
-        "thehive_verify_ssl": True,
-        "thehive_api_key_configured": False,
-        "misp_enabled": False,
-        "misp_url": None,
-        "misp_verify_ssl": True,
-        "misp_api_key_configured": False,
-        "slack_enabled": False,
-        "slack_channel": None,
-        "slack_notify_on_escalation": False,
-        "slack_notify_on_verdict": False,
-        "slack_webhook_configured": False,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+    persisted = {
+        col.name: getattr(row, col.name)
+        for col in UserSettings.__table__.columns
+        if getattr(row, col.name) is not None
     }
+    merged = DEFAULT_SETTINGS.copy()
+    merged.update(persisted)
+    if "updated_at" in persisted and isinstance(persisted["updated_at"], datetime):
+        merged["updated_at"] = persisted["updated_at"].isoformat()
+    return merged
 
 
-@router.post("/api/settings")
-async def settings_post(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Accept settings updates from the legacy UI and return success.
-
-    This stub persists nothing — the V1 flow stores per-tenant values in
-    `integration_configs`/other tables. The UI expects a 200+success payload
-    when it posts here; mirror back the body for debugging.
-    """
+async def _upsert_settings(
+    db: AsyncSession, body: dict[str, Any]
+) -> dict[str, Any]:
+    valid_columns = {col.name for col in UserSettings.__table__.columns} - {"id", "updated_at"}
+    update_values = {k: v for k, v in body.items() if k in valid_columns}
+    stmt = pg_insert(UserSettings.__table__).values(
+        id="system_global_settings",
+        **update_values,
+        updated_at=datetime.now(timezone.utc),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[UserSettings.__table__.c.id],
+        set_={**update_values, "updated_at": datetime.now(timezone.utc)},
+    )
+    await db.execute(stmt)
+    await db.commit()
     return {"success": True, "updated": body}
+
+
+@router.put("/api/settings")
+@router.post("/api/settings")
+async def settings_post(
+    body: dict[str, Any] = Body(...), db: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
+    """Accept settings updates from the legacy UI and persist them permanently."""
+    return await _upsert_settings(db, body)
 
 
 __all__ = ["router"]
