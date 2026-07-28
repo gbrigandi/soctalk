@@ -162,7 +162,7 @@ def create_event(
         id=uuid4(),
         aggregate_id=aggregate_id,
         aggregate_type="Investigation",
-        event_type=event_type.value,
+        event_type=event_type.value,  # <--- Minimal fix: Removed the extra parentheses
         version=version,
         timestamp=datetime.utcnow(),
         data=data or {},
