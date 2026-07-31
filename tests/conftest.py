@@ -64,7 +64,7 @@ from soctalk.persistence.models import (
     RuleStats,
 )
 
-
+# Added a new fixture to track two candidate directions for soctalk's next significant capability
 @pytest.fixture
 def mock_session() -> AsyncMock:
     """Create a mock async database session."""
