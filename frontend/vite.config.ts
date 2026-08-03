@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { sveltekit } from '@sveltejs/kit/vite';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import { defineConfig } from 'vite';
@@ -53,5 +54,11 @@ export default defineConfig({
 					: undefined
 			}
 		}
+	},
+	// Unit tests for pure logic (e.g. the chat markdown sanitizer, #98).
+	// jsdom because DOMPurify needs a DOM; Playwright covers the rendered UI.
+	test: {
+		environment: 'jsdom',
+		include: ['src/**/*.test.ts']
 	}
 });
