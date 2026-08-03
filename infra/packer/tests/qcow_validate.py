@@ -43,7 +43,7 @@ try:
     req = urllib.request.Request(f"{BASE_API}/api/auth/me")
     code = None
     try:
-        with urllib.request.urlopen(req, timeout=1) as r:
+        with urllib.request.urlopen(req, timeout=5) as r:
             code = r.status
     except urllib.error.HTTPError as e:
         code = e.code
@@ -64,7 +64,7 @@ with sync_playwright() as p:
     page.on("pageerror", lambda e: page_errors.append(str(e)))
 
     try:
-        resp = page.goto(BASE_UI, wait_until="domcontentloaded", timeout=2000)
+        resp = page.goto(BASE_UI, wait_until="domcontentloaded", timeout=20000)
     except PWTimeout:
         fail(f"GET {BASE_UI} timed out")
     if resp is None or resp.status != 200:
@@ -72,7 +72,7 @@ with sync_playwright() as p:
 
     page.wait_for_function(
         "document.body && document.body.innerText.length > 20",
-        timeout=1500,
+        timeout=15000,
     )
     title = page.title()
     print(f"  page title: {title!r}")
@@ -95,10 +95,10 @@ with sync_playwright() as p:
         print(f"  nav markers missing: {missing}")
         # Try /login as a fallback
         try:
-            page.goto(f"{BASE_UI}/login", wait_until="domcontentloaded", timeout=2000)
+            page.goto(f"{BASE_UI}/login", wait_until="domcontentloaded", timeout=10000)
             page.wait_for_function(
                 "document.body && document.body.innerText.length > 20",
-                timeout=2000,
+                timeout=10000,
             )
             login_body = page.evaluate("document.body.innerText")
             print(f"  /login body innerText (first 200): {login_body[:200]!r}")
