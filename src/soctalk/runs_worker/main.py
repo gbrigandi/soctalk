@@ -25,6 +25,20 @@ logging.basicConfig(
 )
 
 VERSION = "0.2.0"
+
+
+def _post_attempts() -> int:
+    """Transport retry count for _post_complete/_post_release. Tolerates a
+    malformed WORKER_COMPLETE_ATTEMPTS (e.g. "three") instead of crashing the
+    finalize path — a crash there would skip the release POST, leaving the run
+    active-but-uncounted until the lease reaper, so cold-starts could retry past
+    the intended cap. Clamped to >= 1."""
+    raw = os.environ.get("WORKER_COMPLETE_ATTEMPTS", "3")
+    try:
+        return max(1, int(str(raw).strip()))
+    except (ValueError, AttributeError):
+        logger.warning("bad WORKER_COMPLETE_ATTEMPTS=%r -> default 3", raw)
+        return 3
 HEARTBEAT_INTERVAL_SECONDS = 20
 
 
@@ -246,6 +260,7 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         return (
             {
                 "id": str(alert.get("id", claim["run_id"])),
+                "adapter_source": alert.get("adapter_source") or "wazuh",
                 "severity": _wazuh_level_to_severity(level),
                 "level": level,
                 "rule_id": rule.get("id"),
@@ -286,27 +301,39 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
     supervisor_alert = supervisor_alerts[0]
     pending_observables = [{**o, "source": "wazuh"} for o in observables]
 
-    # Demo-mode TI seeding: when L2 is deployed without cortex/MISP
-    # (chart components.cortex.enabled=false), there's no enrichment
-    # service to score the IOCs. Without enrichment evidence the
-    # supervisor stays at low TP confidence and never escalates. This
-    # block trusts the upstream Wazuh rule level as the threat signal:
+    # Demo-mode TI seeding, OFF unless SOCTALK_DEMO_TI_SEEDING is set.
+    # When L2 runs without cortex/MISP (chart components.cortex.enabled=false)
+    # there is no enrichment service to score the IOCs, so the supervisor stays
+    # at low TP confidence and never escalates. For demos this block invents
+    # enrichment evidence from the upstream Wazuh rule level:
     #   level >= 13 → seed malicious enrichments + MISP attribution
-    #                 so the LLM has authoritative evidence to escalate
-    #   level 10-12 → leave un-enriched, supervisor decides on alert
-    #                 context alone (typically auto-FP)
+    #   level 10-12 → leave un-enriched, supervisor decides on alert context
+    # The seeded verdicts, analyzers, detection ratios and actor attribution are
+    # FABRICATED. They must never reach a real investigation, so the default is
+    # off and every seeded object is tagged synthetic=True for the record.
+    # Only Wazuh alerts are eligible: rule levels from other adapter sources do
+    # not carry Wazuh's threat semantics.
     enrichments: list[dict] = []
     findings: list[dict] = []
     misp_context: dict[str, Any] = {}
     pending = list(pending_observables)
-    if level >= 13 and observables:
+    seeding_enabled = os.environ.get("SOCTALK_DEMO_TI_SEEDING", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    wazuh_only = bool(supervisor_alerts) and all(
+        sa.get("adapter_source") == "wazuh" for sa in supervisor_alerts
+    )
+    if seeding_enabled and wazuh_only and level >= 13 and observables:
         for i, o in enumerate(observables):
             enrichments.append({
                 "observable": o,
                 "verdict": "malicious",
                 "analyzer": "VirusTotal" if i % 2 == 0 else "AlienVault OTX",
                 "confidence": 0.95,
-                "tags": ["confirmed-malicious", "ioc"],
+                "tags": ["confirmed-malicious", "ioc", "synthetic-demo-data"],
+                "synthetic": True,
                 "details": {
                     "detection_ratio": "62/72",
                     "first_submission": "2024-09-15",
@@ -314,6 +341,7 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
                 },
             })
         misp_context = {
+            "synthetic": True,
             "checked_iocs": [o["value"] for o in observables],
             "matches": [
                 {
@@ -330,6 +358,7 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         }
         findings.append({
             "severity": "critical",
+            "synthetic": True,
             "description": (
                 f"Confirmed credential dumping on critical asset "
                 f"{supervisor_alert['source']['agent_name']}; "
@@ -562,10 +591,60 @@ async def _heartbeat_loop(
 # Error categories that mean "the backend was transiently unavailable" rather
 # than "this run produced a bad/failed triage". A run that fails on one of these
 # is RELEASED for a bounded retry (same run_id) instead of terminally failed, so
-# a cold serverless endpoint (#77) never loses an alert. Kept narrow on purpose:
-# credit-lack, rate-limit, and schema failures are NOT here — they are real
-# terminal conditions, not cold starts.
+# a cold serverless endpoint (#77) never loses an alert.
 TRANSIENT_RETRY_CATEGORIES = frozenset({"serverless_unavailable"})
+
+# Categories where re-running the triage plausibly produces a different
+# outcome, so the run is worth releasing for the same bounded retry rather
+# than failing on the first LLM hiccup: provider blips, rate limits, local
+# timeouts, and schema-validation misses (model nondeterminism means a rerun
+# can pass). insufficient_credit is deliberately absent from the default — a
+# balance does not refill inside the backoff window, and four retries against
+# an empty account would only delay the failure a human has to act on anyway.
+#
+# The cap is the run's max_attempts (migration v1_0039, default 4; settable at
+# run creation via SOCTALK_MAX_TRIAGE_ATTEMPTS on the API). Retries reuse the
+# SAME run_id through the same /release path as the serverless case, so no
+# completed-run side effect can replay, and the per-attempt backoff and
+# terminalize-at-cap semantics are the server's, already proven by the
+# integration suite.
+DEFAULT_RETRIAGE_CATEGORIES = frozenset(
+    {"rate_limited", "timeout", "provider_error", "schema_validation", "unknown"}
+)
+
+
+def retriage_categories() -> frozenset[str]:
+    """Which LLM-failure categories are released for re-triage.
+
+    ``SOCTALK_RETRIAGE_CATEGORIES`` overrides the default set (comma
+    separated); ``off``/``none``/empty disables re-triage entirely, leaving
+    only the serverless release. Read per call rather than at import so a
+    test or a restart-free config change behaves predictably.
+    """
+    raw = os.environ.get("SOCTALK_RETRIAGE_CATEGORIES")
+    if raw is None:
+        return DEFAULT_RETRIAGE_CATEGORIES
+    cleaned = raw.strip().lower()
+    if cleaned in ("", "off", "none", "0"):
+        return frozenset()
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+def releasable_error_category(
+    supervisor_category: str | None, verdict_category: str | None,
+) -> str | None:
+    """The category this run should be released (not failed) under, or None.
+
+    Transient backend unavailability always releases. LLM triage failures
+    release when their category is in ``retriage_categories()``. Factored out
+    of the completion path so the decision is unit-testable on its own.
+    """
+    releasable = TRANSIENT_RETRY_CATEGORIES | retriage_categories()
+    if supervisor_category in releasable:
+        return supervisor_category
+    if verdict_category in releasable:
+        return verdict_category
+    return None
 
 
 async def _post_release(
@@ -582,7 +661,7 @@ async def _post_release(
         "tokens_used": tokens_used, "dollars_used": dollars_used,
     })
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    attempts = max(1, int(os.environ.get("WORKER_COMPLETE_ATTEMPTS", "3")))
+    attempts = _post_attempts()
     for attempt in range(1, attempts + 1):
         try:
             resp = await client.post(url, headers=headers, content=body, timeout=15.0)
@@ -629,7 +708,7 @@ async def _post_complete(
         "Content-Type": "application/json",
     }
     # Total attempts (not retries-on-top-of-one), so 1 means "try once".
-    attempts = max(1, int(os.environ.get("WORKER_COMPLETE_ATTEMPTS", "3")))
+    attempts = _post_attempts()
     for attempt in range(1, attempts + 1):
         try:
             resp = await client.post(url, headers=headers, content=body, timeout=15.0)
@@ -713,12 +792,8 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
     # server enforces the attempt cap and terminalizes once exhausted, so no
     # completed-run side effect ever replays. Checked FIRST, before the terminal
     # status mapping below, and only for the classified transient categories.
-    transient_category = (
-        supervisor_err_category
-        if supervisor_err_category in TRANSIENT_RETRY_CATEGORIES
-        else verdict_err_category
-        if verdict_err_category in TRANSIENT_RETRY_CATEGORIES
-        else None
+    transient_category = releasable_error_category(
+        supervisor_err_category, verdict_err_category
     )
     if transient_category is not None and not halted:
         # Flush the tail of the replay journey before releasing (release clears

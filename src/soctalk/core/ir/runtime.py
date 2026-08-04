@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID, uuid4
 
+import os
+
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,20 +49,49 @@ async def start_run(
     """
 
     run_id = uuid4()
-    await db.execute(
-        text(
-            "INSERT INTO investigation_runs "
-            "  (id, tenant_id, investigation_id, status, not_before) "
-            "VALUES (:id, :t, :c, 'active', "
-            "        now() + make_interval(secs => :settle))"
-        ),
-        {
-            "id": str(run_id),
-            "t": str(tenant_id),
-            "c": str(investigation_id),
-            "settle": max(0.0, float(settle_seconds)),
-        },
-    )
+    # X in "re-triage up to X attempts". The column's DB default is 4
+    # (migration v1_0039); the env lets an operator raise or lower it for new
+    # runs without a migration. Read per call so a config change applies to
+    # the next run rather than the next process. Values below 1 are ignored
+    # rather than honoured: a run that may never be attempted is not a run.
+    max_attempts = 0
+    raw = os.environ.get("SOCTALK_MAX_TRIAGE_ATTEMPTS", "")
+    if raw.strip():
+        try:
+            max_attempts = int(raw)
+        except ValueError:
+            logger.warning("bad_max_triage_attempts value=%r -> DB default", raw)
+    if max_attempts >= 1:
+        await db.execute(
+            text(
+                "INSERT INTO investigation_runs "
+                "  (id, tenant_id, investigation_id, status, not_before, max_attempts) "
+                "VALUES (:id, :t, :c, 'active', "
+                "        now() + make_interval(secs => :settle), :cap)"
+            ),
+            {
+                "id": str(run_id),
+                "t": str(tenant_id),
+                "c": str(investigation_id),
+                "settle": max(0.0, float(settle_seconds)),
+                "cap": max_attempts,
+            },
+        )
+    else:
+        await db.execute(
+            text(
+                "INSERT INTO investigation_runs "
+                "  (id, tenant_id, investigation_id, status, not_before) "
+                "VALUES (:id, :t, :c, 'active', "
+                "        now() + make_interval(secs => :settle))"
+            ),
+            {
+                "id": str(run_id),
+                "t": str(tenant_id),
+                "c": str(investigation_id),
+                "settle": max(0.0, float(settle_seconds)),
+            },
+        )
     return run_id
 
 

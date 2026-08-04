@@ -195,6 +195,14 @@ class InvestigationRun(SQLModel, table=True):
     started_at: datetime = Field(default_factory=datetime.utcnow)
     ended_at: datetime | None = None
     last_error: str | None = None
+    # Transient-retry bookkeeping (issue #77, migration v1_0039). The worker
+    # path reads and writes these through raw SQL, which is why the drift
+    # between this model and the schema went unnoticed: nothing broke until
+    # somebody read retry state through the ORM. Defaults mirror the
+    # migration's server defaults.
+    attempts: int = 0
+    max_attempts: int = 4
+    last_error_category: str | None = None
 
 
 class InvestigationEvent(SQLModel, table=True):

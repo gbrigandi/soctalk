@@ -22,6 +22,8 @@ premature serialization, not JSON.
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, cast
@@ -38,6 +40,8 @@ from soctalk.llm import (
 )
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------- enums
@@ -822,7 +826,14 @@ def _usage_record(result: InferenceResult, profile: DeliveryProfile) -> UsageRec
 # narrow: a permanent bad base_url/model 404 does NOT carry these bodies, and
 # even if a raw 404 slips through, treating a warm-backend 404 as terminal is
 # the safe default (only scale_to_zero opts in).
-_COLD_START_STATUSES = {404, 408, 425, 429, 500, 502, 503, 504}
+# Status codes that, on a scale_to_zero backend, indicate a warming endpoint on
+# their own. 404 and 429 are DELIBERATELY excluded: a bare 404 ("model does not
+# exist") or 429 ("rate limit exceeded") is usually a permanent/rate error, and
+# masking it as transient would burn the retry cap and mislabel the failure. A
+# genuine cold 404/429 still matches via a _COLD_START_MARKERS body signal
+# (e.g. "no workers", "endpoint is starting"). RunPod's real cold-start signal
+# is a client timeout/hold, caught by the markers, not a bare status.
+_COLD_START_STATUSES = {408, 425, 500, 502, 503, 504}
 _COLD_START_MARKERS = (
     "no workers", "no ready workers", "worker is starting", "initializing",
     "not ready", "cold start", "endpoint is starting", "please try again",
@@ -834,7 +845,15 @@ _COLD_START_MARKERS = (
 def _is_cold_start_error(e: BaseException) -> bool:
     """True if an exception looks like a scale-to-zero endpoint that is warming
     rather than a permanent misconfiguration. Status-code OR body-marker match;
-    caller gates this on readiness == scale_to_zero."""
+    caller gates this on readiness == scale_to_zero.
+
+    This is the FALLBACK heuristic. For RunPod serverless the primary signal is
+    ``_runpod_health_verdict``, which asks the gateway for worker counts instead
+    of inferring state from error prose. Guessing from a status code is the
+    wrong tool for this decision because the two mistakes are not symmetric:
+    calling a permanent error transient burns a bounded retry budget, while
+    calling a transient error permanent silently drops a security alert
+    (issue #77)."""
     status = getattr(e, "status_code", None) or getattr(
         getattr(e, "response", None), "status_code", None
     )
@@ -842,6 +861,120 @@ def _is_cold_start_error(e: BaseException) -> bool:
         return True
     msg = str(e).lower()
     return any(m in msg for m in _COLD_START_MARKERS)
+
+
+def _http_status_of(e: BaseException) -> int | None:
+    """The HTTP status a provider exception carries, or None for client-side
+    failures (timeouts, connection errors) that never got an answer."""
+    return getattr(e, "status_code", None) or getattr(
+        getattr(e, "response", None), "status_code", None
+    )
+
+
+def _runpod_endpoint_id(base_url: str) -> str | None:
+    """The serverless endpoint id in an api.runpod.ai base URL, or None.
+
+    Matches ``https://api.runpod.ai/v2/<endpoint_id>/...`` and nothing else, so
+    a pod behind proxy.runpod.net or any other OpenAI-compatible host never
+    triggers a health probe it has no endpoint for."""
+    if not base_url:
+        return None
+    parts = urlsplit(base_url if "://" in base_url else f"https://{base_url}")
+    if (parts.hostname or "").lower() != "api.runpod.ai":
+        return None
+    segments = [s for s in (parts.path or "").split("/") if s]
+    if len(segments) >= 2 and segments[0] == "v2":
+        return segments[1]
+    return None
+
+
+async def _runpod_health_verdict(resolved: ResolvedModel) -> bool | None:
+    """Ask RunPod's /health whether the endpoint can serve right now.
+
+    Three-way, and each answer has a distinct meaning:
+
+    False — a worker is ready or idle. The gateway had capacity, so the error
+    in hand is real: a 404 alongside ready workers is a wrong model or path,
+    not a cold start. Fail fast rather than burning the retry budget.
+
+    True — no capacity, but visible warm-up activity: a worker initializing or
+    running, or jobs queued. Transient whatever the status code said.
+    ``running`` deliberately does NOT count as capacity: measured live during
+    a real cold start, the booting worker reports ``running=1`` with
+    ``ready=0`` while the queue backs up — the first version of this predicate
+    counted it, judged the endpoint able to serve, and turned a mid-warm-up
+    timeout terminal, which is precisely the mistake this probe exists to
+    prevent. (A warm endpoint saturated to running-only is released too, and
+    retrying against a busy endpoint is the right call anyway.)
+
+    None — no capacity and no activity (paused, or a lone unhealthy worker
+    going nowhere), or the probe itself failed. The counts cannot distinguish
+    an endpoint that will recover from one that will not, so the caller's
+    prose heuristic decides, exactly as it did before this probe existed.
+
+    This exists because RunPod's error vocabulary is not a contract: measured
+    live, a missing endpoint answers 404 "endpoint not found" and a paused one
+    answers a bare 500, and neither body carries the marker strings the
+    fallback heuristic greps for. Worker counts are the authoritative signal
+    and cost one 3-second call on a path that is already failed."""
+    endpoint_id = _runpod_endpoint_id(_base_url_of(resolved))
+    if not endpoint_id:
+        return None
+    api_key = resolved.llm_config.openai_api_key
+    if not api_key:
+        return None
+    # Configurable because the probe sits on a failing path: a churning
+    # immediate-500 endpoint pays it on every attempt, and 4 attempts x 3s is
+    # real throughput lost before the run terminalises. Still bounded well
+    # under the worker's 60s lease TTL either way.
+    timeout = float(os.environ.get("RUNPOD_HEALTH_TIMEOUT_SECONDS", "2.0"))
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"https://api.runpod.ai/v2/{endpoint_id}/health",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            if resp.status_code != 200:
+                # Loud, because a silently dead probe permanently disables the
+                # real fix: a health credential that stopped working would
+                # otherwise demote every decision to the prose heuristic and
+                # nobody would know. Status only — never the key.
+                logger.warning(
+                    "runpod_health_probe_unusable endpoint=%s status=%s",
+                    endpoint_id, resp.status_code,
+                )
+                return None
+            body = resp.json()
+    except Exception as probe_err:  # noqa: BLE001 — a failed probe must never mask the real error
+        logger.warning(
+            "runpod_health_probe_failed endpoint=%s error=%s",
+            endpoint_id, type(probe_err).__name__,
+        )
+        return None
+    workers = body.get("workers", {})
+    jobs = body.get("jobs", {})
+    if int(workers.get("ready", 0)) + int(workers.get("idle", 0)) > 0:
+        # Capacity exists: the gateway could have served, so the error in hand
+        # is real. A 404 alongside ready workers is a wrong model or path.
+        return False
+    activity = (
+        int(workers.get("initializing", 0))
+        + int(workers.get("running", 0))
+        + int(jobs.get("inQueue", 0))
+        + int(jobs.get("inProgress", 0))
+    )
+    if activity > 0:
+        # No capacity but visible warm-up: a worker booting or work queued.
+        # Transient, whatever the status code said.
+        return True
+    # No capacity and no activity: paused, throttled into silence, or a lone
+    # unhealthy worker going nowhere. The counts cannot distinguish an
+    # endpoint that will recover from one that will not, so decline to rule
+    # and let the caller's heuristic decide — a paused endpoint's 500s stay
+    # transient there, and a dead configuration's bare 404 stays terminal.
+    return None
 
 
 async def ainvoke_request(
@@ -872,8 +1005,30 @@ async def ainvoke_request(
     except Exception as e:  # noqa: BLE001 — re-raise as-is unless it's a
         # profile-scoped cold-start signal, in which case reclassify it so the
         # worker can release-and-retry instead of failing the run terminally.
-        if rb.profile.readiness == "scale_to_zero" and _is_cold_start_error(e):
-            raise ServerlessUnavailableError(str(e)[:500]) from e
+        if rb.profile.readiness == "scale_to_zero":
+            # RunPod serverless: ask the gateway for worker counts rather than
+            # inferring warm/cold from the error's status code or prose. A
+            # definite answer in either direction wins over the heuristic; only
+            # a failed probe falls through to it (#77).
+            if rb.profile.kind == BackendKind.RUNPOD_JOB:
+                warming = await _runpod_health_verdict(resolved)
+                if warming is True:
+                    raise ServerlessUnavailableError(str(e)[:500]) from e
+                if warming is False and _http_status_of(e) is not None:
+                    # Capacity existed AND the gateway actually answered: the
+                    # answer is real (a 404 with ready workers is a wrong model
+                    # or path). Terminal, without burning the retry budget.
+                    #
+                    # A client timeout is deliberately NOT terminal here, and
+                    # that came from a live run, not caution: a FlashBooted
+                    # worker reports ready while it loads the model into VRAM
+                    # on first request, so "ready + timeout" is routinely a
+                    # warming endpoint. Capacity refutes "cannot serve"; it
+                    # says nothing about a request that got no answer at all.
+                    # Those fall through to the marker heuristic below.
+                    raise
+            if _is_cold_start_error(e):
+                raise ServerlessUnavailableError(str(e)[:500]) from e
         raise
     result.usage_record = _usage_record(result, rb.profile)
     return result
