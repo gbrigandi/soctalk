@@ -12,6 +12,7 @@ scope claims.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -33,8 +34,27 @@ LEASE_TTL_SECONDS = 60
 # How long a transient-failed run waits before it becomes claimable again.
 # Long enough to let a cold serverless endpoint finish warming; short enough
 # that the alert is not stuck for minutes. Multiplied by the attempt count for
-# a gentle backoff.
-RETRY_BACKOFF_SECONDS = 15
+# a gentle backoff. Env-tunable so operators can widen the window to cover a
+# cold start that includes a model download (no network volume).
+def _env_positive_int(name: str, default: int, minimum: int = 1) -> int:
+    """Parse an int env var, tolerating garbage and clamping to >= minimum.
+
+    A raw int() here would (a) crash the router import on a non-int value like
+    "15s"/"" and (b) accept 0/-5, which pushes not_before to now-or-past and
+    makes a transient-released run instantly re-claimable — hammering a cold
+    backend and burning the attempt cap with no warm-up window.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(minimum, int(raw.strip()))
+    except (ValueError, AttributeError):
+        logger.warning("bad_env_int name=%s value=%r -> default=%d", name, raw, default)
+        return default
+
+
+RETRY_BACKOFF_SECONDS = _env_positive_int("SOCTALK_RUN_RETRY_BACKOFF_SECONDS", 15)
 
 
 async def _record_verdict_memo(
@@ -374,6 +394,10 @@ async def claim_run(request: Request) -> ClaimedRun | None:
         alert_payloads = [
             {
                 "id": str(a["id"]),
+                # Which adapter produced this alert. Rule semantics are
+                # source-specific (a Wazuh level 13 is not an identity-feed 13),
+                # so anything downstream that reads severity must know the source.
+                "adapter_source": a["source"] or "wazuh",
                 "rule": {"id": a["rule_id"] or "?", "level": int(a["severity"] or 0)},
                 "signature": a["signature"],
                 # #17 fix 3: prefer the dedicated description column; fall back
@@ -482,8 +506,10 @@ async def append_run_events(
     bad item must not poison the batch.
     """
     from soctalk.core.ir.events import (
+        RUN_SCOPED_WORKER_EVENTS,
         EventKind,
         append_event,
+        run_scoped_event_idempotency_key,
         worker_event_idempotency_key,
     )
     from soctalk.core.ir.models import Visibility
@@ -524,9 +550,15 @@ async def append_run_events(
                 if item.visibility in valid_visibilities
                 else Visibility.MSSP_ONLY.value
             )
-            key = worker_event_idempotency_key(
-                run_id=run_id, lease_id=payload.lease_id, client_ord=item.client_ord
-            )
+            if kind in RUN_SCOPED_WORKER_EVENTS:
+                # At-most-once per run: a reclaimed run re-runs the graph and
+                # can re-cross the same threshold, but the beat is a per-run
+                # fact — dedupe it independently of the (new) lease. (#103)
+                key = run_scoped_event_idempotency_key(run_id=run_id, kind=kind)
+            else:
+                key = worker_event_idempotency_key(
+                    run_id=run_id, lease_id=payload.lease_id, client_ord=item.client_ord
+                )
             await append_event(
                 db,
                 tenant_id=tenant_id,

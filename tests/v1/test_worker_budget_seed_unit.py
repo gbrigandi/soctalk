@@ -107,3 +107,13 @@ def test_soft_warn_ratio_env_override(monkeypatch):
     # Out-of-range values are ignored -> back to the 0.75 default.
     monkeypatch.setenv("SOCTALK_BUDGET_WARN_RATIO", "1.5")
     assert token_budget.soft_warn_ratio() == 0.75
+
+
+def test_soft_warn_fires_on_the_dollar_cap_too():
+    # Parity with the hard halt: the warning trips on EITHER the token OR the
+    # dollar ratio, so a cheap-token/expensive-model run still warns.
+    from soctalk.graph import budget as token_budget
+
+    base = {"tokens_budget": 40_000, "tokens_used": 0, "dollars_budget": 5.0}
+    assert token_budget.crossed_soft_warn({**base, "dollars_used": 3.74}) is False
+    assert token_budget.crossed_soft_warn({**base, "dollars_used": 3.75}) is True  # 75%

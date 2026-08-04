@@ -32,10 +32,44 @@ def test_reducer_noops_replay_kinds():
         EventKind.SUPERVISOR_DECISION,
         EventKind.GUARD_EVALUATED,
         EventKind.VERDICT_RENDERED,
+        EventKind.BUDGET_WARNING,
     ):
         out = apply_event(facts, kind.value, {"anything": "x"}, seq=7)
         assert out.hypotheses == facts.hypotheses
         assert out.applied_seq == 7
+
+
+def test_budget_warning_is_analyst_facing_and_reducer_noop(monkeypatch):
+    # #103 soft warning: operational spend detail → mssp_only, never reduced.
+    ev = re_.budget_warning(
+        tokens_used=6000, tokens_budget=8000,
+        dollars_used=0.19, dollars_budget=0.25, ratio=0.75,
+    )
+    assert ev.kind == EventKind.BUDGET_WARNING
+    assert ev.visibility == Visibility.MSSP_ONLY.value
+    assert EventKind.BUDGET_WARNING not in REDUCER_APPLIES
+    assert ev.payload["tokens_used"] == 6000
+    assert ev.payload["dollars_used"] == 0.19  # rounded to 4dp
+    assert ev.payload["ratio"] == 0.75
+    assert ev.payload["payload_version"] == re_.PAYLOAD_VERSION
+
+
+def test_budget_warning_never_raises_on_odd_input():
+    # Builder discipline: clip/coerce, never raise on the pipeline's hot path.
+    ev = re_.budget_warning(
+        tokens_used="9313", tokens_budget=8000,  # type: ignore[arg-type]
+        dollars_used=0.123456789, dollars_budget=0.25, ratio=0.2,
+    )
+    assert ev.payload["tokens_used"] == 9313
+    assert ev.payload["dollars_used"] == 0.1235
+    # Genuine garbage coerces to 0 rather than raising on the emit path.
+    junk = re_.budget_warning(
+        tokens_used=None, tokens_budget="oops",  # type: ignore[arg-type]
+        dollars_used=None, dollars_budget="x", ratio=None,  # type: ignore[arg-type]
+    )
+    assert junk.payload["tokens_used"] == 0
+    assert junk.payload["dollars_used"] == 0.0
+    assert junk.payload["ratio"] == 0.0
 
 
 def test_all_builders_emit_valid_visibility():

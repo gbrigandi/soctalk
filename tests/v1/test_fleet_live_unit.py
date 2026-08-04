@@ -30,6 +30,7 @@ def test_stage_mapping_covers_all_replay_kinds():
         == "authz"
     )
     assert stage_for_latest_event("worker_result", {"worker": "wazuh"}) == "sup"
+    assert stage_for_latest_event("budget_warning", {}) == "sup"
     assert stage_for_latest_event("verdict_rendered", {}) == "verdict"
     assert stage_for_latest_event("guard_evaluated", {"effect": "pass"}) == "guard"
     assert stage_for_latest_event("human_review_requested", {}) == "human"
