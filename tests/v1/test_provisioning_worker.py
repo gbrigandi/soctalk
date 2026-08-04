@@ -476,3 +476,112 @@ async def test_run_job_reconcile_failure_records_backoff(
     assert row.claimed_at is None
     assert row.claimed_by is None
     assert row.next_attempt_at.replace(tzinfo=None) > before
+
+
+# ---------------------------------------------------------------------------
+# Drift sweep (issue #104): sync_state runs for live tenants
+# ---------------------------------------------------------------------------
+
+
+async def _add_tenant(mssp_sessionmaker, org_id, state) -> Tenant:
+    async with mssp_sessionmaker() as session:
+        t = Tenant(
+            slug=f"wrk{uuid4().hex[:6]}",
+            display_name="Sweep",
+            state=state,
+            profile="poc",
+            organization_id=org_id,
+        )
+        session.add(t)
+        await session.commit()
+        return t
+
+
+async def _set_state(mssp_sessionmaker, tenant_id, state):
+    async with mssp_sessionmaker() as session:
+        await session.execute(
+            text("UPDATE tenants SET state=:s WHERE id=:i"),
+            {"s": state, "i": str(tenant_id)},
+        )
+        await session.commit()
+
+
+async def test_drift_sweep_reconciles_only_live_tenants(
+    mssp_sessionmaker, seeded_tenant: Tenant, monkeypatch
+):
+    # active + degraded get swept; archived (terminal) and provisioning
+    # (transitional) do not.
+    from soctalk.core.provisioning.controller import TenantController
+
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    degraded = await _add_tenant(
+        mssp_sessionmaker, seeded_tenant.organization_id, TenantState.DEGRADED.value
+    )
+    archived = await _add_tenant(
+        mssp_sessionmaker, seeded_tenant.organization_id, TenantState.ARCHIVED.value
+    )
+    provisioning = await _add_tenant(
+        mssp_sessionmaker, seeded_tenant.organization_id,
+        TenantState.PROVISIONING.value,
+    )
+
+    swept: list = []
+
+    async def _record(self, tenant_id, *, actor_id=None):
+        swept.append(tenant_id)
+
+    monkeypatch.setattr(TenantController, "sync_state", _record)
+
+    worker = ProvisioningWorker(mssp_sessionmaker)
+    await worker._maybe_drift_sweep()
+
+    assert set(swept) == {seeded_tenant.id, degraded.id}
+    assert archived.id not in swept
+    assert provisioning.id not in swept
+
+
+async def test_drift_sweep_is_rate_limited(
+    mssp_sessionmaker, seeded_tenant: Tenant, monkeypatch
+):
+    from soctalk.core.provisioning.controller import TenantController
+
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    calls = {"n": 0}
+
+    async def _count(self, tenant_id, *, actor_id=None):
+        calls["n"] += 1
+
+    monkeypatch.setattr(TenantController, "sync_state", _count)
+
+    worker = ProvisioningWorker(
+        mssp_sessionmaker, drift_sweep_interval_seconds=3600
+    )
+    await worker._maybe_drift_sweep()
+    await worker._maybe_drift_sweep()  # within interval -> no-op
+
+    assert calls["n"] == 1
+
+
+async def test_drift_sweep_skips_one_bad_tenant_and_continues(
+    mssp_sessionmaker, seeded_tenant: Tenant, monkeypatch
+):
+    # A per-tenant sync_state failure is logged and skipped, not fatal.
+    from soctalk.core.provisioning.controller import TenantController
+
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    other = await _add_tenant(
+        mssp_sessionmaker, seeded_tenant.organization_id, TenantState.ACTIVE.value
+    )
+    seen: list = []
+
+    async def _maybe_boom(self, tenant_id, *, actor_id=None):
+        seen.append(tenant_id)
+        if tenant_id == seeded_tenant.id:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(TenantController, "sync_state", _maybe_boom)
+
+    worker = ProvisioningWorker(mssp_sessionmaker)
+    await worker._maybe_drift_sweep()  # must not raise
+
+    assert set(seen) == {seeded_tenant.id, other.id}

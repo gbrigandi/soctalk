@@ -38,6 +38,11 @@ DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_BACKOFF_BASE_SECONDS = 30.0
 DEFAULT_STALE_CLAIM_SECONDS = 900.0  # 15 min — longer than wazuh readiness
 DEFAULT_RECLAIM_INTERVAL_SECONDS = 60.0
+# Drift sweep: reconcile every live tenant's DB state against its actual
+# Kubernetes workloads (issue #104). Job-driven provisioning never notices an
+# out-of-band namespace deletion or a stuck ``degraded`` tenant, so a periodic
+# sweep runs sync_state() for each active/degraded tenant.
+DEFAULT_DRIFT_SWEEP_INTERVAL_SECONDS = 300.0
 # Hard cap on a single job execution. MUST stay below the stale-claim
 # window: the local asyncio cancel has to fire before another worker
 # reclaims the row, or the same job can end up running twice.
@@ -69,6 +74,7 @@ class ProvisioningWorker:
         stale_claim_seconds: float = DEFAULT_STALE_CLAIM_SECONDS,
         reclaim_interval_seconds: float = DEFAULT_RECLAIM_INTERVAL_SECONDS,
         job_timeout_seconds: float = DEFAULT_JOB_TIMEOUT_SECONDS,
+        drift_sweep_interval_seconds: float = DEFAULT_DRIFT_SWEEP_INTERVAL_SECONDS,
     ) -> None:
         self._sf = session_factory
         self._worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
@@ -77,8 +83,10 @@ class ProvisioningWorker:
         self._stale_claim_seconds = stale_claim_seconds
         self._reclaim_interval_seconds = reclaim_interval_seconds
         self._job_timeout_seconds = job_timeout_seconds
+        self._drift_sweep_interval_seconds = drift_sweep_interval_seconds
         self._stop_event = asyncio.Event()
         self._last_reclaim_at = 0.0
+        self._last_drift_sweep_at = 0.0
 
     async def run_forever(self) -> None:
         logger.info("provisioning_worker_start", worker_id=self._worker_id)
@@ -90,6 +98,10 @@ class ProvisioningWorker:
                 # stale since last pass.
                 await self._maybe_reclaim_stale()
                 claimed = await self._claim_and_run_one()
+                # Drift reconciliation runs only on idle cycles, so a backlog
+                # of provisioning jobs always takes priority over the sweep.
+                if not claimed:
+                    await self._maybe_drift_sweep()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -151,6 +163,57 @@ class ProvisioningWorker:
                 count=len(reclaimed),
                 stale_after_seconds=self._stale_claim_seconds,
             )
+
+    async def _maybe_drift_sweep(self) -> None:
+        """Reconcile every live tenant's DB state against actual K8s workloads.
+
+        Runs at most every ``drift_sweep_interval_seconds``. For each tenant in
+        ``active`` or ``degraded`` (the states that must have a running data
+        plane), invoke ``sync_state`` — which archives a tenant whose namespace
+        has vanished, degrades one whose pods aren't Ready, and recovers a
+        degraded one whose pods came back (issue #104). Job-driven provisioning
+        alone never notices these; the sweep is what makes the reconciler run.
+        Per-tenant failures are logged and skipped so one bad tenant never
+        stalls the sweep or the queue.
+        """
+        now_monotonic = asyncio.get_event_loop().time()
+        if (now_monotonic - self._last_drift_sweep_at) < (
+            self._drift_sweep_interval_seconds
+        ):
+            return
+        self._last_drift_sweep_at = now_monotonic
+
+        async with self._sf() as session:
+            tenant_ids = (
+                (
+                    await session.execute(
+                        select(Tenant.id).where(
+                            Tenant.state.in_(
+                                (
+                                    TenantState.ACTIVE.value,
+                                    TenantState.DEGRADED.value,
+                                    # so a committed decommission whose
+                                    # namespace is already gone gets finalized.
+                                    TenantState.DECOMMISSIONING.value,
+                                )
+                            )
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        for tenant_id in tenant_ids:
+            try:
+                async with self._sf() as session:
+                    await TenantController(session).sync_state(
+                        tenant_id, actor_id=f"drift-sweep:{self._worker_id}"
+                    )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "drift_sweep_tenant_failed", tenant_id=str(tenant_id)
+                )
 
     async def _claim_and_run_one(self) -> bool:
         """Try to claim a single due job; run it to completion.

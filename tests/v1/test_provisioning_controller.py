@@ -59,6 +59,8 @@ class FakeK8s:
         self.namespaces: set[str] = set()
         self.secrets: dict[tuple[str, str], dict[str, str]] = {}
         self.pods_ready = True  # flip to False to simulate not-ready workloads
+        self.pods_empty = False  # flip to True to simulate an empty namespace
+        self.namespace_probe_error = False  # flip to simulate a transient blip
         self.calls: list[str] = []
 
     async def check_reachable(self) -> None:
@@ -96,10 +98,18 @@ class FakeK8s:
 
     async def read_pods(self, namespace):
         # Two pods; readiness flipped wholesale by tests.
+        if self.pods_empty:
+            return []
         return [
             {"name": "wazuh-manager-0", "phase": "Running", "ready": self.pods_ready},
             {"name": "wazuh-indexer-0", "phase": "Running", "ready": self.pods_ready},
         ]
+
+    async def namespace_exists(self, name) -> bool:
+        self.calls.append(f"namespace_exists:{name}")
+        if self.namespace_probe_error:
+            raise RuntimeError("kube API blip")
+        return name in self.namespaces
 
 
 async def _fake_helm_install_tenant(*_, **__):
@@ -1318,3 +1328,228 @@ async def test_retry_with_bootstrap_secret_deleted_regenerates_creds(
     assert creds["apiPassword"] == rewritten["wazuh_admin_pw"]
     assert creds["authdPassword"] == rewritten["wazuh_authd_secret"]
     assert "rotated-prior-run" not in json.dumps(values)
+
+
+# ---------------------------------------------------------------------------
+# sync_state: drift reconciliation (issue #104)
+# ---------------------------------------------------------------------------
+
+
+async def _controller_for_sync(session, fake_k8s):
+    return TenantController(
+        session, k8s=fake_k8s,
+        settings=ControllerSettings(
+            wazuh_chart_path="charts/wazuh",
+            tenant_chart_ref="charts/soctalk-tenant",
+        ),
+    )
+
+
+async def _set_state(session, tenant, state, *, runtime=None):
+    tenant.state = state
+    if runtime is not None:
+        tenant.runtime = runtime
+    session.add(tenant)
+    await session.commit()
+
+
+async def _events(session, tenant_id):
+    rows = (await session.execute(
+        select(TenantLifecycleEvent).where(
+            TenantLifecycleEvent.tenant_id == tenant_id
+        )
+    )).scalars().all()
+    return [e.event_type for e in rows]
+
+
+async def test_sync_state_missing_namespace_first_only_degrades(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    # First observation of a missing namespace must NOT archive (irreversible);
+    # it degrades and stamps a grace marker so a transient 404 / in-flight
+    # re-provision can recover.
+    await _set_state(session, seeded_tenant, TenantState.ACTIVE.value)
+    fake_k8s = FakeK8s()  # namespaces empty -> tenant-<slug> is absent
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.DEGRADED.value
+    assert result.deleted_at is None
+    assert (result.runtime or {}).get("namespace_missing_since") is not None
+    evs = await _events(session, seeded_tenant.id)
+    assert "degraded_namespace_missing" in evs
+    assert "archived" not in evs
+
+
+async def test_sync_state_archives_after_grace_window(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    # Namespace still absent past the grace window -> irreversible archive.
+    from datetime import datetime, timedelta
+    past = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+    await _set_state(
+        session, seeded_tenant, TenantState.DEGRADED.value,
+        runtime={"namespace_missing_since": past},
+    )
+    fake_k8s = FakeK8s()  # namespace absent
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.ARCHIVED.value
+    assert result.deleted_at is not None
+    evs = await _events(session, seeded_tenant.id)
+    assert "decommission_detected" in evs
+    assert "archived" in evs
+
+
+async def test_sync_state_within_grace_stays_degraded(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    from datetime import datetime
+    recent = datetime.utcnow().isoformat()
+    await _set_state(
+        session, seeded_tenant, TenantState.DEGRADED.value,
+        runtime={"namespace_missing_since": recent},
+    )
+    fake_k8s = FakeK8s()
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.DEGRADED.value
+    assert result.deleted_at is None
+
+
+async def test_sync_state_clears_marker_when_namespace_returns(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    from datetime import datetime
+    await _set_state(
+        session, seeded_tenant, TenantState.DEGRADED.value,
+        runtime={"namespace_missing_since": datetime.utcnow().isoformat()},
+    )
+    fake_k8s = FakeK8s()
+    fake_k8s.namespaces.add(f"tenant-{seeded_tenant.slug}")
+    fake_k8s.pods_ready = True
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    # Recovered to active AND the stale marker was cleared.
+    assert result.state == TenantState.ACTIVE.value
+    assert (result.runtime or {}).get("namespace_missing_since") is None
+
+
+async def test_sync_state_skips_tenant_with_active_job(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    # A queued provision/decommission owns the tenant; drift must defer to it
+    # and never archive a tenant that is mid-(re)provision.
+    from soctalk.core.tenancy.models import ProvisioningJob
+    await _set_state(session, seeded_tenant, TenantState.ACTIVE.value)
+    session.add(ProvisioningJob(
+        tenant_id=seeded_tenant.id, kind="tenant.provision", status="pending",
+    ))
+    await session.commit()
+    fake_k8s = FakeK8s()  # namespace absent
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.ACTIVE.value
+    assert await _events(session, seeded_tenant.id) == []
+
+
+async def test_sync_state_finalizes_decommissioning_with_missing_namespace(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    # A committed decommission whose namespace is already gone (no in-flight
+    # job) is finalized straight to archived — no grace, teardown was intended.
+    await _set_state(session, seeded_tenant, TenantState.DECOMMISSIONING.value)
+    fake_k8s = FakeK8s()  # namespace absent
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.ARCHIVED.value
+    assert result.deleted_at is not None
+    assert "archived" in await _events(session, seeded_tenant.id)
+
+
+async def test_sync_state_recovers_degraded_when_pods_ready(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    await _set_state(session, seeded_tenant, TenantState.DEGRADED.value)
+    fake_k8s = FakeK8s()
+    fake_k8s.namespaces.add(f"tenant-{seeded_tenant.slug}")
+    fake_k8s.pods_ready = True
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.ACTIVE.value
+    assert "recovered" in await _events(session, seeded_tenant.id)
+
+
+async def test_sync_state_degrades_active_when_pods_not_ready(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    await _set_state(
+        session, seeded_tenant, TenantState.ACTIVE.value, runtime={}
+    )
+    fake_k8s = FakeK8s()
+    fake_k8s.namespaces.add(f"tenant-{seeded_tenant.slug}")
+    fake_k8s.pods_ready = False
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.DEGRADED.value
+    assert "degraded_pods_not_ready" in await _events(session, seeded_tenant.id)
+
+
+async def test_sync_state_noop_when_active_and_ready(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    await _set_state(session, seeded_tenant, TenantState.ACTIVE.value)
+    fake_k8s = FakeK8s()
+    fake_k8s.namespaces.add(f"tenant-{seeded_tenant.slug}")
+    fake_k8s.pods_ready = True
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.ACTIVE.value
+    # No lifecycle transition event was written for a healthy tenant.
+    assert await _events(session, seeded_tenant.id) == []
+
+
+async def test_sync_state_probe_error_never_archives(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    # A transient kube API error must NOT be mistaken for a deleted tenant.
+    await _set_state(session, seeded_tenant, TenantState.ACTIVE.value)
+    fake_k8s = FakeK8s()
+    fake_k8s.namespace_probe_error = True
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.ACTIVE.value
+    assert await _events(session, seeded_tenant.id) == []
+
+
+async def test_sync_state_ignores_transitional_states(
+    session: AsyncSession, seeded_tenant: Tenant
+):
+    # A provisioning tenant has no namespace yet; sync_state must leave it be.
+    await _set_state(session, seeded_tenant, TenantState.PROVISIONING.value)
+    fake_k8s = FakeK8s()  # namespace absent
+    controller = await _controller_for_sync(session, fake_k8s)
+
+    result = await controller.sync_state(seeded_tenant.id)
+
+    assert result.state == TenantState.PROVISIONING.value
+    assert await _events(session, seeded_tenant.id) == []
