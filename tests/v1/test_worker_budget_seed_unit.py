@@ -55,3 +55,33 @@ def test_dollars_env_overrides_claim(monkeypatch):
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-q"])
+
+
+# --- Enforcement chain (#103): the stamped/seeded budget is what halts a run ---
+
+
+def test_ensure_preserves_a_seeded_budget():
+    # The worker seeds state["tokens_budget"] from the claim (the resolved,
+    # stamped per-tenant budget). ensure() must NOT overwrite it with the env
+    # default — otherwise the per-tenant override would never enforce.
+    from soctalk.graph import budget as token_budget
+
+    state = {"tokens_budget": 40_000}
+    token_budget.ensure(state)
+    assert state["tokens_budget"] == 40_000
+
+
+def test_over_budget_halts_at_the_seeded_budget():
+    from soctalk.graph import budget as token_budget
+
+    state = {
+        "tokens_used": 0,
+        "tokens_budget": 40_000,
+        "dollars_used": 0.0,
+        "dollars_budget": 5.0,
+    }
+    assert token_budget.over_budget(state) is False
+    state["tokens_used"] = 39_999
+    assert token_budget.over_budget(state) is False, "under budget keeps running"
+    state["tokens_used"] = 40_000
+    assert token_budget.over_budget(state) is True, "hard halt at 100% of the budget"
