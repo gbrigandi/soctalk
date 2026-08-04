@@ -265,3 +265,107 @@ async def test_post_release_retries_transport_then_succeeds(monkeypatch):
 
 async def _noop():
     return None
+
+
+# ------------------------------------------- the predicate itself, unmocked
+# The three tests above mock _runpod_health_verdict, which pins the CALLER's
+# contract and nothing about the verdict. That gap was not hypothetical: the
+# first shipped predicate counted a running worker as capacity, judged a
+# booting endpoint able to serve, and turned a mid-warm-up timeout terminal —
+# found live, not by the suite. These run the real function against a fake
+# gateway so that exact regression fails here first.
+
+
+def _resolved_runpod(api_key: str = "rp-key"):
+    from soctalk.config import LLMConfig
+    from soctalk.inference import (
+        DecodingMode, InferenceTier, ProviderEngine, ResolvedModel,
+    )
+
+    return ResolvedModel(
+        tier=InferenceTier.ROUTER, provider="openai",
+        engine=ProviderEngine.OPENAI_COMPATIBLE, model="m",
+        decoding_mode=DecodingMode.AUTO,
+        llm_config=LLMConfig(
+            provider="openai", openai_api_key=api_key,
+            openai_base_url="https://api.runpod.ai/v2/ep123/openai/v1",
+        ),
+    )
+
+
+def _patch_gateway(monkeypatch, *, status=200, workers=None, jobs=None):
+    import httpx
+
+    class _Resp:
+        status_code = status
+
+        def json(self):
+            return {"workers": workers or {}, "jobs": jobs or {}}
+
+    class _Client:
+        def __init__(self, *, timeout):
+            assert timeout > 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers):
+            assert url == "https://api.runpod.ai/v2/ep123/health"
+            assert headers["Authorization"] == "Bearer rp-key"
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+
+async def test_verdict_running_only_is_not_capacity(monkeypatch):
+    # THE live regression: one worker booting reports running=1 ready=0 while
+    # the queue backs up. That is warming, never capacity.
+    from soctalk.inference import _runpod_health_verdict
+
+    _patch_gateway(monkeypatch,
+                   workers={"ready": 0, "idle": 0, "running": 1, "initializing": 0})
+    assert await _runpod_health_verdict(_resolved_runpod()) is True
+
+
+async def test_verdict_ready_worker_is_capacity(monkeypatch):
+    from soctalk.inference import _runpod_health_verdict
+
+    _patch_gateway(monkeypatch,
+                   workers={"ready": 1, "idle": 0, "running": 0, "initializing": 0})
+    assert await _runpod_health_verdict(_resolved_runpod()) is False
+
+
+async def test_verdict_queued_jobs_count_as_warming(monkeypatch):
+    from soctalk.inference import _runpod_health_verdict
+
+    _patch_gateway(monkeypatch,
+                   workers={"ready": 0, "idle": 0, "running": 0, "initializing": 0},
+                   jobs={"inQueue": 3})
+    assert await _runpod_health_verdict(_resolved_runpod()) is True
+
+
+async def test_verdict_dead_quiet_endpoint_is_inconclusive(monkeypatch):
+    # Paused, or a lone unhealthy worker going nowhere: counts cannot say
+    # whether it will recover, so the prose heuristic decides.
+    from soctalk.inference import _runpod_health_verdict
+
+    _patch_gateway(monkeypatch,
+                   workers={"ready": 0, "idle": 0, "running": 0,
+                            "initializing": 0, "unhealthy": 1})
+    assert await _runpod_health_verdict(_resolved_runpod()) is None
+
+
+async def test_verdict_non_200_health_is_inconclusive(monkeypatch):
+    from soctalk.inference import _runpod_health_verdict
+
+    _patch_gateway(monkeypatch, status=503, workers={"ready": 1})
+    assert await _runpod_health_verdict(_resolved_runpod()) is None
+
+
+async def test_verdict_missing_key_declines(monkeypatch):
+    from soctalk.inference import _runpod_health_verdict
+
+    assert await _runpod_health_verdict(_resolved_runpod(api_key="")) is None

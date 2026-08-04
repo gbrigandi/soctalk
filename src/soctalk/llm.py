@@ -28,10 +28,14 @@ class ServerlessUnavailableError(ValueError):
     (issue #77).
 
     How transience is decided, in order:
-      1. RunPod serverless (api.runpod.ai): the gateway's /health worker counts
-         — zero ready/idle/running workers means warming, whatever the status
-         code said. Measured live: RunPod answers 404 only for a MISSING
-         endpoint ("endpoint not found") and a bare 500 when it cannot serve.
+      1. RunPod serverless (api.runpod.ai): the gateway's /health counts. A
+         ready or idle worker means capacity, so the error is real; no
+         capacity plus warm-up activity (initializing/running workers, queued
+         jobs) means warming, whatever the status code said; no capacity and
+         no activity is inconclusive and falls through to 2. Measured live:
+         RunPod answers 404 only for a MISSING endpoint ("endpoint not
+         found"), holds cold-start requests until the client times out, and
+         answers a bare 500 when paused.
       2. Fallback for other scale-to-zero endpoints, or when the probe fails:
          status in {408, 425, 500, 502, 503, 504}, or a cold-start marker
          substring in the error body (see _COLD_START_MARKERS in inference.py).

@@ -22,6 +22,8 @@ premature serialization, not JSON.
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, cast
@@ -38,6 +40,8 @@ from soctalk.llm import (
 )
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------- enums
@@ -879,21 +883,26 @@ def _runpod_endpoint_id(base_url: str) -> str | None:
 async def _runpod_health_verdict(resolved: ResolvedModel) -> bool | None:
     """Ask RunPod's /health whether the endpoint can serve right now.
 
-    Returns True when no worker is ready or idle, meaning nothing can absorb
-    a request right now and the error in hand is transient whatever its status
-    code said. ``running`` deliberately does NOT count as capacity: measured
-    live during a real cold start, the booting worker reports ``running=1``
-    with ``ready=0`` while the queue backs up — the first version of this
-    predicate counted it, judged the endpoint able to serve, and turned a
-    mid-warm-up timeout terminal, which is precisely the mistake this probe
-    exists to prevent. (A warm endpoint saturated to running-only is released
-    too, and retrying against a busy endpoint is the right call anyway.)
+    Three-way, and each answer has a distinct meaning:
 
-    Returns False when a worker IS ready or idle, meaning the gateway had
-    capacity and the error is real: a 404 with ready workers is a wrong model
-    or path, not a cold start. Returns None when the probe itself fails, in
-    which case the caller falls back to the prose heuristic rather than
-    deciding on a probe that never answered.
+    False — a worker is ready or idle. The gateway had capacity, so the error
+    in hand is real: a 404 alongside ready workers is a wrong model or path,
+    not a cold start. Fail fast rather than burning the retry budget.
+
+    True — no capacity, but visible warm-up activity: a worker initializing or
+    running, or jobs queued. Transient whatever the status code said.
+    ``running`` deliberately does NOT count as capacity: measured live during
+    a real cold start, the booting worker reports ``running=1`` with
+    ``ready=0`` while the queue backs up — the first version of this predicate
+    counted it, judged the endpoint able to serve, and turned a mid-warm-up
+    timeout terminal, which is precisely the mistake this probe exists to
+    prevent. (A warm endpoint saturated to running-only is released too, and
+    retrying against a busy endpoint is the right call anyway.)
+
+    None — no capacity and no activity (paused, or a lone unhealthy worker
+    going nowhere), or the probe itself failed. The counts cannot distinguish
+    an endpoint that will recover from one that will not, so the caller's
+    prose heuristic decides, exactly as it did before this probe existed.
 
     This exists because RunPod's error vocabulary is not a contract: measured
     live, a missing endpoint answers 404 "endpoint not found" and a paused one
@@ -906,21 +915,58 @@ async def _runpod_health_verdict(resolved: ResolvedModel) -> bool | None:
     api_key = resolved.llm_config.openai_api_key
     if not api_key:
         return None
+    # Configurable because the probe sits on a failing path: a churning
+    # immediate-500 endpoint pays it on every attempt, and 4 attempts x 3s is
+    # real throughput lost before the run terminalises. Still bounded well
+    # under the worker's 60s lease TTL either way.
+    timeout = float(os.environ.get("RUNPOD_HEALTH_TIMEOUT_SECONDS", "2.0"))
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
                 f"https://api.runpod.ai/v2/{endpoint_id}/health",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             if resp.status_code != 200:
+                # Loud, because a silently dead probe permanently disables the
+                # real fix: a health credential that stopped working would
+                # otherwise demote every decision to the prose heuristic and
+                # nobody would know. Status only — never the key.
+                logger.warning(
+                    "runpod_health_probe_unusable endpoint=%s status=%s",
+                    endpoint_id, resp.status_code,
+                )
                 return None
-            workers = resp.json().get("workers", {})
-    except Exception:  # noqa: BLE001 — a failed probe must never mask the real error
+            body = resp.json()
+    except Exception as probe_err:  # noqa: BLE001 — a failed probe must never mask the real error
+        logger.warning(
+            "runpod_health_probe_failed endpoint=%s error=%s",
+            endpoint_id, type(probe_err).__name__,
+        )
         return None
-    serving = int(workers.get("ready", 0)) + int(workers.get("idle", 0))
-    return serving == 0
+    workers = body.get("workers", {})
+    jobs = body.get("jobs", {})
+    if int(workers.get("ready", 0)) + int(workers.get("idle", 0)) > 0:
+        # Capacity exists: the gateway could have served, so the error in hand
+        # is real. A 404 alongside ready workers is a wrong model or path.
+        return False
+    activity = (
+        int(workers.get("initializing", 0))
+        + int(workers.get("running", 0))
+        + int(jobs.get("inQueue", 0))
+        + int(jobs.get("inProgress", 0))
+    )
+    if activity > 0:
+        # No capacity but visible warm-up: a worker booting or work queued.
+        # Transient, whatever the status code said.
+        return True
+    # No capacity and no activity: paused, throttled into silence, or a lone
+    # unhealthy worker going nowhere. The counts cannot distinguish an
+    # endpoint that will recover from one that will not, so decline to rule
+    # and let the caller's heuristic decide — a paused endpoint's 500s stay
+    # transient there, and a dead configuration's bare 404 stays terminal.
+    return None
 
 
 async def ainvoke_request(
