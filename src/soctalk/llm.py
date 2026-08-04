@@ -20,12 +20,23 @@ from soctalk.config import LLMConfig
 
 
 class ServerlessUnavailableError(ValueError):
-    """A scale-to-zero backend was unavailable in a way that is TRANSIENT: it
-    is cold-starting / has no ready workers yet (RunPod proxy 404, "no workers
-    available", "initializing", 502/503 during spin-up). Raised ONLY when the
-    resolved DeliveryProfile is scale_to_zero, so the same 404 on a warm
-    frontier stays a permanent ``provider_error``. The worker releases a run
-    that fails this way for a bounded retry on the same run_id (issue #77)."""
+    """A scale-to-zero backend was unavailable in a way that is TRANSIENT.
+
+    Raised ONLY when the resolved DeliveryProfile is scale_to_zero, so the same
+    error on a warm frontier stays a permanent ``provider_error``. The worker
+    releases a run that fails this way for a bounded retry on the same run_id
+    (issue #77).
+
+    How transience is decided, in order:
+      1. RunPod serverless (api.runpod.ai): the gateway's /health worker counts
+         — zero ready/idle/running workers means warming, whatever the status
+         code said. Measured live: RunPod answers 404 only for a MISSING
+         endpoint ("endpoint not found") and a bare 500 when it cannot serve.
+      2. Fallback for other scale-to-zero endpoints, or when the probe fails:
+         status in {408, 425, 500, 502, 503, 504}, or a cold-start marker
+         substring in the error body (see _COLD_START_MARKERS in inference.py).
+         A bare 404/429 with no marker is deliberately NOT matched — the exact
+         phrasings matched are the ones in that tuple, no more."""
 
 
 class LLMProviderError(ValueError):

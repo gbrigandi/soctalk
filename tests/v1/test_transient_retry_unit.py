@@ -42,6 +42,18 @@ class _Err404(Exception):
     status_code = 404
 
 
+class _Err429(Exception):
+    """A provider error carrying an HTTP 429 (rate limit)."""
+
+    status_code = 429
+
+
+class _Err500(Exception):
+    """A provider error carrying an HTTP 500."""
+
+    status_code = 500
+
+
 def test_classify_maps_serverless_unavailable():
     assert classify_llm_error(ServerlessUnavailableError("no workers")) == "serverless_unavailable"
     # Ordering: the serverless bucket wins over the generic provider bucket.
@@ -52,12 +64,17 @@ def test_classify_maps_serverless_unavailable():
 @pytest.mark.parametrize(
     "err,expected",
     [
-        (_Err404("no workers available"), True),      # status match
+        (_Err404("no workers available"), True),      # 404 + marker -> cold
         (Exception("Endpoint is starting, please try again"), True),  # marker match
         (Exception("503 Service Unavailable"), True),
+        (_Err500("still loading weights"), True),      # 5xx status-only -> cold
         (Exception("connection refused"), True),
         (Exception("some genuinely bad request about a field"), False),
         (SchemaValidationError("schema broke"), False),
+        # A bare 404/429 with NO cold-start marker is a permanent/rate error,
+        # NOT a warming endpoint — must not be masked as transient (Codex #77).
+        (_Err404("model 'nope' does not exist"), False),
+        (_Err429("rate limit exceeded"), False),
     ],
 )
 def test_is_cold_start_error(err, expected):
@@ -71,13 +88,17 @@ def _req() -> InferenceRequest:
     )
 
 
-def _patch_backend(monkeypatch, *, readiness: str, raises: Exception):
+def _patch_backend(monkeypatch, *, readiness: str, raises: Exception, kind=None):
     """Route ainvoke_request through a fake backend that raises `raises`, with a
     resolved profile whose readiness we control. Isolates the wrap logic from
-    real provider resolution."""
+    real provider resolution. `kind` defaults to OPENAI_COMPAT so only tests
+    that opt into RUNPOD_JOB exercise the health-probe branch."""
     import soctalk.inference as inf
 
-    profile = types.SimpleNamespace(readiness=readiness, backend_id="test:model")
+    profile = types.SimpleNamespace(
+        readiness=readiness, backend_id="test:model",
+        kind=kind if kind is not None else inf.BackendKind.OPENAI_COMPAT,
+    )
     resolved = types.SimpleNamespace(
         engine=None, provider="openai", decoding_mode=inf.DecodingMode.AUTO, model="m",
     )
@@ -116,6 +137,86 @@ async def test_non_cold_start_error_passes_through_on_scale_to_zero(monkeypatch)
     _patch_backend(monkeypatch, readiness="scale_to_zero", raises=boom)
     with pytest.raises(LLMProviderError):
         await ainvoke_request(_req(), cfg=object())
+
+
+# ------------------------------------------- RunPod health verdict (issue #77)
+# For RunPod serverless the primary cold/warm signal is the gateway's /health
+# worker counts, not the error's status code or prose. These tests pin the
+# three-way contract: warming wins over a status the heuristic calls terminal,
+# serving wins over a status the heuristic calls transient, and a failed probe
+# falls back to the heuristic instead of deciding.
+
+
+def _patch_health(monkeypatch, verdict):
+    import soctalk.inference as inf
+
+    async def _fake_verdict(resolved):  # noqa: ANN001
+        return verdict
+
+    monkeypatch.setattr(inf, "_runpod_health_verdict", _fake_verdict)
+
+
+async def test_runpod_bare_404_with_no_workers_is_transient(monkeypatch):
+    # THE disputed case on #77: a marker-free 404 during a genuine cold start.
+    # The prose heuristic calls it terminal; the health probe says nothing can
+    # serve, so it is released for retry. An alert is never dropped because a
+    # vendor phrased an error unhelpfully.
+    import soctalk.inference as inf
+
+    _patch_backend(monkeypatch, readiness="scale_to_zero",
+                   raises=_Err404("{'detail': 'Not Found'}"),
+                   kind=inf.BackendKind.RUNPOD_JOB)
+    _patch_health(monkeypatch, True)
+    with pytest.raises(ServerlessUnavailableError):
+        await ainvoke_request(_req(), cfg=object())
+
+
+async def test_runpod_cold_looking_500_with_ready_workers_is_terminal(monkeypatch):
+    # The mirror image: a 500 the heuristic would release, but workers ARE
+    # ready, so the gateway had capacity and the error is real. Without the
+    # probe this would burn the whole retry budget on every alert against a
+    # genuinely broken endpoint.
+    import soctalk.inference as inf
+
+    _patch_backend(monkeypatch, readiness="scale_to_zero",
+                   raises=_Err500("internal server error"),
+                   kind=inf.BackendKind.RUNPOD_JOB)
+    _patch_health(monkeypatch, False)
+    with pytest.raises(_Err500):
+        await ainvoke_request(_req(), cfg=object())
+
+
+async def test_runpod_probe_failure_falls_back_to_markers(monkeypatch):
+    # Probe returns None (network blip, bad key): the heuristic decides, same
+    # as before the probe existed. A dead probe must never mask the real error
+    # in either direction.
+    import soctalk.inference as inf
+
+    _patch_backend(monkeypatch, readiness="scale_to_zero",
+                   raises=_Err500("internal server error"),
+                   kind=inf.BackendKind.RUNPOD_JOB)
+    _patch_health(monkeypatch, None)
+    with pytest.raises(ServerlessUnavailableError):
+        await ainvoke_request(_req(), cfg=object())
+
+    _patch_backend(monkeypatch, readiness="scale_to_zero",
+                   raises=_Err404("model 'nope' does not exist"),
+                   kind=inf.BackendKind.RUNPOD_JOB)
+    with pytest.raises(_Err404):
+        await ainvoke_request(_req(), cfg=object())
+
+
+def test_runpod_endpoint_id_parsing():
+    from soctalk.inference import _runpod_endpoint_id
+
+    assert _runpod_endpoint_id("https://api.runpod.ai/v2/abc123/openai/v1") == "abc123"
+    assert _runpod_endpoint_id("https://api.runpod.ai/v2/abc123") == "abc123"
+    # A pod behind the proxy, a plain OpenAI-compatible host, and junk all
+    # decline the probe rather than guessing.
+    assert _runpod_endpoint_id("https://xyz-8000.proxy.runpod.net/v1") is None
+    assert _runpod_endpoint_id("https://api.openai.com/v1") is None
+    assert _runpod_endpoint_id("") is None
+    assert _runpod_endpoint_id("https://api.runpod.ai/") is None
 
 
 # ---- worker release transport tolerance ----
