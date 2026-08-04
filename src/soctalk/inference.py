@@ -879,13 +879,21 @@ def _runpod_endpoint_id(base_url: str) -> str | None:
 async def _runpod_health_verdict(resolved: ResolvedModel) -> bool | None:
     """Ask RunPod's /health whether the endpoint can serve right now.
 
-    Returns True when no worker is ready/idle/running, meaning the endpoint
-    cannot currently serve and the error in hand is transient whatever its
-    status code said. Returns False when workers ARE available, meaning the
-    gateway had capacity and the error is real (a 404 with ready workers is a
-    wrong model or path, not a cold start). Returns None when the probe itself
-    fails, in which case the caller falls back to the prose heuristic rather
-    than deciding on a probe that never answered.
+    Returns True when no worker is ready or idle, meaning nothing can absorb
+    a request right now and the error in hand is transient whatever its status
+    code said. ``running`` deliberately does NOT count as capacity: measured
+    live during a real cold start, the booting worker reports ``running=1``
+    with ``ready=0`` while the queue backs up — the first version of this
+    predicate counted it, judged the endpoint able to serve, and turned a
+    mid-warm-up timeout terminal, which is precisely the mistake this probe
+    exists to prevent. (A warm endpoint saturated to running-only is released
+    too, and retrying against a busy endpoint is the right call anyway.)
+
+    Returns False when a worker IS ready or idle, meaning the gateway had
+    capacity and the error is real: a 404 with ready workers is a wrong model
+    or path, not a cold start. Returns None when the probe itself fails, in
+    which case the caller falls back to the prose heuristic rather than
+    deciding on a probe that never answered.
 
     This exists because RunPod's error vocabulary is not a contract: measured
     live, a missing endpoint answers 404 "endpoint not found" and a paused one
@@ -911,11 +919,7 @@ async def _runpod_health_verdict(resolved: ResolvedModel) -> bool | None:
             workers = resp.json().get("workers", {})
     except Exception:  # noqa: BLE001 — a failed probe must never mask the real error
         return None
-    serving = (
-        int(workers.get("ready", 0))
-        + int(workers.get("idle", 0))
-        + int(workers.get("running", 0))
-    )
+    serving = int(workers.get("ready", 0)) + int(workers.get("idle", 0))
     return serving == 0
 
 
