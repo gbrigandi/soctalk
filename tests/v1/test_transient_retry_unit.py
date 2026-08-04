@@ -171,6 +171,26 @@ async def test_runpod_bare_404_with_no_workers_is_transient(monkeypatch):
         await ainvoke_request(_req(), cfg=object())
 
 
+async def test_runpod_timeout_with_ready_workers_still_releases(monkeypatch):
+    # Live catch, second of two: a FlashBooted worker reports ready while it
+    # loads the model into VRAM on first request, so "ready + client timeout"
+    # is routinely a warming endpoint. Capacity only makes ANSWERED errors
+    # terminal; a request that got no answer falls through to the markers,
+    # which match the timeout. The first version of this branch killed an
+    # alert here that the pre-fix code saved.
+    import soctalk.inference as inf
+
+    class _Timeout(Exception):
+        pass  # no status_code anywhere: the request never got an answer
+
+    _patch_backend(monkeypatch, readiness="scale_to_zero",
+                   raises=_Timeout("Request timed out."),
+                   kind=inf.BackendKind.RUNPOD_JOB)
+    _patch_health(monkeypatch, False)
+    with pytest.raises(ServerlessUnavailableError):
+        await ainvoke_request(_req(), cfg=object())
+
+
 async def test_runpod_cold_looking_500_with_ready_workers_is_terminal(monkeypatch):
     # The mirror image: a 500 the heuristic would release, but workers ARE
     # ready, so the gateway had capacity and the error is real. Without the

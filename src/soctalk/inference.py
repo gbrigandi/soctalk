@@ -863,6 +863,14 @@ def _is_cold_start_error(e: BaseException) -> bool:
     return any(m in msg for m in _COLD_START_MARKERS)
 
 
+def _http_status_of(e: BaseException) -> int | None:
+    """The HTTP status a provider exception carries, or None for client-side
+    failures (timeouts, connection errors) that never got an answer."""
+    return getattr(e, "status_code", None) or getattr(
+        getattr(e, "response", None), "status_code", None
+    )
+
+
 def _runpod_endpoint_id(base_url: str) -> str | None:
     """The serverless endpoint id in an api.runpod.ai base URL, or None.
 
@@ -1006,7 +1014,18 @@ async def ainvoke_request(
                 warming = await _runpod_health_verdict(resolved)
                 if warming is True:
                     raise ServerlessUnavailableError(str(e)[:500]) from e
-                if warming is False:
+                if warming is False and _http_status_of(e) is not None:
+                    # Capacity existed AND the gateway actually answered: the
+                    # answer is real (a 404 with ready workers is a wrong model
+                    # or path). Terminal, without burning the retry budget.
+                    #
+                    # A client timeout is deliberately NOT terminal here, and
+                    # that came from a live run, not caution: a FlashBooted
+                    # worker reports ready while it loads the model into VRAM
+                    # on first request, so "ready + timeout" is routinely a
+                    # warming endpoint. Capacity refutes "cannot serve"; it
+                    # says nothing about a request that got no answer at all.
+                    # Those fall through to the marker heuristic below.
                     raise
             if _is_cold_start_error(e):
                 raise ServerlessUnavailableError(str(e)[:500]) from e
