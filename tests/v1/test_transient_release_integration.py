@@ -143,3 +143,55 @@ async def test_release_wrong_lease_is_409(
         await release_run(run_id, ReleasePayload(
             lease_id=uuid4(), error_category="serverless_unavailable"), req)
     assert ei.value.status_code == 409
+
+
+async def test_retriage_release_is_category_agnostic_serverside(
+    mssp_session: AsyncSession, seed_two_tenants, monkeypatch
+):
+    """Re-triage (LLM failure categories) rides the same server path: a
+    provider_error release bumps attempts, records the category, keeps the run
+    active and reclaimable, and backs off — identical semantics to the
+    serverless case. The gate lives in the worker; the server is deliberately
+    category-agnostic, and this pins that."""
+    tenant_a, _ = seed_two_tenants
+    cid = await _mk_investigation(mssp_session, tenant_a.tenant_id)
+    run_id = await start_run(mssp_session, tenant_a.tenant_id, cid, settle_seconds=0)
+    lease = await _lease(mssp_session, run_id, max_attempts=3)
+    await mssp_session.commit()
+
+    req = _req(mssp_session, tenant_a.tenant_id, monkeypatch)
+    out = await release_run(run_id, ReleasePayload(
+        lease_id=lease, error_category="provider_error"), req)
+
+    assert out["retrying"] is True and out["attempts"] == 1
+    row = await _row(mssp_session, run_id)
+    assert row["status"] == "active"
+    assert row["last_error_category"] == "provider_error"
+    assert row["lease_id"] is None
+
+
+async def test_start_run_honours_max_triage_attempts_env(
+    mssp_session: AsyncSession, seed_two_tenants, monkeypatch
+):
+    """X in "re-triage up to X attempts": SOCTALK_MAX_TRIAGE_ATTEMPTS on the
+    API sets max_attempts for new runs; unset or nonsense leaves the DB
+    default (4) alone."""
+    from sqlalchemy import text as _text
+
+    tenant_a, _ = seed_two_tenants
+
+    monkeypatch.setenv("SOCTALK_MAX_TRIAGE_ATTEMPTS", "7")
+    cid = await _mk_investigation(mssp_session, tenant_a.tenant_id)
+    run_id = await start_run(mssp_session, tenant_a.tenant_id, cid, settle_seconds=0)
+    row = (await mssp_session.execute(_text(
+        "SELECT max_attempts FROM investigation_runs WHERE id = :id"),
+        {"id": str(run_id)})).mappings().first()
+    assert row["max_attempts"] == 7
+
+    monkeypatch.setenv("SOCTALK_MAX_TRIAGE_ATTEMPTS", "not-a-number")
+    cid2 = await _mk_investigation(mssp_session, tenant_a.tenant_id)
+    run2 = await start_run(mssp_session, tenant_a.tenant_id, cid2, settle_seconds=0)
+    row2 = (await mssp_session.execute(_text(
+        "SELECT max_attempts FROM investigation_runs WHERE id = :id"),
+        {"id": str(run2)})).mappings().first()
+    assert row2["max_attempts"] == 4, "garbage env must fall back to the DB default"

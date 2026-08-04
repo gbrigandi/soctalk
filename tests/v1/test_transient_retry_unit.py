@@ -389,3 +389,46 @@ async def test_verdict_missing_key_declines(monkeypatch):
     from soctalk.inference import _runpod_health_verdict
 
     assert await _runpod_health_verdict(_resolved_runpod(api_key="")) is None
+
+
+# --------------------------------------------------- re-triage gate (worker)
+# "Re-triage up to X attempts": LLM failure categories join the releasable set
+# behind SOCTALK_RETRIAGE_CATEGORIES, riding the same run_id / attempts /
+# backoff / terminalize-at-cap machinery the serverless release already proved.
+
+
+def test_retriage_default_set(monkeypatch):
+    from soctalk.runs_worker.main import releasable_error_category, retriage_categories
+
+    monkeypatch.delenv("SOCTALK_RETRIAGE_CATEGORIES", raising=False)
+    cats = retriage_categories()
+    assert "provider_error" in cats and "timeout" in cats and "rate_limited" in cats
+    # A balance does not refill inside a backoff window; retrying it only
+    # delays the failure a human must act on.
+    assert "insufficient_credit" not in cats
+
+    assert releasable_error_category(None, "provider_error") == "provider_error"
+    assert releasable_error_category("timeout", None) == "timeout"
+    assert releasable_error_category(None, "serverless_unavailable") == "serverless_unavailable"
+    assert releasable_error_category(None, "insufficient_credit") is None
+    assert releasable_error_category(None, None) is None
+
+
+def test_retriage_can_be_disabled(monkeypatch):
+    from soctalk.runs_worker.main import releasable_error_category
+
+    monkeypatch.setenv("SOCTALK_RETRIAGE_CATEGORIES", "off")
+    # LLM failures fail terminally again, but the serverless release is not a
+    # retriage policy and must survive the switch.
+    assert releasable_error_category(None, "provider_error") is None
+    assert releasable_error_category(None, "serverless_unavailable") == "serverless_unavailable"
+
+
+def test_retriage_override_set(monkeypatch):
+    from soctalk.runs_worker.main import releasable_error_category
+
+    monkeypatch.setenv("SOCTALK_RETRIAGE_CATEGORIES", "rate_limited , insufficient_credit")
+    assert releasable_error_category(None, "rate_limited") == "rate_limited"
+    # An operator who explicitly opts credit-lack in gets it.
+    assert releasable_error_category(None, "insufficient_credit") == "insufficient_credit"
+    assert releasable_error_category(None, "provider_error") is None
