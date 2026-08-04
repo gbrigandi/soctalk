@@ -86,7 +86,10 @@ class ProvisioningWorker:
         self._drift_sweep_interval_seconds = drift_sweep_interval_seconds
         self._stop_event = asyncio.Event()
         self._last_reclaim_at = 0.0
-        self._last_drift_sweep_at = 0.0
+        # None = never swept. A 0.0 sentinel breaks on a freshly booted
+        # host: loop.time() is monotonic-since-boot, so (now - 0.0) can be
+        # under the interval and the FIRST sweep would be silently skipped.
+        self._last_drift_sweep_at: float | None = None
 
     async def run_forever(self) -> None:
         logger.info("provisioning_worker_start", worker_id=self._worker_id)
@@ -177,9 +180,9 @@ class ProvisioningWorker:
         stalls the sweep or the queue.
         """
         now_monotonic = asyncio.get_event_loop().time()
-        if (now_monotonic - self._last_drift_sweep_at) < (
-            self._drift_sweep_interval_seconds
-        ):
+        if self._last_drift_sweep_at is not None and (
+            now_monotonic - self._last_drift_sweep_at
+        ) < self._drift_sweep_interval_seconds:
             return
         self._last_drift_sweep_at = now_monotonic
 
