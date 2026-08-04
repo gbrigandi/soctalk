@@ -381,6 +381,41 @@ def over_budget(state: dict[str, Any]) -> bool:
     return False
 
 
+def soft_warn_ratio() -> float:
+    """Fraction of the per-run budget at which a SOFT warning fires (no halt).
+
+    Default 0.75 (issue #103). ``SOCTALK_BUDGET_WARN_RATIO`` overrides it; a
+    value outside (0, 1) is ignored (a warn at 0 or >=100% is meaningless — the
+    latter is just the hard halt).
+    """
+    raw = os.getenv("SOCTALK_BUDGET_WARN_RATIO", "")
+    if raw.strip():
+        try:
+            r = float(raw)
+            if 0.0 < r < 1.0:
+                return r
+        except ValueError:
+            pass
+    return 0.75
+
+
+def crossed_soft_warn(state: dict[str, Any]) -> bool:
+    """True when spend crossed the soft-warn ratio but is NOT yet over budget.
+
+    A run approaching its cap should be surfaced (panel / flight recorder)
+    before it hard-halts at 100%. Either cap crossing the ratio warns.
+    """
+    ensure(state)
+    if over_budget(state):
+        return False  # the hard halt supersedes a soft warning
+    r = soft_warn_ratio()
+    if int(state["tokens_used"]) >= r * int(state["tokens_budget"]):
+        return True
+    if float(state["dollars_used"]) >= r * float(state["dollars_budget"]):
+        return True
+    return False
+
+
 def reason(state: dict[str, Any]) -> str:
     """Human-readable explanation of which cap fired."""
     ensure(state)

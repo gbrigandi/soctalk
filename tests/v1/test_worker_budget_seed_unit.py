@@ -85,3 +85,25 @@ def test_over_budget_halts_at_the_seeded_budget():
     assert token_budget.over_budget(state) is False, "under budget keeps running"
     state["tokens_used"] = 40_000
     assert token_budget.over_budget(state) is True, "hard halt at 100% of the budget"
+
+
+def test_soft_warn_fires_at_75_percent_not_before():
+    from soctalk.graph import budget as token_budget
+
+    base = {"tokens_budget": 40_000, "dollars_used": 0.0, "dollars_budget": 5.0}
+    assert token_budget.crossed_soft_warn({**base, "tokens_used": 29_999}) is False
+    assert token_budget.crossed_soft_warn({**base, "tokens_used": 30_000}) is True  # 75%
+    # Once over budget, the hard halt supersedes the soft warning.
+    assert token_budget.crossed_soft_warn({**base, "tokens_used": 40_000}) is False
+
+
+def test_soft_warn_ratio_env_override(monkeypatch):
+    from soctalk.graph import budget as token_budget
+
+    monkeypatch.setenv("SOCTALK_BUDGET_WARN_RATIO", "0.5")
+    assert token_budget.soft_warn_ratio() == 0.5
+    base = {"tokens_budget": 40_000, "dollars_used": 0.0, "dollars_budget": 5.0}
+    assert token_budget.crossed_soft_warn({**base, "tokens_used": 20_000}) is True
+    # Out-of-range values are ignored -> back to the 0.75 default.
+    monkeypatch.setenv("SOCTALK_BUDGET_WARN_RATIO", "1.5")
+    assert token_budget.soft_warn_ratio() == 0.75
