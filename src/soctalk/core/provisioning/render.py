@@ -587,8 +587,12 @@ def render_tenant_values(
     # directly (over_budget → supervisor CLOSE).
     if integration.llm_dollar_budget_per_run is not None:
         values["llm"]["dollarBudgetPerRun"] = integration.llm_dollar_budget_per_run
-    if integration.llm_token_budget_per_run is not None:
-        values["llm"]["tokenBudgetPerRun"] = integration.llm_token_budget_per_run
+    # NOTE (#103): the per-run TOKEN budget is no longer rendered to worker env.
+    # It is now DB-resolved at run creation (policies.resolve_run_token_budget)
+    # and stamped on the run row, so per-tenant token-budget changes take effect
+    # with no worker rollout. The legacy SOCTALK_CASE_RUN_TOKEN_BUDGET env
+    # remains an install-global operator fallback only. Dollar budget is
+    # unchanged (still env-rendered).
 
     # The linux-ep subchart is enabled on the 'poc' profile
     # (components.linuxep.enabled above), but its statefulset template HARD-FAILS

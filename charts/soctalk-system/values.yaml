@@ -68,6 +68,12 @@ oidc:
   - 10.0.0.0/8
   - 172.16.0.0/12
 defaults:
+  # Install hard cap for the per-tenant run token budget override (#103). A
+  # tenant override set via the run-budget resource may not exceed this.
+  # Empty max = the API default (100M); set a real ceiling to enforce a cap
+  # fleet-wide.
+  runTokenBudget:
+    max: ""
   llm:
     provider: openai-compatible
     baseUrl: https://api.openai.com/v1

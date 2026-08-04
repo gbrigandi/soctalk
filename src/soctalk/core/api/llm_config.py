@@ -66,7 +66,9 @@ class LlmConfigRead(BaseModel):
     # Per-tenant case-run budget caps (issue #5). ``None`` = the worker default
     # ($5 / 15k). Rendered into SOCTALK_CASE_RUN_*_BUDGET; enforced in budget.py.
     dollar_budget_per_run: float | None = None
-    token_budget_per_run: int | None = None
+    # token_budget_per_run REMOVED from this surface (#103): the per-run token
+    # budget moved to the dedicated GET/PATCH /api/mssp/tenants/{id}/run-budget
+    # resource (DB-resolved, capped, no worker rollout).
     has_api_key: bool
     # ``customer_safe`` mode for tenant-side rendering: shows the
     # last 4 chars of the configured key so the tenant can sanity-
@@ -297,7 +299,6 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
-        token_budget_per_run=cfg.llm_token_budget_per_run,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -360,7 +361,6 @@ async def update_tenant_llm(
         prior_temperature = cfg.llm_temperature
         prior_max_tokens = cfg.llm_max_tokens
         prior_dollar_budget = cfg.llm_dollar_budget_per_run
-        prior_token_budget = cfg.llm_token_budget_per_run
         prior_tiers = cfg.llm_tiers
         if payload.provider is not None:
             cfg.llm_provider = payload.provider
@@ -387,7 +387,16 @@ async def update_tenant_llm(
         if "dollar_budget_per_run" in fields_set:
             cfg.llm_dollar_budget_per_run = payload.dollar_budget_per_run
         if "token_budget_per_run" in fields_set:
-            cfg.llm_token_budget_per_run = payload.token_budget_per_run
+            # Deprecated here (#103): the per-run token budget is now managed by
+            # the dedicated run-budget resource so it resolves at run creation
+            # with no worker rollout. Reject writes explicitly rather than
+            # silently no-op.
+            raise HTTPException(
+                422,
+                "token_budget_per_run is managed at "
+                "PATCH /api/mssp/tenants/{tenant_id}/run-budget (#103), "
+                "not on the LLM config.",
+            )
         # Per-tier backends (issue #12): None = unchanged; {} = clear to
         # single-provider (NULL); a map = validate + replace. Replacement
         # assignment (not in-place) so the JSONB column is marked dirty.
@@ -428,7 +437,6 @@ async def update_tenant_llm(
             or cfg.llm_temperature != prior_temperature
             or cfg.llm_max_tokens != prior_max_tokens
             or cfg.llm_dollar_budget_per_run != prior_dollar_budget
-            or cfg.llm_token_budget_per_run != prior_token_budget
             or cfg.llm_tiers != prior_tiers
         )
         if chart_affecting_changed:
@@ -515,7 +523,6 @@ async def update_tenant_llm(
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
-        token_budget_per_run=cfg.llm_token_budget_per_run,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -879,7 +886,6 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
-        token_budget_per_run=cfg.llm_token_budget_per_run,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),

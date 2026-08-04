@@ -92,6 +92,14 @@ export interface TenantLlmConfig {
 	api_key_preview: string;
 }
 
+export interface RunBudget {
+	install_default: number;
+	install_max: number;
+	tenant_override: number | null;
+	effective: number;
+	spend_24h_tokens: number;
+}
+
 async function request<T>(
 	endpoint: string,
 	options: RequestInit = {}
@@ -837,6 +845,22 @@ export const api = {
 	// MSSP-funded default — the L1 controller re-mirrors the
 	// install-shared key into the tenant ns so the runs-worker
 	// keeps running uninterrupted.
+	// Per-tenant run token budget (#103). DB-resolved at run creation, capped
+	// at the install max; changes take effect with no worker rollout. MSSP
+	// admins set/clear the override; the tenant view is read-only.
+	runBudget: {
+		get: (tenantId: string) =>
+			request<RunBudget>(`/mssp/tenants/${tenantId}/run-budget`),
+		update: (tenantId: string, override: number | null) =>
+			request<RunBudget>(`/mssp/tenants/${tenantId}/run-budget`, {
+				method: 'PATCH',
+				body: JSON.stringify({ override })
+			})
+	},
+	tenantRunBudget: {
+		get: () => request<RunBudget>('/tenant/run-budget')
+	},
+
 	tenantLlm: {
 		get: () => request<TenantLlmConfig>('/tenant/llm'),
 		setKey: (apiKey: string) =>

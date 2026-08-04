@@ -465,12 +465,21 @@ def _load_authorization_context(claim: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _tokens_budget_kv(claim_tokens_budget: Any) -> dict[str, int]:
-    """Resolve the token-budget seed for graph state (mirrors dollars).
+    """Resolve the token-budget seed for graph state.
 
-    Env ``SOCTALK_CASE_RUN_TOKEN_BUDGET`` (if positive) overrides the claim row;
-    a non-positive env value is treated as "ignore" (operator typo guard) and
-    falls through to the claim, then to ``token_budget.ensure``'s default.
+    The CLAIM row wins (#103): the server resolves the effective per-tenant
+    budget at run creation and stamps it on the row, so per-tenant budget
+    changes take effect with no worker rollout. ``SOCTALK_CASE_RUN_TOKEN_BUDGET``
+    is now only an install-wide operator fallback, honoured (if positive) when
+    the claim carries no valid budget; a non-positive value is ignored (typo
+    guard), falling through to ``token_budget.ensure``'s default.
     """
+    try:
+        claim_v = int(claim_tokens_budget) if claim_tokens_budget is not None else 0
+    except (TypeError, ValueError):
+        claim_v = 0
+    if claim_v > 0:
+        return {"tokens_budget": claim_v}
     env_raw = os.environ.get("SOCTALK_CASE_RUN_TOKEN_BUDGET")
     if env_raw:
         try:
@@ -479,12 +488,6 @@ def _tokens_budget_kv(claim_tokens_budget: Any) -> dict[str, int]:
             env_v = 0
         if env_v > 0:
             return {"tokens_budget": env_v}
-    try:
-        claim_v = int(claim_tokens_budget) if claim_tokens_budget is not None else 0
-    except (TypeError, ValueError):
-        claim_v = 0
-    if claim_v > 0:
-        return {"tokens_budget": claim_v}
     return {}
 
 

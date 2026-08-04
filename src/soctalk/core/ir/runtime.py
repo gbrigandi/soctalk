@@ -8,10 +8,9 @@ Authoritative state machine: core-invariants §4 (runs), §6 (proposals).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from uuid import UUID, uuid4
-
-import os
 
 import structlog
 from sqlalchemy import text
@@ -23,6 +22,7 @@ from soctalk.core.ir.events import (
     canonical_json,
     proposal_idempotency_key,
 )
+from soctalk.core.ir.policies import resolve_run_token_budget
 from soctalk.core.ir.reducer import apply_event, load_facts, save_facts
 from soctalk.core.observability.audit import log_audit
 
@@ -49,6 +49,13 @@ async def start_run(
     """
 
     run_id = uuid4()
+    # Resolve the per-run token budget now and stamp it on the row (#103):
+    # install default -> tenant override, clamped to the install cap. Resolving
+    # at creation makes the value immutable for this run, so a later override
+    # change never touches an in-flight run, and it takes effect with no worker
+    # rollout. Previously the INSERT omitted tokens_budget and every run rode
+    # the column default.
+    tokens_budget = await resolve_run_token_budget(db, tenant_id)
     # X in "re-triage up to X attempts". The column's DB default is 4
     # (migration v1_0039); the env lets an operator raise or lower it for new
     # runs without a migration. Read per call so a config change applies to
@@ -65,9 +72,10 @@ async def start_run(
         await db.execute(
             text(
                 "INSERT INTO investigation_runs "
-                "  (id, tenant_id, investigation_id, status, not_before, max_attempts) "
+                "  (id, tenant_id, investigation_id, status, not_before, "
+                "   max_attempts, tokens_budget) "
                 "VALUES (:id, :t, :c, 'active', "
-                "        now() + make_interval(secs => :settle), :cap)"
+                "        now() + make_interval(secs => :settle), :cap, :budget)"
             ),
             {
                 "id": str(run_id),
@@ -75,21 +83,23 @@ async def start_run(
                 "c": str(investigation_id),
                 "settle": max(0.0, float(settle_seconds)),
                 "cap": max_attempts,
+                "budget": tokens_budget,
             },
         )
     else:
         await db.execute(
             text(
                 "INSERT INTO investigation_runs "
-                "  (id, tenant_id, investigation_id, status, not_before) "
+                "  (id, tenant_id, investigation_id, status, not_before, tokens_budget) "
                 "VALUES (:id, :t, :c, 'active', "
-                "        now() + make_interval(secs => :settle))"
+                "        now() + make_interval(secs => :settle), :budget)"
             ),
             {
                 "id": str(run_id),
                 "t": str(tenant_id),
                 "c": str(investigation_id),
                 "settle": max(0.0, float(settle_seconds)),
+                "budget": tokens_budget,
             },
         )
     return run_id

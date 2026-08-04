@@ -184,6 +184,65 @@ async def set_tenant_policy(
     )
 
 
+async def delete_tenant_policy(db: AsyncSession, tenant_id: UUID, key: str) -> None:
+    """Remove a tenant override so the install default applies again.
+
+    Clearing an override DELETES the row rather than storing a JSON ``null``:
+    "absent = no override" is the precedence contract the resolver and audit
+    (before/after) rely on.
+    """
+    await db.execute(
+        text("DELETE FROM tenant_policies WHERE tenant_id = :t AND key = :k"),
+        {"t": str(tenant_id), "k": key},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Run token budget (#103): install default -> tenant override, clamped to an
+# install hard cap, resolved at run creation (no worker rollout).
+# ---------------------------------------------------------------------------
+
+RUN_TOKEN_BUDGET_KEY = "max_tokens_per_investigation"
+
+
+def run_token_budget_default() -> int:
+    """Install default run token budget (the install policy value)."""
+    return int(install_policies().get(RUN_TOKEN_BUDGET_KEY, 200_000))
+
+
+def run_token_budget_max() -> int:
+    """Install hard cap a tenant override cannot exceed.
+
+    ``SOCTALK_RUN_TOKEN_BUDGET_MAX`` (positive int) or a generous default that
+    preserves the pre-#103 ceiling; lower it via the system chart to enforce a
+    real cap. Chart-wired in soctalk-system.
+    """
+    raw = os.environ.get("SOCTALK_RUN_TOKEN_BUDGET_MAX", "")
+    if raw.strip():
+        try:
+            v = int(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return 100_000_000
+
+
+async def resolve_run_token_budget(db: AsyncSession, tenant_id: UUID) -> int:
+    """Effective per-run token budget for a tenant at run-creation time.
+
+    install default -> tenant override (via the policy layer), then clamped to
+    the install hard cap. The clamp is authoritative here (not just at the PATCH
+    validator): the cap is env-sourced, so rolling API pods could validate
+    against different caps, and a previously-stored override may exceed a
+    later-lowered cap. Stamped once onto the run row, so changing the override
+    never mutates an in-flight run.
+    """
+    eff = await effective_policy(db, tenant_id)
+    budget = int(eff.get(RUN_TOKEN_BUDGET_KEY, run_token_budget_default()))
+    return max(1, min(budget, run_token_budget_max()))
+
+
 # ---------------------------------------------------------------------------
 # Effective policy (precedence evaluator)
 # ---------------------------------------------------------------------------
@@ -223,9 +282,14 @@ async def effective_policy(
 
 
 __all__ = [
+    "RUN_TOKEN_BUDGET_KEY",
+    "delete_tenant_policy",
     "effective_policy",
     "install_policies",
     "reset_install_policy_cache",
+    "resolve_run_token_budget",
+    "run_token_budget_default",
+    "run_token_budget_max",
     "set_tenant_policy",
     "tenant_policies",
 ]

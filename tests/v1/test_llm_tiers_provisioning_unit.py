@@ -300,12 +300,13 @@ def test_resolve_tier_sampling_override_and_fallback():
 
 
 def test_render_emits_run_budget_only_when_set():
-    # Per-tenant case-run budget caps (issue #5) — emitted only when set so a
-    # NULL column leaves the worker default in place.
+    # Dollar budget still env-renders (issue #5). The per-run TOKEN budget is
+    # DB-resolved at run creation now (#103) and is NOT rendered to worker env,
+    # even when the legacy column is set.
     v = _render(_integration(uuid4(), llm_dollar_budget_per_run=2.5,
                              llm_token_budget_per_run=50000))
     assert v["llm"]["dollarBudgetPerRun"] == 2.5
-    assert v["llm"]["tokenBudgetPerRun"] == 50000
+    assert "tokenBudgetPerRun" not in v["llm"]
     plain = _render(_integration(uuid4()))
     assert "dollarBudgetPerRun" not in plain["llm"]
     assert "tokenBudgetPerRun" not in plain["llm"]

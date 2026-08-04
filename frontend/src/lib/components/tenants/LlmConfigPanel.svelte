@@ -49,7 +49,6 @@
 		max_tokens: string;
 		// Per-tenant case-run budget caps — '' = clear to the worker default.
 		dollar_budget: string;
-		token_budget: string;
 		api_key: string;
 	}
 
@@ -62,7 +61,6 @@
 		temperature: '',
 		max_tokens: '',
 		dollar_budget: '',
-		token_budget: '',
 		api_key: ''
 	};
 	let formError: string | null = null;
@@ -235,7 +233,6 @@
 			max_tokens: read != null ? String(read.max_tokens) : '',
 			// null (worker default) seeds blank; a set cap seeds its value.
 			dollar_budget: read?.dollar_budget_per_run != null ? String(read.dollar_budget_per_run) : '',
-			token_budget: read?.token_budget_per_run != null ? String(read.token_budget_per_run) : '',
 			api_key: ''
 		};
 		// Seed the per-tier chain editor from the sanitized read.tiers map.
@@ -293,14 +290,8 @@
 				return;
 			}
 		}
-		const tokBudgetStr = formData.token_budget.trim();
-		if (tokBudgetStr !== '') {
-			const tb = Number(tokBudgetStr);
-			if (!Number.isInteger(tb) || tb < 1000 || tb > 100000000) {
-				formError = m.ten_llm_err_token_budget();
-				return;
-			}
-		}
+		// Per-run TOKEN budget moved to the Agent Run Budget panel (#103); it is
+		// no longer edited here (writes to it via this endpoint are rejected).
 		// Validate each enabled tier before building the payload — surface the
 		// error inline rather than round-tripping to a backend 422 toast.
 		for (const k of TIER_KEYS) {
@@ -381,12 +372,6 @@
 					if (readDollar !== null) payload.dollar_budget_per_run = null;
 				} else if (Number(dollarStr) !== readDollar) {
 					payload.dollar_budget_per_run = Number(dollarStr);
-				}
-				const readToken = read.token_budget_per_run;
-				if (tokBudgetStr === '') {
-					if (readToken !== null) payload.token_budget_per_run = null;
-				} else if (Number(tokBudgetStr) !== readToken) {
-					payload.token_budget_per_run = Number(tokBudgetStr);
 				}
 			}
 			if (formData.api_key) payload.api_key = formData.api_key;
@@ -555,18 +540,6 @@
 							inputmode="decimal"
 							bind:value={formData.dollar_budget}
 							placeholder={m.ten_llm_dollar_placeholder()}
-						/>
-						<span class="text-xs opacity-60">{m.ten_llm_blank_worker_default()}</span>
-					</label>
-					<label class="label">
-						<span class="text-sm">{m.ten_llm_token_budget_label()}</span>
-						<input
-							name="token_budget"
-							class="input"
-							type="text"
-							inputmode="numeric"
-							bind:value={formData.token_budget}
-							placeholder={m.ten_llm_token_placeholder()}
 						/>
 						<span class="text-xs opacity-60">{m.ten_llm_blank_worker_default()}</span>
 					</label>
@@ -784,10 +757,6 @@
 					<dd class="font-mono text-xs" data-testid="llm-dollar-budget">
 						{read.dollar_budget_per_run != null ? `$${read.dollar_budget_per_run}` : m.ten_llm_default()}
 					</dd>
-				</div>
-				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">{m.ten_llm_token_budget_label()}</dt>
-					<dd class="font-mono text-xs" data-testid="llm-token-budget">{read.token_budget_per_run ?? m.ten_llm_default()}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
 					<dt class="opacity-60">{m.ten_llm_api_key()}</dt>

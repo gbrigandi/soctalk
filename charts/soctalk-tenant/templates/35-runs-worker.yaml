@@ -69,6 +69,11 @@ spec:
               {{- end }}
             - name: WORKER_TOKEN_PATH
               value: /run/secrets/runs-worker/token
+            {{- if .Values.runsWorker.demoTiSeeding }}
+            {{- /* Demo/lab only: fabricated TI for level>=13 Wazuh alerts. */}}
+            - name: SOCTALK_DEMO_TI_SEEDING
+              value: "1"
+            {{- end }}
             {{- /*
               Run-concurrency (issue #61): N in-flight investigations per process
               so a shared self-hosted vLLM/SGLang backend fills its continuous
@@ -126,10 +131,10 @@ spec:
             - name: SOCTALK_CASE_RUN_DOLLAR_BUDGET
               value: {{ .Values.llm.dollarBudgetPerRun | quote }}
             {{- end }}
-            {{- if .Values.llm.tokenBudgetPerRun }}
-            - name: SOCTALK_CASE_RUN_TOKEN_BUDGET
-              value: {{ .Values.llm.tokenBudgetPerRun | quote }}
-            {{- end }}
+            {{- /* Per-run TOKEN budget is DB-resolved at run creation (#103),
+                   no longer rendered per-tenant to worker env. The
+                   SOCTALK_CASE_RUN_TOKEN_BUDGET env stays an install-global
+                   operator fallback, set outside this per-tenant render. */}}
             {{- /*
               Per-tier LLM backends (issue #12). When a tier block is present the
               worker gets the full SOCTALK_<TIER>_* env (provider is required so

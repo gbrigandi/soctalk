@@ -32,8 +32,9 @@ from soctalk.core.api import llm_config as llm_routes
 from soctalk.core.api import metrics_bridge as metrics_bridge_routes
 from soctalk.core.api import mssp_analytics as mssp_analytics_routes
 from soctalk.core.api import mssp_dashboard as mssp_dashboard_routes
-from soctalk.core.api import public_tenant as public_tenant_routes
 from soctalk.core.api import mssp_users as mssp_users_routes
+from soctalk.core.api import public_tenant as public_tenant_routes
+from soctalk.core.api import run_budget as run_budget_routes
 from soctalk.core.api import tenants as tenant_routes
 from soctalk.core.api import users as users_routes
 from soctalk.core.api import worker_runs as worker_runs_routes
@@ -261,6 +262,8 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app.include_router(branding_routes.mssp_router)
     app.include_router(llm_routes.router)
     app.include_router(llm_routes.tenant_router)
+    app.include_router(run_budget_routes.router)
+    app.include_router(run_budget_routes.tenant_router)
     app.include_router(adapter_routes.router)
     app.include_router(authorization_routes.router)
     app.include_router(authorization_routes.mssp_router)

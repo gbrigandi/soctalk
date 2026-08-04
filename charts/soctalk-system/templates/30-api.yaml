@@ -262,6 +262,13 @@ spec:
               value: /run/secrets/soctalk/jwt-key
             - name: ADAPTER_SIGNING_KEY_PATH
               value: /run/secrets/adapter/signing_key
+            {{- /* Install hard cap for the per-tenant run token budget
+                   override (#103). Unset -> the API default; set a real
+                   ceiling here to enforce a cap fleet-wide. */}}
+            {{- if and .Values.defaults.runTokenBudget .Values.defaults.runTokenBudget.max }}
+            - name: SOCTALK_RUN_TOKEN_BUDGET_MAX
+              value: {{ .Values.defaults.runTokenBudget.max | quote }}
+            {{- end }}
             - name: SOCTALK_LLM_PROVIDER_DEFAULT
               value: {{ .Values.defaults.llm.provider | quote }}
             - name: SOCTALK_LLM_BASE_URL_DEFAULT

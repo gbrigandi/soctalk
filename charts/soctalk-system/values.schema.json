@@ -218,6 +218,17 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "runTokenBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Install hard cap for the per-tenant run token budget override (#103).",
+          "properties": {
+            "max": {
+              "type": ["integer", "string"],
+              "description": "Ceiling a tenant override may not exceed. Empty = API default."
+            }
+          }
+        },
         "llm": {
           "type": "object",
           "additionalProperties": false,

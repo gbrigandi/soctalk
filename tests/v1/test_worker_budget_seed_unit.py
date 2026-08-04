@@ -13,9 +13,18 @@ import pytest
 from soctalk.runs_worker.main import _dollars_budget_kv, _tokens_budget_kv
 
 
-def test_tokens_env_overrides_claim(monkeypatch):
+def test_tokens_claim_wins_over_env(monkeypatch):
+    # #103: the CLAIM row is authoritative (server resolves the per-tenant
+    # budget and stamps it), so a positive claim wins even when the legacy
+    # env is set. The env is only an install-global fallback now.
     monkeypatch.setenv("SOCTALK_CASE_RUN_TOKEN_BUDGET", "50000")
-    assert _tokens_budget_kv(200000) == {"tokens_budget": 50000}
+    assert _tokens_budget_kv(200000) == {"tokens_budget": 200000}
+
+
+def test_tokens_env_fallback_when_claim_absent(monkeypatch):
+    # No valid claim budget -> the install-global env fallback applies.
+    monkeypatch.setenv("SOCTALK_CASE_RUN_TOKEN_BUDGET", "50000")
+    assert _tokens_budget_kv(0) == {"tokens_budget": 50000}
 
 
 def test_tokens_falls_back_to_claim_when_env_absent(monkeypatch):
@@ -24,11 +33,12 @@ def test_tokens_falls_back_to_claim_when_env_absent(monkeypatch):
 
 
 def test_tokens_non_positive_env_ignored(monkeypatch):
-    # An operator typo (=0 / garbage) must not zero the budget; fall through.
+    # An operator typo (=0 / garbage) in the fallback env must not zero the
+    # budget when there's no claim; fall through to the ensure() default.
     monkeypatch.setenv("SOCTALK_CASE_RUN_TOKEN_BUDGET", "0")
-    assert _tokens_budget_kv(200000) == {"tokens_budget": 200000}
+    assert _tokens_budget_kv(0) == {}
     monkeypatch.setenv("SOCTALK_CASE_RUN_TOKEN_BUDGET", "notanint")
-    assert _tokens_budget_kv(200000) == {"tokens_budget": 200000}
+    assert _tokens_budget_kv(0) == {}
 
 
 def test_tokens_empty_when_nothing_positive(monkeypatch):
