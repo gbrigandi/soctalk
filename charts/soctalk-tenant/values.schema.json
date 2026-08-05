@@ -17,6 +17,11 @@
       "additionalProperties": true,
       "description": "Passthrough values for the bundled linux-ep subchart (only rendered when components.linuxep.enabled is true). Structure is defined by charts/linux-ep/values.yaml, not this schema."
     },
+    "linux-ep": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Helm-injected defaults of the linux-ep dependency under its CHART NAME (the alias 'linuxep' above carries the real values). helm >= 3.15 validates the fully coalesced value tree, which includes this key, so the strict root schema must admit it or every render fails on a stock newer helm."
+    },
     "tenant": {
       "type": "object",
       "required": ["id", "slug", "msspId", "installId"],
@@ -364,6 +369,23 @@
           "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 65536 },
           "propertyNames": { "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$", "maxLength": 253 },
           "maxProperties": 32
+        },
+        "wazuh": {
+          "type": "object",
+          "description": "Wazuh MCP enrichment wiring for the triage graph (issue #109). apiUrl -> WAZUH_URL (manager REST :55000); indexerHost/indexerPort -> the MCP indexer client; credsSecret holds WAZUH_API_USERNAME/WAZUH_API_PASSWORD/INDEXER_USERNAME/INDEXER_PASSWORD (same key layout in wazuh-<slug>-wazuh-creds and tenant-external-siem-creds). Populated per profile by render.py; disabled by default.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "apiUrl": { "type": "string", "maxLength": 500 },
+            "indexerHost": { "type": "string", "maxLength": 253 },
+            "indexerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "credsSecret": { "type": "string", "maxLength": 253 },
+            "verifySsl": { "type": "boolean" }
+          }
+        },
+        "demoTiSeeding": {
+          "type": "boolean",
+          "description": "Demo/lab only synthetic threat-intel seeding (see values.yaml). Was set in values.yaml but missing here; helm >= 3.15 validates coalesced defaults against this schema, so the omission fails every render."
         },
         "playbooks": {
           "type": "object",

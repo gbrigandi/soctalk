@@ -191,6 +191,28 @@ runsWorker:
   tokenSecretRef:
     name: "runs-worker-token"
     key: "token"
+  # Wazuh MCP enrichment for the triage graph (issue #109). When enabled the
+  # worker gets the WAZUH_* env that settings_provider.create_wazuh_mcp_config
+  # reads: apiUrl becomes WAZUH_URL (manager REST, :55000), indexerHost/Port
+  # point the MCP's indexer client, and the four credential keys come from
+  # ``credsSecret`` — the SAME key layout in both the in-cluster
+  # ``wazuh-<slug>-wazuh-creds`` and the provided-profile
+  # ``tenant-external-siem-creds`` Secrets (WAZUH_API_USERNAME,
+  # WAZUH_API_PASSWORD, INDEXER_USERNAME, INDEXER_PASSWORD). Disabled by
+  # default: render.py populates this per profile.
+  wazuh:
+    enabled: false
+    apiUrl: ""
+    indexerHost: ""
+    indexerPort: 9200
+    credsSecret: ""
+    verifySsl: false
+  # Demo/lab ONLY. Fabricates malicious enrichment + MISP attribution for
+  # Wazuh alerts at rule level >= 13 when no cortex/MISP is deployed, so a
+  # demo escalates without an enrichment service. The evidence is invented and
+  # is labelled [SYNTHETIC DEMO DATA] everywhere it renders. Never enable it on
+  # a tenant that triages real alerts.
+  demoTiSeeding: false
   # Optional plaintext bearer token. When set, the chart materializes
   # ``tokenSecretRef`` from this value (used by the cross-cluster L2
   # agent path). Empty falls back to the operator-pre-provisioned-Secret

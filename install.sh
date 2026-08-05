@@ -325,16 +325,25 @@ prompt_config() {
   [[ -n "$MSSP_NAME" ]]      || die "MSSP name required (set SOCTALK_MSSP_NAME or use --demo)"
   [[ -n "$ADMIN_EMAIL" ]]    || die "admin email required (set SOCTALK_ADMIN_EMAIL)"
   [[ -n "$ADMIN_PASSWORD" ]] || die "admin password required (set SOCTALK_ADMIN_PASSWORD)"
+}
 
-  # Env-driven unattended path: when the caller has supplied every
-  # required SOCTALK_* var, they're plainly running unattended (CI,
-  # cloud-init, ansible). Auto-assume yes so the install doesn't block
-  # on the /dev/tty prompt that no terminal exists to answer. Explicit
-  # --yes / SOCTALK_ASSUME_YES still wins for the partial cases.
+# Env-driven unattended path: when the caller has supplied every
+# required SOCTALK_* var, they're plainly running unattended (CI,
+# cloud-init, ansible). Auto-assume yes so the install doesn't block
+# on the /dev/tty prompt that no terminal exists to answer. Explicit
+# --yes / SOCTALK_ASSUME_YES still wins for the partial cases.
+#
+# MUST run before preflight/confirm_changes, not inside prompt_config:
+# both consent prompts fire earlier in main(), and a no-TTY run used to
+# die there with "/dev/tty: No such device or address" even though every
+# required env var was present (issue #108).
+auto_assume_yes_from_env() {
+  # ${VAR:-} guards: the script runs under ``set -u`` and an interactive
+  # install has none of these exported — a bare reference would abort.
   if [[ "$ASSUME_YES" != "true" \
-        && -n "$SOCTALK_MSSP_NAME" \
-        && -n "$SOCTALK_ADMIN_EMAIL" \
-        && -n "$SOCTALK_ADMIN_PASSWORD" ]]; then
+        && -n "${SOCTALK_MSSP_NAME:-}" \
+        && -n "${SOCTALK_ADMIN_EMAIL:-}" \
+        && -n "${SOCTALK_ADMIN_PASSWORD:-}" ]]; then
     ASSUME_YES="true"
   fi
 }
@@ -580,7 +589,7 @@ EOF
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --demo) MODE="demo";;
+      --demo) MODE="demo"; ASSUME_YES="true";;  # usage promises non-interactive (#108)
       --chart-version) CHART_VERSION="$2"; shift;;
       --chart-dir) CHART_DIR="$2"; MODE="values-file"; shift;;
       --values-file) VALUES_FILE="$2"; MODE="values-file"; shift;;
@@ -599,6 +608,7 @@ parse_args() {
 
 main() {
   parse_args "$@"
+  auto_assume_yes_from_env     # before ANY /dev/tty prompt (issue #108)
   need_root                    # k3s (systemd + host install) needs root
   require_systemd              # non-skippable: the whole flow assumes systemd
   [[ "$SKIP_PREFLIGHT" == "true" ]] || preflight

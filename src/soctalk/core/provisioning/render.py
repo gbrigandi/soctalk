@@ -330,11 +330,36 @@ def render_tenant_values(
     if is_provided:
         indexer_url = integration.wazuh_indexer_url
         indexer_creds_secret = "tenant-external-siem-creds"
+        # The tenant's own Wazuh manager REST API — the worker's MCP
+        # enrichment target (issue #109).
+        wazuh_api_url = integration.wazuh_api_url
     else:
         # In-cluster Wazuh provisioned by the wazuh subchart: derive the
         # indexer Service DNS + the chart-minted ``*-wazuh-creds`` Secret.
         indexer_url = f"https://wazuh-{tenant.slug}-wazuh-indexer:9200"
         indexer_creds_secret = f"wazuh-{tenant.slug}-wazuh-creds"
+        wazuh_api_url = f"https://wazuh-{tenant.slug}-wazuh-manager:55000"
+
+    # Worker Wazuh MCP wiring (issue #109): the runs-worker's enrichment used
+    # to bind ZERO Wazuh tools on every profile — the chart emitted no WAZUH_*
+    # env at all, so a provided tenant (whose external Wazuh holds the richest
+    # history) triaged on the alert payload alone. Both creds Secrets share the
+    # same four key names, so one block serves in-cluster and external alike.
+    from urllib.parse import urlparse as _urlparse
+
+    _idx = _urlparse(indexer_url) if indexer_url else None
+    runs_worker_wazuh = {
+        "enabled": bool(
+            integration.wazuh_enabled and wazuh_api_url and indexer_url
+        ),
+        "apiUrl": wazuh_api_url or "",
+        "indexerHost": (_idx.hostname if _idx else "") or "",
+        "indexerPort": (_idx.port if _idx and _idx.port else 9200),
+        "credsSecret": indexer_creds_secret,
+        # Same TLS rule as the adapter: in-cluster wazuh always presents the
+        # chart's self-signed cert, so only 'provided' honours the DB row.
+        "verifySsl": bool(integration.wazuh_verify_ssl) if is_provided else False,
+    }
 
     # For 'provided', the Cilium FQDN egress allow-list must include every
     # external SIEM host the adapter talks to (indexer :9200 + API :55000).
@@ -527,6 +552,9 @@ def render_tenant_values(
                 "name": "runs-worker-token",
                 "key": "token",
             },
+            # Wazuh MCP enrichment target (issue #109) — computed above,
+            # profile-aware (in-cluster service DNS vs external SIEM URLs).
+            "wazuh": runs_worker_wazuh,
             # Per-tenant model overrides (integration_configs.llm_fast_model /
             # llm_reasoning_model). NULL *or* empty string falls back to
             # llm_model — a cleared override may be stored either way — so

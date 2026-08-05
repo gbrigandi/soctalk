@@ -277,19 +277,28 @@ def test_render_provided_profile():
 _TENANT_CHART_DIR = Path(__file__).resolve().parents[2] / "charts" / "soctalk-tenant"
 
 
-def _helm_template(values: dict) -> list[dict]:
-    """Render the soctalk-tenant chart with ``values`` → list of manifests."""
+def _helm_template(values: dict, *, cilium: bool = True) -> list[dict]:
+    """Render the soctalk-tenant chart with ``values`` → list of manifests.
+
+    ``cilium=True`` advertises the CiliumNetworkPolicy API to helm (as a
+    Cilium cluster would); ``cilium=False`` mimics a stock flannel k3s so the
+    Capabilities guard (issue #107) suppresses the FQDN egress object.
+    """
     helm = shutil.which("helm")
     if helm is None:
         pytest.skip("helm binary not on PATH")
     yaml = pytest.importorskip("yaml")
 
+    cmd = [helm, "template", "t", str(_TENANT_CHART_DIR), "-f"]
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
         yaml.safe_dump(values, fh)
         values_path = fh.name
+    cmd.append(values_path)
+    if cilium:
+        cmd += ["--api-versions", "cilium.io/v2/CiliumNetworkPolicy"]
     try:
         proc = subprocess.run(
-            [helm, "template", "t", str(_TENANT_CHART_DIR), "-f", values_path],
+            cmd,
             capture_output=True,
             text=True,
         )
@@ -399,6 +408,59 @@ def test_chart_fqdn_egress_skipped_when_no_hosts():
 
     names = _fqdn_egress_match_names(_helm_template(values))
     assert names is None, "adapter-fqdn-egress must be skipped when no hosts"
+
+
+def test_chart_renders_without_cilium_crds(  # issue #107
+):
+    """A stock ``soctalk install`` k3s runs flannel with NO Cilium CRDs; the
+    provided profile force-enables fqdnEgress, and the whole release used to
+    fail to build ("no matches for kind CiliumNetworkPolicy"). The
+    Capabilities guard must suppress the object so the render SUCCEEDS, and
+    IP-literal SIEM hosts must still get plain ipBlock egress rules on BOTH
+    the adapter and the runs-worker (the worker dials the external SIEM for
+    MCP enrichment, issue #109)."""
+    values = _provided_values_for_chart(
+        indexer_url="https://198.51.100.20:9200",
+        api_url="https://198.51.100.20:55000",
+        soctalk_url="",
+    )
+    manifests = _helm_template(values, cilium=False)  # would have raised before
+
+    assert _fqdn_egress_match_names(manifests) is None, (
+        "CiliumNetworkPolicy must not be emitted without the CRD"
+    )
+
+    def _ipblock_cidrs(policy_name: str) -> set[str]:
+        for m in manifests:
+            if (
+                m.get("kind") == "NetworkPolicy"
+                and m["metadata"]["name"] == policy_name
+            ):
+                return {
+                    to["ipBlock"]["cidr"]
+                    for rule in m["spec"].get("egress", [])
+                    for to in rule.get("to", [])
+                    if "ipBlock" in to
+                }
+        raise AssertionError(f"{policy_name} not found")
+
+    assert "198.51.100.20/32" in _ipblock_cidrs("adapter-egress")
+    assert "198.51.100.20/32" in _ipblock_cidrs("runs-worker-egress")
+
+
+def test_chart_ipblock_skips_fqdn_hosts():  # issue #107
+    """FQDN SIEM hosts are not expressible as ipBlocks; they must be left to
+    the Cilium policy (or the operator) and never rendered as a bogus
+    ``hostname/32`` CIDR."""
+    values = _provided_values_for_chart(
+        indexer_url="https://indexer.siem.acme.example:9200",
+        api_url="https://manager.siem.acme.example:55000",
+        soctalk_url="",
+    )
+    manifests = _helm_template(values, cilium=False)
+    rendered = str(manifests)
+    assert "indexer.siem.acme.example/32" not in rendered
+    assert "manager.siem.acme.example/32" not in rendered
 
 
 @pytest.mark.parametrize("profile", ["poc", "persistent", "provided"])
@@ -782,3 +844,135 @@ def test_render_triage_policy_values_codex_fixes(tmp_path, monkeypatch):
     # foreign tenant: neither slug nor id matches -> not shipped
     out2 = render_triage_policy_values("other", "11111111-2222-3333-4444-555555555555")
     assert "byid.yaml" not in out2
+
+
+# ---------------------------------------------------------------------------
+# runsWorker.wazuh — the worker's Wazuh MCP enrichment wiring (issue #109)
+# ---------------------------------------------------------------------------
+
+
+def test_runs_worker_wazuh_wired_to_external_siem_for_provided():
+    # A provided tenant's worker must enrich against the EXTERNAL Wazuh:
+    # manager API URL + indexer host from the integration row, creds from the
+    # controller-managed tenant-external-siem-creds Secret, TLS per the row.
+    t = _make_tenant("provided")
+    integration = _make_integration(t.id)
+    integration.wazuh_enabled = True
+    integration.wazuh_indexer_url = "https://198.51.100.20:9200"
+    integration.wazuh_api_url = "https://198.51.100.20:55000"
+    integration.wazuh_verify_ssl = True
+
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="provided",
+    )
+
+    w = v["runsWorker"]["wazuh"]
+    assert w["enabled"] is True
+    assert w["apiUrl"] == "https://198.51.100.20:55000"
+    assert w["indexerHost"] == "198.51.100.20"
+    assert w["indexerPort"] == 9200
+    assert w["credsSecret"] == "tenant-external-siem-creds"
+    # Only 'provided' honours the operator's TLS preference.
+    assert w["verifySsl"] is True
+
+
+def test_runs_worker_wazuh_wired_to_in_cluster_siem_for_poc():
+    # Managed profiles point the worker at the wazuh subchart's Services and
+    # the chart-minted creds Secret; in-cluster certs are self-signed, so
+    # verifySsl is forced off regardless of the DB row.
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)
+    integration.wazuh_enabled = True
+    integration.wazuh_verify_ssl = True  # must NOT leak into the worker env
+
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+
+    w = v["runsWorker"]["wazuh"]
+    assert w["enabled"] is True
+    assert w["apiUrl"] == f"https://wazuh-{t.slug}-wazuh-manager:55000"
+    assert w["indexerHost"] == f"wazuh-{t.slug}-wazuh-indexer"
+    assert w["indexerPort"] == 9200
+    assert w["credsSecret"] == f"wazuh-{t.slug}-wazuh-creds"
+    assert w["verifySsl"] is False
+
+
+def test_runs_worker_wazuh_disabled_when_integration_disabled():
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)
+    integration.wazuh_enabled = False
+
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+
+    assert v["runsWorker"]["wazuh"]["enabled"] is False
+
+
+def test_runs_worker_wazuh_disabled_when_provided_urls_missing():
+    # A provided row without connection material must not enable the MCP with
+    # empty targets (create_wazuh_mcp_config would warn-and-skip anyway, but
+    # the render should not ask for it in the first place).
+    t = _make_tenant("provided")
+    integration = _make_integration(t.id)
+    integration.wazuh_enabled = True
+    integration.wazuh_indexer_url = None
+    integration.wazuh_api_url = None
+
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="provided",
+    )
+
+    w = v["runsWorker"]["wazuh"]
+    assert w["enabled"] is False
+    assert w["apiUrl"] == ""
+    assert w["indexerHost"] == ""
+
+
+def test_chart_fqdn_egress_covers_worker_and_adapter():  # codex P1 on #109
+    """The CiliumNetworkPolicy must select BOTH the adapter and the
+    runs-worker: with an FQDN external SIEM, the worker's MCP enrichment
+    egress is only expressible via toFQDNs, so an adapter-only selector
+    silently blocks enrichment on Cilium clusters."""
+    values = _provided_values_for_chart(
+        indexer_url="https://indexer.siem.acme.example:9200",
+        api_url="https://manager.siem.acme.example:55000",
+        soctalk_url="",
+    )
+    manifests = _helm_template(values)
+    cnp = next(
+        m for m in manifests if m.get("kind") == "CiliumNetworkPolicy"
+    )
+    exprs = cnp["spec"]["endpointSelector"]["matchExpressions"]
+    name_expr = next(
+        e for e in exprs if e["key"] == "app.kubernetes.io/name"
+    )
+    assert set(name_expr["values"]) == {
+        "soctalk-adapter",
+        "soctalk-runs-worker",
+    }
