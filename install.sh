@@ -40,6 +40,7 @@ CHART_VERSION="${SOCTALK_CHART_VERSION:-0.2.0}"
 IMAGE_TAG="${SOCTALK_IMAGE_TAG:-$CHART_VERSION}"
 CHART_DIR=""                       # set by --chart-dir (appliance path)
 NAMESPACE="soctalk-system"
+RELEASE="soctalk-system"           # helm release name (== app.kubernetes.io/instance)
 HELM_TIMEOUT="${SOCTALK_HELM_TIMEOUT:-15m}"
 
 MODE="interactive"                 # interactive | demo | values-file
@@ -153,6 +154,53 @@ require_systemd() {
   die "soctalk install requires a systemd-based host (it runs k3s as a systemd service). This host is not running systemd (e.g. Alpine/OpenRC). Use a systemd distro (Debian/Ubuntu, RHEL/Fedora/Rocky/Alma) or the prebuilt VM appliance: https://soctalk.github.io/soctalk-docs/downloads"
 }
 
+# firewalld is on by default on every non-cloud RHEL/Rocky/Alma install, and it
+# drops traffic on the flannel bridge unless the k3s networks are trusted. The
+# resulting failure is silent and late: k3s installs fine, the node goes Ready,
+# images pull, and then pods can't reach each other — so `helm --wait` burns its
+# whole timeout while "No route to host" sits unread in an init container's log.
+# Catch it here, before the host is mutated.
+#
+# This only *reports*. Rewriting an operator's firewall is their security
+# boundary, not the installer's.
+#
+# Returns non-zero when firewalld is running without the k3s networks trusted.
+check_firewalld() {
+  command -v firewall-cmd >/dev/null 2>&1 || return 0
+  firewall-cmd --state >/dev/null 2>&1 || return 0   # installed but not running
+  # Exact queries, not substring matches on --list-sources: "10.42.1.0/24" or an
+  # unrelated 10.43.x entry would otherwise read as trusted and we would wave
+  # through a host that is about to fail.
+  local ok=1
+  firewall-cmd --zone=trusted --query-source=10.42.0.0/16 >/dev/null 2>&1 || ok=0
+  firewall-cmd --zone=trusted --query-source=10.43.0.0/16 >/dev/null 2>&1 || ok=0
+  if (( ! ok )); then
+    # Trusting the CNI interfaces themselves is an equally valid configuration
+    # (and the one you end up with if you re-zone after k3s is already up).
+    ok=1
+    firewall-cmd --zone=trusted --query-interface=cni0 >/dev/null 2>&1 \
+      || firewall-cmd --zone=trusted --query-interface=flannel.1 >/dev/null 2>&1 \
+      || ok=0
+  fi
+  if (( ok )); then
+    printf '  %-22s %s\n' "firewalld" "${c_grn}ok${c_rst} (running; k3s networks trusted)"
+    return 0
+  fi
+  printf '  %-22s %s\n' "firewalld" "${c_red}running${c_rst} (k3s networks not trusted)"
+  # printf, not a heredoc: keeps this branch free of any external command, so it
+  # still prints on a host with a broken PATH, and sidesteps this repo's prior
+  # heredoc-expansion foot-guns entirely.
+  printf '%s\n' \
+    '      Pods will not reach each other and the install will fail on a helm' \
+    '      timeout. Trust the k3s networks first (these are the k3s defaults;' \
+    '      use your own CIDRs if you set --cluster-cidr / --service-cidr):' \
+    '        sudo firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16' \
+    '        sudo firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16' \
+    '        sudo firewall-cmd --permanent --add-port=80/tcp --add-port=443/tcp' \
+    '        sudo firewall-cmd --reload'
+  return 1
+}
+
 preflight() {
   log "Preflight checks"
   local fail=0
@@ -194,7 +242,7 @@ preflight() {
     command -v ss >/dev/null 2>&1 && port_tool="ss"
     [[ -z "$port_tool" ]] && command -v netstat >/dev/null 2>&1 && port_tool="netstat"
     if [[ -z "$port_tool" ]]; then
-      printf '  %-22s %s\n' "ports 80/443/6443" "${c_ylw:-}unknown${c_rst} (no ss/netstat)"
+      printf '  %-22s %s\n' "ports 80/443/6443" "${c_yel}unknown${c_rst} (no ss/netstat)"
     else
       for p in 80 443 6443; do
         if [[ "$port_tool" == "ss" ]]; then
@@ -207,6 +255,8 @@ preflight() {
       else printf '  %-22s %s\n' "ports 80/443/6443" "${c_grn}free${c_rst}"; fi
     fi
   fi
+
+  check_firewalld || fail=1
 
   # Reachability: a *connection* (any HTTP response) is success. Omit -f so
   # ghcr.io's 401 at /v2/ still counts as reachable; curl returns non-zero
@@ -496,11 +546,11 @@ install_chart() {
   [[ "${SOCTALK_HELM_PLAIN_HTTP:-}" == "1" || "${SOCTALK_HELM_PLAIN_HTTP:-}" == "true" ]] \
     && plain_http=(--plain-http)
   if [[ -n "$CHART_DIR" ]]; then
-    helm upgrade --install soctalk-system "$CHART_DIR" \
+    helm upgrade --install "$RELEASE" "$CHART_DIR" \
       --namespace "$NAMESPACE" --create-namespace \
       --values "$VALUES_FILE" --wait --timeout "$HELM_TIMEOUT"
   else
-    helm upgrade --install soctalk-system "$CHART_REF" --version "$CHART_VERSION" \
+    helm upgrade --install "$RELEASE" "$CHART_REF" --version "$CHART_VERSION" \
       "${plain_http[@]}" \
       --namespace "$NAMESPACE" --create-namespace \
       --values "$VALUES_FILE" --wait --timeout "$HELM_TIMEOUT"
@@ -561,9 +611,40 @@ maybe_onboard() {
   fi
 }
 
+# The bootstrap admin the operator should log in as. Prompted paths already have
+# it in $ADMIN_EMAIL; the --values-file / appliance path never prompts, so ask
+# the cluster instead of parsing the operator's values file. The chart wires
+# SOCTALK_BOOTSTRAP_ADMIN_EMAIL to a Secret key, which also covers
+# install.bootstrapAdmin.existingSecret.
+#
+# The env var lives on the api Deployment's `db-init` INIT container (that's
+# what seeds the first admin), not the app container, so match with jsonpath
+# recursive descent (`spec..env`) rather than pinning a container index. Take
+# the first hit in case a future template repeats the var.
+#
+# Best-effort throughout: every failure path yields the empty string (no
+# kubectl, cluster unreachable, no match, no such Secret), and print_summary
+# drops the Login line rather than printing a dangling label. Never fatal —
+# losing the success banner over a cosmetic lookup would be a worse bug than
+# the one this fixes.
+resolve_admin_email() {
+  if [[ -n "$ADMIN_EMAIL" ]]; then printf '%s' "$ADMIN_EMAIL"; return 0; fi
+  command -v kubectl >/dev/null 2>&1 || return 0
+  local sec
+  # A `range` with an explicit newline: a bare jsonpath list would run several
+  # matches together with no reliable separator, and we would then hand a
+  # concatenated non-name to `get secret`.
+  sec="$(kubectl -n "$NAMESPACE" get deploy \
+           -l "app.kubernetes.io/component=api,app.kubernetes.io/instance=$RELEASE" \
+           -o jsonpath='{range .items[0].spec.template.spec..env[?(@.name=="SOCTALK_BOOTSTRAP_ADMIN_EMAIL")]}{.valueFrom.secretKeyRef.name}{"\n"}{end}' \
+           2>/dev/null | awk 'NF {print; exit}')" || return 0
+  [[ -n "$sec" ]] || return 0
+  # Only the email key is ever read here; the password Secret key is not.
+  kubectl -n "$NAMESPACE" get secret "$sec" -o jsonpath='{.data.email}' 2>/dev/null \
+    | base64 -d 2>/dev/null || true
+}
+
 print_summary() {
-  local pw_line=""
-  [[ "$MODE" == "demo" ]] && pw_line=$(printf '  Password:  %s   (demo — change after first login)' "$ADMIN_PASSWORD")
   local host="${HOSTNAME_IN:-soctalk.local}"
   local hint=""
   case "$host" in
@@ -571,18 +652,27 @@ print_summary() {
     *) local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
        hint="   ${c_yel}(add '$ip $host' to /etc/hosts, or use your DNS)${c_rst}" ;;
   esac
-  cat <<EOF
+  # k3s installs its binary to /usr/local/bin, which is NOT on the sudo
+  # secure_path of RHEL-family distros — so the `sudo k3s kubectl …` this block
+  # used to print was "command not found" on Rocky/RHEL/Fedora/Alma even though
+  # the install had succeeded. Print the resolved path, matching the absolute
+  # k3s-uninstall.sh line below. /usr/local/bin is on PATH from the top of this
+  # script, so command -v finds it wherever k3s actually landed.
+  local k3s_bin; k3s_bin="$(command -v k3s 2>/dev/null || true)"
+  [[ -n "$k3s_bin" ]] || k3s_bin="/usr/local/bin/k3s"
+  local admin; admin="$(resolve_admin_email)"
 
-${c_grn}${c_bold}SocTalk is installed.${c_rst}
-
-  URL:       https://$host/$hint
-  Login:     $ADMIN_EMAIL
-$pw_line
-  Logs:      sudo journalctl -u k3s -f
-  Pods:      sudo k3s kubectl -n $NAMESPACE get pods
-  Uninstall: sudo /usr/local/bin/k3s-uninstall.sh
-
-EOF
+  printf '\n%s%sSocTalk is installed.%s\n\n' "$c_grn" "$c_bold" "$c_rst"
+  printf '  URL:       https://%s/%s\n' "$host" "$hint"
+  if [[ -n "$admin" ]]; then
+    printf '  Login:     %s\n' "$admin"
+  fi
+  if [[ "$MODE" == "demo" ]]; then
+    printf '  Password:  %s   (demo — change after first login)\n' "$ADMIN_PASSWORD"
+  fi
+  printf '  Logs:      sudo journalctl -u k3s -f\n'
+  printf '  Pods:      sudo %s kubectl -n %s get pods\n' "$k3s_bin" "$NAMESPACE"
+  printf '  Uninstall: sudo /usr/local/bin/k3s-uninstall.sh\n\n'
 }
 
 # --------------------------------------------------------------------- #
