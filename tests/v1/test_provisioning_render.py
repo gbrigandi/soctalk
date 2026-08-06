@@ -589,6 +589,50 @@ def test_llm_api_key_suppressed_on_controller_path():
     assert v["llm"]["apiKeyRef"]["name"] == "tenant-llm-key"
 
 
+@pytest.mark.parametrize("profile", ["poc", "persistent"])
+def test_bundled_siem_disabled_on_controller_path(profile):
+    """``bundled_siem=False`` (the L1 in-cluster controller path) renders
+    ``components.wazuh.enabled`` False even when the integration row enables
+    Wazuh, because the controller installs a SEPARATE ``wazuh-<slug>`` release.
+
+    Regression: for poc/persistent the L1 controller both (a) rendered the
+    tenant chart with the bundled Wazuh subchart ON and (b) ran
+    ``_step_helm_apply_wazuh`` to install the standalone ``wazuh-<slug>``
+    release. Result: two full Wazuh stacks in one namespace
+    (``tenant-<slug>-wazuh-*`` orphaned + ``wazuh-<slug>-wazuh-*`` in use) —
+    double the manager/indexer/dashboard footprint, enough to exhaust a
+    right-sized poc node's RAM/quota and block provisioning. The adapter,
+    runs-worker and linux-ep all target ``wazuh-<slug>-wazuh-*``, so the
+    bundled copy is pure waste on this path.
+    """
+    t = _make_tenant(profile)
+    integration = _make_integration(t.id)
+    integration.wazuh_enabled = True
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile=profile,
+        bundled_siem=False,
+    )
+    assert v["components"]["wazuh"]["enabled"] is False
+    # The default (cross-cluster L2 single-release install-spec path) still
+    # bundles the SIEM — that IS the tenant's Wazuh there.
+    v_bundled = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile=profile,
+    )
+    assert v_bundled["components"]["wazuh"]["enabled"] is True
+
+
 # ---------------------------------------------------------------------------
 # runsWorker model overrides (tenant.llm.models.render)
 # ---------------------------------------------------------------------------

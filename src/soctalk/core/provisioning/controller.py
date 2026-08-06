@@ -1262,6 +1262,13 @@ class TenantController:
             # cross-cluster L2 install-spec (agents/api.py), where no
             # controller pre-writes Secrets on the remote cluster.
             include_llm_api_key=False,
+            # Disable the tenant chart's bundled Wazuh subchart: this L1 path
+            # installs Wazuh as a separate ``wazuh-<slug>`` release below
+            # (``_step_helm_apply_wazuh``). Leaving the subchart on would stand
+            # up a second, orphaned Wazuh stack (``tenant-<slug>-wazuh-*``) that
+            # nothing points at — double the SIEM footprint. The bundled path
+            # is the cross-cluster L2 install-spec only.
+            bundled_siem=False,
         )
         if self.settings.tenant_values_overlay:
             values = _deep_merge(values, self.settings.tenant_values_overlay)
