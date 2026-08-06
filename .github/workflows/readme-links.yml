@@ -1,0 +1,27 @@
+name: README doc links
+
+# Keep README.md's curated docs links from drifting: every soctalk-docs URL it
+# references must still resolve to a real page in the docs nav (ALL_PAGES).
+# Path-filtered so it only runs when the README changes; the check itself is
+# network-tolerant and skips (does not fail) if the docs repo can't be cloned.
+
+on:
+  pull_request:
+    paths: ["README.md", "scripts/check-readme-doc-links.mjs"]
+  push:
+    branches: [main]
+    paths: ["README.md", "scripts/check-readme-doc-links.mjs"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check README docs links resolve
+        run: node scripts/check-readme-doc-links.mjs
