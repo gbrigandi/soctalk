@@ -418,6 +418,15 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         #      policy.
         #   3. Unset → ``token_budget.ensure`` falls back to $5.
         **_dollars_budget_kv(claim.get("dollars_budget")),
+        # Rates this run is priced at, frozen when the run was created (#125).
+        # Absent for a run created before the column existed, or by an API that
+        # predates it, in which case pricing falls back to the built-in table
+        # and env overlay exactly as before.
+        **(
+            {"price_snapshot": claim["price_snapshot"]}
+            if claim.get("price_snapshot")
+            else {}
+        ),
     }
 
 

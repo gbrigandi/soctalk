@@ -211,6 +211,11 @@ class ClaimedRun(BaseModel):
     dollars_budget: float = 0.0
     lease_id: UUID
     lease_expires_at: datetime
+    # Rates this run is priced at, resolved and frozen at run creation (#125).
+    # Optional so a worker built against this model keeps working against an
+    # API that predates it, and so a run created before the column existed
+    # claims cleanly and prices the legacy way.
+    price_snapshot: dict[str, Any] | None = None
     # ``alert`` is the primary (highest-severity) alert — kept for backward
     # compat. ``alerts`` is the full correlated set (issue #26): one run
     # reasons over every alert #27 grouped onto the investigation.
@@ -300,7 +305,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 text(
                     """
                     SELECT r.id, r.investigation_id, r.tokens_used, r.tokens_budget,
-                           r.dollars_used, r.dollars_budget
+                           r.dollars_used, r.dollars_budget, r.price_snapshot
                     FROM investigation_runs r
                     JOIN investigations i ON i.id = r.investigation_id
                                          AND i.tenant_id = r.tenant_id
@@ -385,6 +390,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 dollars_budget=float(row["dollars_budget"] or 0.0),
                 lease_id=lease_id,
                 lease_expires_at=lease_expires,
+                price_snapshot=row["price_snapshot"],
                 alert={
                     "id": str(row["id"]),
                     "rule": {"id": "n/a", "level": 0},
@@ -440,6 +446,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
         dollars_budget=float(row["dollars_budget"] or 0.0),
         lease_id=lease_id,
         lease_expires_at=lease_expires,
+        price_snapshot=row["price_snapshot"],
         alert=alert_payloads[0],
         alerts=alert_payloads,
         authorization_context=authz_ctx,

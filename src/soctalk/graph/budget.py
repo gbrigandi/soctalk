@@ -287,6 +287,48 @@ def _model_name(response: Any) -> str | None:
     return None
 
 
+
+def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float] | None:
+    """Rates for ``model`` from the run's price snapshot, if it carries them.
+
+    The snapshot is stamped when the run is created (#125) and keyed by ROLE,
+    because a tenant can point the fast and reasoning roles at the same model
+    string through different providers at different prices. Matching is by the
+    model actually called, across roles; when both roles resolved to the same
+    model the rates agree and the first match is correct either way.
+
+    Returns None when there is no snapshot, no entry for this model, or the
+    entry resolved ``unknown`` — all of which mean "fall through to the table",
+    so a run created before this existed prices exactly as it did before.
+    """
+    snapshot = state.get("price_snapshot")
+    if not isinstance(snapshot, dict) or not model:
+        return None
+    for entry in (snapshot.get("models") or {}).values():
+        if not isinstance(entry, dict) or entry.get("model") != model:
+            continue
+        if entry.get("source") == "unknown":
+            return None
+        try:
+            rates = {
+                "input": float(entry["input_per_mtok"]),
+                "output": float(entry["output_per_mtok"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        for key, out in (
+            ("cache_read_per_mtok", "cache_read"),
+            ("cache_write_per_mtok", "cache_write"),
+        ):
+            if entry.get(key) is not None:
+                try:
+                    rates[out] = float(entry[key])
+                except (TypeError, ValueError):
+                    pass
+        return rates
+    return None
+
+
 def _cost_dollars(
     input_tokens: int,
     output_tokens: int,
@@ -294,14 +336,20 @@ def _cost_dollars(
     *,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    rates: dict[str, float] | None = None,
 ) -> float:
     """Price a call. Cache tokens are a subset of input_tokens: reads bill
     at ~10% of the input rate, cache writes at 125% (Anthropic pricing
     model) — without this split, cached runs would be overcharged ~10x on
     exactly the tokens caching exists to make cheap."""
-    prices = _effective_prices()
-    normalized = _normalize_model(model, prices)
-    price = prices.get(normalized)
+    # Rates carried on the run win: they were resolved from the catalog or the
+    # tenant's own override when the run was created, and they are what this
+    # run is accountable to no matter what the table says now.
+    price = rates
+    if price is None:
+        prices = _effective_prices()
+        normalized = _normalize_model(model, prices)
+        price = prices.get(normalized)
     if price is None:
         # Unpriced model: apply the configured fallback and, when that's the
         # fail-expensive default (not an explicit deployment choice), surface
@@ -314,10 +362,15 @@ def _cost_dollars(
         max(cache_creation_tokens, 0), input_tokens - cache_read_tokens
     )
     uncached_input = input_tokens - cache_read_tokens - cache_creation_tokens
+    # Cache dimensions default to the Anthropic-shaped derivation (reads at 10%
+    # of input, writes at 125%) unless the price carries explicit rates, which
+    # a catalog entry may.
+    cache_read_rate = price.get("cache_read", price["input"] * 0.1)
+    cache_write_rate = price.get("cache_write", price["input"] * 1.25)
     return (
         (uncached_input / 1_000_000.0) * price["input"]
-        + (cache_read_tokens / 1_000_000.0) * price["input"] * 0.1
-        + (cache_creation_tokens / 1_000_000.0) * price["input"] * 1.25
+        + (cache_read_tokens / 1_000_000.0) * cache_read_rate
+        + (cache_creation_tokens / 1_000_000.0) * cache_write_rate
         + (output_tokens / 1_000_000.0) * price["output"]
     )
 
@@ -340,6 +393,7 @@ def track(state: dict[str, Any], response: Any) -> int:
         model,
         cache_read_tokens=cache_read,
         cache_creation_tokens=cache_creation,
+        rates=_snapshot_rates(state, model),
     )
 
     state["tokens_used"] = int(state["tokens_used"]) + delta_tokens
