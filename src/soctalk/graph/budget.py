@@ -25,6 +25,7 @@ import re
 from typing import Any
 
 import structlog
+from soctalk.core.pricing.usage import canonical_usage
 
 logger = structlog.get_logger()
 
@@ -270,6 +271,13 @@ def _model_name(response: Any) -> str | None:
 
 
 
+# Returned when a run was resolved and the answer was "nobody knows this
+# model's price". Distinct from ``None``, which means no snapshot applied at
+# all — a legacy run, or a caller with no tenant — and which still falls back
+# to the shipped defaults.
+_UNKNOWN_SENTINEL: dict[str, float] = {}
+
+
 def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float] | None:
     """Rates for ``model`` from the run's price snapshot, if it carries them.
 
@@ -314,6 +322,13 @@ def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float
     if not matches:
         return None
 
+    # A stamp that says "unknown" must not be quietly rescued by the shipped
+    # defaults. If it were, the run would record one story and be billed by
+    # another, and "why was this run priced this way" would have a wrong
+    # answer even when the number happened to be right (Codex).
+    if all(e.get("source") == "unknown" for e in matches):
+        return _UNKNOWN_SENTINEL
+
     rated = [_rates_from_entry(e) for e in matches]
     rated = [r for r in rated if r is not None]
     if not rated:
@@ -351,6 +366,7 @@ def _rates_from_entry(entry: dict[str, Any]) -> dict[str, float] | None:
     for key, out in (
         ("cache_read_per_mtok", "cache_read"),
         ("cache_write_per_mtok", "cache_write"),
+        ("reasoning_per_mtok", "reasoning"),
     ):
         if entry.get(key) is not None:
             try:
@@ -367,6 +383,7 @@ def _cost_dollars(
     *,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    reasoning_tokens: int = 0,
     rates: dict[str, float] | None = None,
 ) -> float:
     """Price a call. Cache tokens are a subset of input_tokens: reads bill
@@ -377,11 +394,18 @@ def _cost_dollars(
     # tenant's own override when the run was created, and they are what this
     # run is accountable to no matter what the table says now.
     price = rates
-    if price is None:
+    if price is _UNKNOWN_SENTINEL:
+        # Resolved, and the answer was unknown. Go straight to the configured
+        # unknown-model policy rather than the shipped defaults, so the run is
+        # billed by the story it recorded.
+        price = None
+        rates = None
+        prices = None
+    elif price is None:
         prices = _effective_prices()
         normalized = _normalize_model(model, prices)
         price = prices.get(normalized)
-    if price is None:
+    if not price:
         # Unpriced model: apply the configured fallback and, when that's the
         # fail-expensive default (not an explicit deployment choice), surface
         # it once so mispricing is visible rather than a silent early halt.
@@ -398,11 +422,19 @@ def _cost_dollars(
     # a catalog entry may.
     cache_read_rate = price.get("cache_read", price["input"] * 0.1)
     cache_write_rate = price.get("cache_write", price["input"] * 1.25)
+    # Reasoning tokens are a SUBSET of output. OpenAI, Anthropic, Gemini and
+    # DeepSeek all bill them at the output rate today, so by default the split
+    # costs exactly what it did before. A price naming a separate reasoning
+    # rate (OpenRouter exposes one) applies it to that subset only.
+    reasoning_tokens = min(max(reasoning_tokens, 0), output_tokens)
+    reasoning_rate = price.get("reasoning", price["output"])
+    plain_output = output_tokens - reasoning_tokens
     return (
         (uncached_input / 1_000_000.0) * price["input"]
         + (cache_read_tokens / 1_000_000.0) * cache_read_rate
         + (cache_creation_tokens / 1_000_000.0) * cache_write_rate
-        + (output_tokens / 1_000_000.0) * price["output"]
+        + (plain_output / 1_000_000.0) * price["output"]
+        + (reasoning_tokens / 1_000_000.0) * reasoning_rate
     )
 
 
@@ -414,18 +446,34 @@ def track(state: dict[str, Any], response: Any) -> int:
     ``state["dollars_used"]`` directly.
     """
     ensure(state)
+    usage = canonical_usage(response)
+    # The legacy extractors stay authoritative for the totals, so a provider
+    # shape the normaliser has not learned cannot regress token accounting.
     input_tokens, output_tokens = extract_usage(response)
-    cache_read, cache_creation = extract_cache_details(response)
+    if not input_tokens and not output_tokens:
+        input_tokens, output_tokens = usage.input_tokens, usage.output_tokens
+    legacy_read, legacy_write = extract_cache_details(response)
+    cache_read = usage.cache_read_tokens or legacy_read
+    cache_creation = usage.cache_write_tokens or legacy_write
     delta_tokens = input_tokens + output_tokens
     model = _model_name(response)
-    delta_dollars = _cost_dollars(
-        input_tokens,
-        output_tokens,
-        model,
-        cache_read_tokens=cache_read,
-        cache_creation_tokens=cache_creation,
-        rates=_snapshot_rates(state, model),
-    )
+    if usage.actual_cost_usd is not None:
+        # The provider said what it charged. No estimate beats that, and
+        # recording it is what turns drift detection into a real comparison
+        # rather than our arithmetic against our own rate card.
+        delta_dollars = usage.actual_cost_usd
+        state["cost_basis"] = "provider_reported"
+    else:
+        delta_dollars = _cost_dollars(
+            input_tokens,
+            output_tokens,
+            model,
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
+            reasoning_tokens=usage.reasoning_tokens,
+            rates=_snapshot_rates(state, model),
+        )
+        state.setdefault("cost_basis", "estimated")
 
     state["tokens_used"] = int(state["tokens_used"]) + delta_tokens
     state["dollars_used"] = float(state["dollars_used"]) + delta_dollars

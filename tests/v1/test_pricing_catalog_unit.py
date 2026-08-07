@@ -128,13 +128,14 @@ def test_missing_or_unknown_snapshot_falls_through_to_the_legacy_path():
     # No snapshot at all.
     assert budget._snapshot_rates(_state(), "deepseek-v4-flash") is None
 
-    # Stamped, but the model was unknown at resolve time: must fall through to
-    # the table rather than price at zero, which would hide the gap entirely.
+    # Stamped, and the model was unknown at resolve time: the sentinel, not
+    # None. The run is billed by the story it recorded rather than being
+    # quietly rescued by the shipped defaults.
     unknown = {
         "version": 1,
         "models": {"fast": {"model": "x-1", "source": "unknown"}},
     }
-    assert budget._snapshot_rates(_state(unknown), "x-1") is None
+    assert budget._snapshot_rates(_state(unknown), "x-1") is budget._UNKNOWN_SENTINEL
 
     # A model the snapshot does not mention at all.
     assert budget._snapshot_rates(_state(SNAPSHOT), "some-other-model") is None
@@ -301,3 +302,148 @@ def test_a_gateways_price_is_attributed_to_the_gateway_not_the_upstream():
     for row in gateway_rows:
         # Whoever bills is who the slug names.
         assert row["provider_id"] == "novaroute", row["model"]
+
+
+# ------------------------------------------------- canonical usage + actuals
+
+
+class _Resp:
+    """Minimal stand-in for a LangChain response carrying provider metadata."""
+
+    def __init__(self, usage, provider=None):
+        self.usage_metadata = None
+        self.response_metadata = {"usage": usage}
+        if provider:
+            self.response_metadata["provider"] = provider
+
+
+def test_openai_style_cache_and_reasoning_details_are_read():
+    """The shapes this codebase used to discard, taken from live responses.
+
+    Reading only prompt_tokens/completion_tokens bills every cached token at
+    the full input rate, which overstates spend on exactly the calls caching
+    exists to make cheap, and loses the reasoning split entirely.
+    """
+    from soctalk.core.pricing.usage import canonical_usage
+
+    u = canonical_usage(
+        _Resp(
+            {
+                "prompt_tokens": 6,
+                "completion_tokens": 17,
+                "prompt_tokens_details": {"cached_tokens": 4},
+                "completion_tokens_details": {"reasoning_tokens": 16},
+            }
+        )
+    )
+    assert (u.input_tokens, u.output_tokens) == (6, 17)
+    assert u.cache_read_tokens == 4
+    assert u.reasoning_tokens == 16
+    assert u.actual_cost_usd is None
+
+    # Anthropic / LangChain shape reaches the same canonical fields.
+    a = canonical_usage(
+        _Resp(
+            {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "input_token_details": {"cache_read": 40, "cache_creation": 10},
+            }
+        )
+    )
+    assert (a.cache_read_tokens, a.cache_write_tokens) == (40, 10)
+
+
+def test_a_provider_reported_cost_is_read_and_preferred():
+    """OpenRouter returns the actual charge inline; no estimate beats it."""
+    from soctalk.core.pricing.usage import canonical_usage
+
+    u = canonical_usage(
+        _Resp(
+            {
+                "prompt_tokens": 6,
+                "completion_tokens": 9,
+                "cost": 2.2512e-06,
+                "completion_tokens_details": {"reasoning_tokens": 8},
+            },
+            provider="DeepSeek",
+        )
+    )
+    assert u.actual_cost_usd == pytest.approx(2.2512e-06)
+    # Gateways disclose which upstream really served the call, which is the
+    # provider half of the (provider, model) key we otherwise infer.
+    assert u.reported_provider == "DeepSeek"
+
+
+def test_detail_counts_can_never_exceed_their_totals():
+    """A provider over-reporting a subset must not invent billable tokens."""
+    from soctalk.core.pricing.usage import canonical_usage
+
+    u = canonical_usage(
+        _Resp(
+            {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 999},
+                "completion_tokens_details": {"reasoning_tokens": 999},
+            }
+        )
+    )
+    assert u.cache_read_tokens == 10
+    assert u.reasoning_tokens == 5
+
+
+def test_reasoning_is_billed_as_output_unless_a_rate_says_otherwise():
+    """OpenAI, Anthropic, Gemini and DeepSeek all bill thinking as output.
+
+    So the split must cost nothing by default, and only bite when a price
+    names a separate reasoning rate, as OpenRouter's pricing object can.
+    """
+    plain = budget._cost_dollars(
+        0, 1_000_000, "m", rates={"input": 1.0, "output": 10.0}
+    )
+    with_reasoning = budget._cost_dollars(
+        0, 1_000_000, "m", reasoning_tokens=400_000, rates={"input": 1.0, "output": 10.0}
+    )
+    assert plain == pytest.approx(with_reasoning)
+
+    separately_priced = budget._cost_dollars(
+        0, 1_000_000, "m",
+        reasoning_tokens=400_000,
+        rates={"input": 1.0, "output": 10.0, "reasoning": 20.0},
+    )
+    # 600k at $10 + 400k at $20.
+    assert separately_priced == pytest.approx(6.0 + 8.0)
+
+
+def test_an_unknown_stamp_is_not_rescued_by_the_shipped_defaults():
+    """A run must be billed by the story it recorded (Codex).
+
+    ``gpt-4o`` is in the shipped defaults, so before this the run would record
+    "unknown" and quietly be priced at the default anyway — one story on the
+    row, another in the ledger.
+    """
+    st = _state({"version": 1, "models": {"fast": {"model": "gpt-4o", "source": "unknown"}}})
+    rates = budget._snapshot_rates(st, "gpt-4o")
+    assert rates is budget._UNKNOWN_SENTINEL
+    # Priced by the unknown-model policy, not the $2.50 shipped default.
+    assert budget._cost_dollars(1_000_000, 0, "gpt-4o", rates=rates) == pytest.approx(15.0)
+    # A run with no snapshot at all is a different case and keeps the default.
+    assert budget._cost_dollars(1_000_000, 0, "gpt-4o") == pytest.approx(2.5)
+
+
+def test_seed_carries_every_model_the_builtin_table_priced():
+    """Retiring the table cannot lose a price (Codex ordering: seed, then cut).
+
+    Making unknown authoritative before the catalog knew these models would
+    have sent every frontier model to the fail-expensive fallback.
+    """
+    import json
+    from pathlib import Path
+
+    from soctalk.graph.budget import _MODEL_PRICES_PER_MTOK as TABLE
+
+    seed = Path(__file__).resolve().parents[2] / "data" / "pricing" / "seed-prices.json"
+    seeded = {e["model"] for e in json.loads(seed.read_text())}
+    missing = sorted(set(TABLE) - seeded)
+    assert not missing, f"built-in models absent from the seed: {missing}"

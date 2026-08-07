@@ -139,5 +139,93 @@
     "output_per_mtok": 0.0,
     "as_of": "2026-08-07",
     "notes": "self-hosted: marginal token cost is zero; GPU time is the real cost"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-3-5-haiku",
+    "input_per_mtok": 0.8,
+    "output_per_mtok": 4.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-3-5-sonnet",
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-3-7-sonnet",
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-haiku-4",
+    "input_per_mtok": 1.0,
+    "output_per_mtok": 5.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-opus-3",
+    "input_per_mtok": 15.0,
+    "output_per_mtok": 75.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-opus-4",
+    "input_per_mtok": 15.0,
+    "output_per_mtok": 75.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-sonnet-4",
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "openai",
+    "model": "gpt-4",
+    "input_per_mtok": 30.0,
+    "output_per_mtok": 60.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "openai",
+    "model": "gpt-4-turbo",
+    "input_per_mtok": 10.0,
+    "output_per_mtok": 30.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "openai",
+    "model": "o1",
+    "input_per_mtok": 15.0,
+    "output_per_mtok": 60.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
+  },
+  {
+    "provider_kind": "openai",
+    "model": "o1-mini",
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 12.0,
+    "as_of": "2026-08-07",
+    "notes": "carried over from the built-in table retired in #125"
   }
 ]
