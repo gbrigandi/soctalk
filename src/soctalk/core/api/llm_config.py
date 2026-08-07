@@ -33,11 +33,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.llm_provider import normalize_provider
+from soctalk.core.pricing.resolve import resolve_run_prices
 from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role, require_tenant_role
+import structlog
+
 from soctalk.core.tenancy.models import IntegrationConfig, Role
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/mssp/tenants", tags=["mssp-tenant-llm"])
 
@@ -70,6 +75,13 @@ class LlmConfigRead(BaseModel):
     # bill at the fail-expensive fallback. Not secret: prices are public list
     # values, so unlike the tier keys this round-trips verbatim.
     model_prices: dict[str, Any] | None = None
+    # What this tenant's models would actually be priced at right now, resolved
+    # the same way a run resolves it (#125): tenant override, then catalog,
+    # then unknown. Read-only and derived — the catalog has no write path from
+    # here, because a price typed into a form loses the source and age that
+    # make it trustworthy. Present so the config surface can show the effective
+    # rate and where it came from rather than leaving the fallback invisible.
+    effective_prices: dict[str, Any] | None = None
     # token_budget_per_run REMOVED from this surface (#103): the per-run token
     # budget moved to the dedicated GET/PATCH /api/mssp/tenants/{id}/run-budget
     # resource (DB-resolved, capped, no worker rollout).
@@ -300,6 +312,16 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
     # spec builder reads ``integration.llm_api_key_plain`` and emits
     # an empty ``values.llm.apiKey`` when cleared, so GET and the
     # install contract stay aligned.
+    # Resolved live rather than stored: the catalog can change under a config
+    # that has not, and the point of showing it is to say what the NEXT run
+    # would be priced at. Never fatal — a pricing problem must not make the
+    # config unreadable.
+    try:
+        effective = await resolve_run_prices(session, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("effective_prices_unresolved", error=str(exc))
+        effective = None
+
     return LlmConfigRead(
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
@@ -310,6 +332,7 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
         model_prices=cfg.llm_model_prices,
+        effective_prices=effective,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
