@@ -172,3 +172,22 @@ def test_the_live_mispricing_is_corrected_by_a_resolved_price():
     # (292 uncached + 1024 cache-read at 10%) input + 2252 output, at 0.206/0.412.
     assert priced == pytest.approx(0.001009, abs=1e-6)
     assert unpriced > priced * 100
+
+
+def test_halt_reason_stays_legible_below_a_cent():
+    """A sub-cent cap must not report itself as $0.00/$0.00.
+
+    Observed on a live run that halted at $0.000686 against a $0.0005 budget:
+    the reason string read ``dollars=$0.00/$0.00``, which explains nothing.
+    """
+    from soctalk.graph import budget
+
+    state = {"tokens_used": 5904, "tokens_budget": 200000,
+             "dollars_used": 0.000686, "dollars_budget": 0.0005}
+    r = budget.reason(state)
+    assert r == "dollars=$0.000686/$0.000500", r
+
+    # The ordinary case keeps its two-decimal form.
+    state = {"tokens_used": 1, "tokens_budget": 200000,
+             "dollars_used": 6.0, "dollars_budget": 5.0}
+    assert budget.reason(state) == "dollars=$6.00/$5.00"

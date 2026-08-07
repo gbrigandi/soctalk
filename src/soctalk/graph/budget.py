@@ -571,6 +571,20 @@ def crossed_soft_warn(state: dict[str, Any]) -> bool:
     return False
 
 
+def _fmt_dollars(value: float) -> str:
+    """Format a dollar amount without rounding a real number away to $0.00.
+
+    Two decimals is right for a $5 budget and useless for a $0.0005 one: a run
+    that halted on a sub-cent cap logged ``dollars=$0.00/$0.00``, which tells an
+    operator nothing about why it stopped. Precision follows magnitude so the
+    figure stays legible at both ends.
+    """
+    v = abs(value)
+    if v and v < 0.01:
+        return f"${value:.6f}"
+    return f"${value:.2f}"
+
+
 def reason(state: dict[str, Any]) -> str:
     """Human-readable explanation of which cap fired."""
     ensure(state)
@@ -579,6 +593,7 @@ def reason(state: dict[str, Any]) -> str:
         parts.append(f"tokens={state['tokens_used']}/{state['tokens_budget']}")
     if float(state["dollars_used"]) >= float(state["dollars_budget"]):
         parts.append(
-            f"dollars=${state['dollars_used']:.2f}/${state['dollars_budget']:.2f}"
+            f"dollars={_fmt_dollars(float(state['dollars_used']))}"
+            f"/{_fmt_dollars(float(state['dollars_budget']))}"
         )
     return "; ".join(parts) if parts else "within budget"
