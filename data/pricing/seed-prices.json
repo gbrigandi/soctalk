@@ -92,28 +92,31 @@
     "provider_kind": "openai_compatible",
     "provider_id": "novaroute",
     "model": "deepseek-v4-flash",
-    "input_per_mtok": 0.206,
-    "output_per_mtok": 0.412,
+    "input_per_mtok": 0.1275,
+    "output_per_mtok": 0.255,
     "as_of": "2026-08-07",
-    "notes": "NovaRoute gateway list price, measured"
+    "notes": "NovaRoute gateway rate, measured from the account ledger",
+    "cache_read_per_mtok": 0.0255
   },
   {
     "provider_kind": "openai_compatible",
     "provider_id": "novaroute",
     "model": "kimi-k2.6",
-    "input_per_mtok": 1.338235,
-    "output_per_mtok": 5.558824,
+    "input_per_mtok": 0.8288,
+    "output_per_mtok": 3.4425,
     "as_of": "2026-08-07",
-    "notes": "NovaRoute gateway list price, measured"
+    "notes": "NovaRoute gateway rate, measured from the account ledger",
+    "cache_read_per_mtok": 0.0829
   },
   {
     "provider_kind": "openai_compatible",
     "provider_id": "novaroute",
     "model": "glm-5.2",
-    "input_per_mtok": 1.647059,
-    "output_per_mtok": 5.764706,
+    "input_per_mtok": 1.02,
+    "output_per_mtok": 3.57,
     "as_of": "2026-08-07",
-    "notes": "NovaRoute gateway list price, measured"
+    "notes": "NovaRoute gateway rate, measured from the account ledger",
+    "cache_read_per_mtok": 0.255
   },
   {
     "provider_kind": "openai_compatible",
@@ -122,7 +125,7 @@
     "input_per_mtok": 0.411765,
     "output_per_mtok": 1.647059,
     "as_of": "2026-08-07",
-    "notes": "NovaRoute gateway list price, measured"
+    "notes": "NovaRoute gateway list price, UNVERIFIED (ledger settles late; not re-measured)"
   },
   {
     "provider_kind": "self_hosted",
