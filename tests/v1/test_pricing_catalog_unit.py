@@ -447,3 +447,72 @@ def test_seed_carries_every_model_the_builtin_table_priced():
     seeded = {e["model"] for e in json.loads(seed.read_text())}
     missing = sorted(set(TABLE) - seeded)
     assert not missing, f"built-in models absent from the seed: {missing}"
+
+
+# --- provider-reported cost: asking for it, and reading it back (#125) -------
+
+
+def test_usage_accounting_requested_only_from_openrouter():
+    """OpenRouter reports what it charged, but only when the request opts in.
+
+    Sent everywhere it would break the reference implementation: ``usage`` is
+    not an OpenAI request parameter and api.openai.com rejects unmodelled body
+    fields, so the gate is on the host.
+    """
+    from soctalk.llm import _usage_accounting_kwargs
+
+    assert _usage_accounting_kwargs("https://openrouter.ai/api/v1") == {
+        "extra_body": {"usage": {"include": True}}
+    }
+    assert _usage_accounting_kwargs("https://gateway.openrouter.ai/v1") == {
+        "extra_body": {"usage": {"include": True}}
+    }
+    for other in (
+        "https://api.openai.com/v1",
+        "https://novarouteai.com/v1",
+        "https://api.anthropic.com",
+        None,
+    ):
+        assert _usage_accounting_kwargs(other) == {}
+
+
+def test_openrouter_cost_and_upstream_are_read_from_a_raw_response():
+    """The live OpenRouter shape, reduced to the fields pricing depends on."""
+    from soctalk.core.pricing.usage import canonical_usage
+
+    usage = canonical_usage(
+        {
+            "provider": "DeepSeek",
+            "usage": {
+                "prompt_tokens": 17,
+                "completion_tokens": 33,
+                "completion_tokens_details": {"reasoning_tokens": 32},
+                "prompt_tokens_details": {"cached_tokens": 0},
+                "cost": 1.162e-05,
+            },
+        }
+    )
+    assert usage.actual_cost_usd == 1.162e-05
+    # The upstream is disclosed beside choices, not inside usage.
+    assert usage.reported_provider == "DeepSeek"
+    assert usage.reasoning_tokens == 32
+
+
+def test_provider_reported_cost_beats_our_estimate():
+    """An actual is authoritative: no rate card is consulted, and the run says so."""
+    from soctalk.graph import budget
+
+    state: dict = {}
+    budget.ensure(state)
+    budget.track(
+        state,
+        {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 1000,
+                "cost": 0.000123,
+            }
+        },
+    )
+    assert state["dollars_used"] == 0.000123
+    assert state["cost_basis"] == "provider_reported"

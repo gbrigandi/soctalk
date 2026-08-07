@@ -47,8 +47,12 @@ class CanonicalUsage:
     # for it; most providers never do. An actual is worth more than any
     # estimate we can compute, so pricing prefers it and records that it did.
     actual_cost_usd: float | None = None
-    # Free-form provenance for the ledger: which upstream really served this,
-    # where gateways disclose it.
+    # Which upstream really served this, where the gateway discloses it.
+    # OpenRouter names it at the top level of the response body, so it reaches
+    # us from raw-dict callers (the eval and benchmark harnesses) but NOT
+    # through langchain-openai, which keeps only its own ``model_provider``
+    # and drops fields it does not model. None therefore means "not disclosed
+    # to us here", never "single-vendor".
     reported_provider: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
@@ -80,6 +84,10 @@ def _usage_dicts(response: Any) -> list[dict[str, Any]]:
         block = response.get("usage")
         if isinstance(block, dict):
             out.append(block)
+        # OpenRouter names the upstream it routed to at the top level of the
+        # body, beside ``choices``, not inside the usage block.
+        if isinstance(response.get("provider"), str):
+            out.append({"provider": response["provider"]})
     return out
 
 
