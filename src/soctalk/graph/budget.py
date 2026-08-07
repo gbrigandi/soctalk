@@ -278,6 +278,22 @@ def _model_name(response: Any) -> str | None:
 _UNKNOWN_SENTINEL: dict[str, float] = {}
 
 
+
+def _snapshot_source(state: dict[str, Any], model: str | None) -> str | None:
+    """Which entry priced this call, for the log line. Never raises."""
+    snapshot = state.get("price_snapshot")
+    if not isinstance(snapshot, dict) or not model:
+        return None
+    stripped = _VERSION_SUFFIX_RE.sub("", model, count=1)
+    for entry in (snapshot.get("models") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        candidate = str(entry.get("model") or "")
+        if candidate == model or _VERSION_SUFFIX_RE.sub("", candidate, count=1) == stripped:
+            return entry.get("source")
+    return None
+
+
 def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float] | None:
     """Rates for ``model`` from the run's price snapshot, if it carries them.
 
@@ -490,6 +506,12 @@ def track(state: dict[str, Any], response: Any) -> int:
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
             cache_creation_tokens=cache_creation,
+            reasoning_tokens=usage.reasoning_tokens,
+            # Which of the two produced this number, and where the rate came
+            # from. Recording the basis is the point of the whole exercise: a
+            # figure nobody can attribute is the state we started in.
+            cost_basis=state.get("cost_basis"),
+            price_source=_snapshot_source(state, model),
             delta_dollars=round(delta_dollars, 6),
             tokens_used=state["tokens_used"],
             tokens_budget=state["tokens_budget"],
