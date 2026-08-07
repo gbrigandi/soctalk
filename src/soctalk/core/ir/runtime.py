@@ -23,7 +23,10 @@ from soctalk.core.ir.events import (
     canonical_json,
     proposal_idempotency_key,
 )
-from soctalk.core.ir.policies import resolve_run_token_budget
+from soctalk.core.ir.policies import (
+    resolve_run_dollar_budget,
+    resolve_run_token_budget,
+)
 from soctalk.core.pricing.resolve import resolve_run_prices
 from soctalk.core.ir.reducer import apply_event, load_facts, save_facts
 from soctalk.core.observability.audit import log_audit
@@ -58,6 +61,12 @@ async def start_run(
     # rollout. Previously the INSERT omitted tokens_budget and every run rode
     # the column default.
     tokens_budget = await resolve_run_token_budget(db, tenant_id)
+    # The dollar twin (#128). Stamped for the same reasons, and because the
+    # column was previously left at its default while the worker enforced an
+    # env value instead: the row said $5 while the run was capped at $0.0005,
+    # so every reader of the row showed a budget that was not the one being
+    # enforced. The resolver never raises.
+    dollars_budget = await resolve_run_dollar_budget(db, tenant_id)
     # Resolve what this run's models cost and stamp it alongside the budget
     # (#125). Same reasoning as the budget above: fixed at creation, so a price
     # correction never rewrites an in-flight run or history, and the worker
@@ -92,10 +101,10 @@ async def start_run(
             text(
                 "INSERT INTO investigation_runs "
                 "  (id, tenant_id, investigation_id, status, not_before, "
-                "   max_attempts, tokens_budget, price_snapshot) "
+                "   max_attempts, tokens_budget, dollars_budget, price_snapshot) "
                 "VALUES (:id, :t, :c, 'active', "
                 "        now() + make_interval(secs => :settle), :cap, :budget, "
-                "        CAST(:prices AS jsonb))"
+                "        :dollars, CAST(:prices AS jsonb))"
             ),
             {
                 "id": str(run_id),
@@ -104,6 +113,7 @@ async def start_run(
                 "settle": max(0.0, float(settle_seconds)),
                 "cap": max_attempts,
                 "budget": tokens_budget,
+                "dollars": dollars_budget,
                 "prices": json.dumps(price_snapshot) if price_snapshot else None,
             },
         )
@@ -112,10 +122,10 @@ async def start_run(
             text(
                 "INSERT INTO investigation_runs "
                 "  (id, tenant_id, investigation_id, status, not_before, tokens_budget, "
-                "   price_snapshot) "
+                "   dollars_budget, price_snapshot) "
                 "VALUES (:id, :t, :c, 'active', "
                 "        now() + make_interval(secs => :settle), :budget, "
-                "        CAST(:prices AS jsonb))"
+                "        :dollars, CAST(:prices AS jsonb))"
             ),
             {
                 "id": str(run_id),
@@ -123,6 +133,7 @@ async def start_run(
                 "c": str(investigation_id),
                 "settle": max(0.0, float(settle_seconds)),
                 "budget": tokens_budget,
+                "dollars": dollars_budget,
                 "prices": json.dumps(price_snapshot) if price_snapshot else None,
             },
         )

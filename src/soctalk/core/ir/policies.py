@@ -228,6 +228,76 @@ def run_token_budget_max() -> int:
     return 100_000_000
 
 
+RUN_DOLLAR_BUDGET_KEY = "max_dollars_per_investigation"
+
+
+def run_dollar_budget_default() -> float:
+    """Install default run dollar budget.
+
+    Matches ``graph.budget``'s own $5 default so an install that sets no policy
+    behaves exactly as it did before this key existed.
+    """
+    raw = install_policies().get(RUN_DOLLAR_BUDGET_KEY, 5.0)
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return 5.0
+    return v if v > 0 else 5.0
+
+
+def run_dollar_budget_max() -> float:
+    """Install hard cap a tenant override cannot exceed (#128).
+
+    ``SOCTALK_RUN_DOLLAR_BUDGET_MAX`` (positive float), defaulting high enough
+    to preserve existing behaviour; lower it via the system chart to enforce a
+    real ceiling.
+    """
+    raw = os.environ.get("SOCTALK_RUN_DOLLAR_BUDGET_MAX", "")
+    if raw.strip():
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return 1_000.0
+
+
+async def resolve_run_dollar_budget(db: AsyncSession, tenant_id: UUID) -> float:
+    """Effective per-run dollar budget for a tenant at run-creation time.
+
+    The dollar twin of :func:`resolve_run_token_budget`, and clamped for the
+    same reason: the cap is env-sourced, so rolling API pods may validate
+    against different caps and a stored override may predate a lowered one.
+
+    Never raises. ``dollars_budget`` is NOT NULL with a plausible default, so
+    unlike ``price_snapshot`` a failed resolution is invisible downstream — it
+    looks like a real budget. Callers get the install default and a logged
+    warning rather than an exception that would fail run creation (Codex
+    review, finding 8).
+    """
+    default = run_dollar_budget_default()
+    try:
+        eff = await effective_policy(db, tenant_id)
+        budget = float(eff.get(RUN_DOLLAR_BUDGET_KEY, default))
+    except Exception:  # noqa: BLE001 - accounting must not break run creation
+        import structlog
+
+        structlog.get_logger().warning(
+            "run_dollar_budget_unresolved", tenant_id=str(tenant_id)
+        )
+        return default
+    if budget != budget or budget in (float("inf"), float("-inf")):
+        # NaN or infinity would disable the cap entirely while looking set.
+        import structlog
+
+        structlog.get_logger().warning(
+            "run_dollar_budget_not_finite", tenant_id=str(tenant_id), value=budget
+        )
+        return default
+    return max(0.000001, min(budget, run_dollar_budget_max()))
+
+
 async def resolve_run_token_budget(db: AsyncSession, tenant_id: UUID) -> int:
     """Effective per-run token budget for a tenant at run-creation time.
 
@@ -246,6 +316,27 @@ async def resolve_run_token_budget(db: AsyncSession, tenant_id: UUID) -> int:
 # ---------------------------------------------------------------------------
 # Effective policy (precedence evaluator)
 # ---------------------------------------------------------------------------
+
+
+# Ceilings that only install and tenant scope may set. Enforced by stripping
+# rather than clamping, because a per-investigation budget is not a meaningful
+# concept in the first place: budgets are resolved once at run creation.
+BUDGET_KEYS: frozenset[str] = frozenset(
+    {
+        "max_tokens_per_investigation",
+        "max_dollars_per_investigation",
+        "max_tool_calls_per_investigation",
+        "max_tokens_per_24h",
+        "max_dollars_per_24h",
+    }
+)
+
+
+def _without_budget_keys(layer: dict[str, Any] | None) -> dict[str, Any]:
+    """A policy layer with any budget ceiling removed."""
+    if not layer:
+        return {}
+    return {k: v for k, v in layer.items() if k not in BUDGET_KEYS}
 
 
 # Install-level hard caps: tenants cannot relax these. Map of key →
@@ -267,8 +358,14 @@ async def effective_policy(
 
     install = install_policies()
     tenant = await tenant_policies(db, tenant_id)
-    template = investigation_template or {}
-    local = investigation_local or {}
+    # Budget ceilings are an MSSP decision and are settable at install and
+    # tenant scope only. The per-investigation layers are the ones closest to
+    # tenant-authored data, and RLS does not help here: it scopes which rows a
+    # tenant can read and write, not which KEYS or VALUES they may carry
+    # (Codex review, finding 5). Stripping the keys is what prevents a ceiling
+    # from being raised by the lower layers.
+    template = _without_budget_keys(investigation_template)
+    local = _without_budget_keys(investigation_local)
 
     merged: dict[str, Any] = dict(install)
     merged.update(tenant)
@@ -282,12 +379,17 @@ async def effective_policy(
 
 
 __all__ = [
+    "BUDGET_KEYS",
+    "RUN_DOLLAR_BUDGET_KEY",
     "RUN_TOKEN_BUDGET_KEY",
     "delete_tenant_policy",
     "effective_policy",
     "install_policies",
     "reset_install_policy_cache",
+    "resolve_run_dollar_budget",
     "resolve_run_token_budget",
+    "run_dollar_budget_default",
+    "run_dollar_budget_max",
     "run_token_budget_default",
     "run_token_budget_max",
     "set_tenant_policy",
