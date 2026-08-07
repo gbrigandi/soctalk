@@ -91,6 +91,7 @@ def _find_tool(name: str, pool: list[ChatTool]) -> ChatTool | None:
             return t
     return None
 from soctalk.config import get_config
+from soctalk.core.pricing.resolve import resolve_run_prices
 from soctalk.graph import budget as token_budget
 from soctalk.inference import InferenceTier, resolve_tier
 from soctalk.llm import create_chat_model
@@ -797,6 +798,20 @@ async def run_turn(
     # persisted after the turn. Last proposal wins.
     action_payload: dict[str, Any] | None = None
 
+    # Chat has no run row to carry a price snapshot, so it resolves one for
+    # itself, once per turn, from the same catalog and tenant override a run
+    # would use (#125). Without this, retiring the env overlay would leave chat
+    # priced only by the built-in table, which is exactly the blind spot the
+    # catalog exists to close. Never fatal: a pricing problem must not stop the
+    # conversation, it just falls back to the shipped defaults.
+    chat_prices: dict[str, Any] | None = None
+    _price_tenant = ctx.focused_tenant_id or ctx.tenant_id
+    if _price_tenant is not None:
+        try:
+            chat_prices = await resolve_run_prices(db, _price_tenant)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat_price_resolution_failed error=%s", exc)
+
     try:
         while iterations < MAX_TOOL_ITERATIONS:
             iterations += 1
@@ -811,6 +826,7 @@ async def run_turn(
                 "dollars_used": 0.0,
                 "tokens_budget": 10**9,
                 "dollars_budget": ctx.budget_dollars,
+                **({"price_snapshot": chat_prices} if chat_prices else {}),
             }
             token_budget.track(state, response)
             call_in, call_out = token_budget.extract_usage(response)

@@ -1,56 +1,143 @@
 [
-  {"provider_kind": "anthropic", "model": "claude-sonnet-4-6",
-   "input_per_mtok": 3.0, "output_per_mtok": 15.0,
-   "cache_read_per_mtok": 0.3, "cache_write_per_mtok": 3.75,
-   "as_of": "2026-08-07", "notes": "vendor list price"},
-  {"provider_kind": "anthropic", "model": "claude-opus-4-1",
-   "input_per_mtok": 15.0, "output_per_mtok": 75.0,
-   "cache_read_per_mtok": 1.5, "cache_write_per_mtok": 18.75,
-   "as_of": "2026-08-07", "notes": "vendor list price"},
-  {"provider_kind": "anthropic", "model": "claude-haiku-4-5",
-   "input_per_mtok": 1.0, "output_per_mtok": 5.0,
-   "as_of": "2026-08-07", "notes": "vendor list price"},
-
-  {"provider_kind": "openai", "model": "gpt-4o",
-   "input_per_mtok": 2.5, "output_per_mtok": 10.0,
-   "as_of": "2026-08-07", "notes": "vendor list price"},
-  {"provider_kind": "openai", "model": "gpt-4o-mini",
-   "input_per_mtok": 0.15, "output_per_mtok": 0.6,
-   "as_of": "2026-08-07", "notes": "vendor list price"},
-
-  {"provider_kind": "openrouter", "provider_id": "deepseek", "model": "deepseek/deepseek-v4-flash",
-   "input_per_mtok": 0.14, "output_per_mtok": 0.28,
-   "as_of": "2026-08-07", "notes": "measured from the gateway's own /models"},
-  {"provider_kind": "openrouter", "provider_id": "moonshot", "model": "moonshotai/kimi-k2.6",
-   "input_per_mtok": 0.5795, "output_per_mtok": 2.44,
-   "as_of": "2026-08-07", "notes": "measured from the gateway's own /models"},
-  {"provider_kind": "openrouter", "provider_id": "mistral", "model": "mistralai/mistral-small-24b-instruct-2501",
-   "input_per_mtok": 0.05, "output_per_mtok": 0.08,
-   "as_of": "2026-08-07", "notes": "measured from the gateway's own /models"},
-  {"provider_kind": "openrouter", "provider_id": "zhipu", "model": "z-ai/glm-5.2",
-   "input_per_mtok": 0.532, "output_per_mtok": 1.672,
-   "as_of": "2026-08-07", "notes": "measured from the gateway's own /models"},
-  {"provider_kind": "openrouter", "provider_id": "qwen", "model": "qwen/qwen3.7-plus",
-   "input_per_mtok": 0.32, "output_per_mtok": 1.28,
-   "as_of": "2026-08-07", "notes": "measured from the gateway's own /models"},
-
-  {"provider_kind": "openai_compatible", "provider_id": "deepseek", "model": "deepseek-v4-flash",
-   "input_per_mtok": 0.206, "output_per_mtok": 0.412,
-   "as_of": "2026-08-07", "notes": "NovaRoute gateway list price, measured"},
-  {"provider_kind": "openai_compatible", "provider_id": "moonshot", "model": "kimi-k2.6",
-   "input_per_mtok": 1.338235, "output_per_mtok": 5.558824,
-   "as_of": "2026-08-07", "notes": "NovaRoute gateway list price, measured"},
-  {"provider_kind": "openai_compatible", "provider_id": "zhipu", "model": "glm-5.2",
-   "input_per_mtok": 1.647059, "output_per_mtok": 5.764706,
-   "as_of": "2026-08-07", "notes": "NovaRoute gateway list price, measured"},
-  {"provider_kind": "openai_compatible", "provider_id": "qwen", "model": "qwen3.7-plus",
-   "input_per_mtok": 0.411765, "output_per_mtok": 1.647059,
-   "as_of": "2026-08-07", "notes": "NovaRoute gateway list price, measured"},
-
-  {"provider_kind": "self_hosted", "model": "Qwen/Qwen3-32B",
-   "input_per_mtok": 0.0, "output_per_mtok": 0.0,
-   "as_of": "2026-08-07", "notes": "self-hosted: marginal token cost is zero; GPU time is the real cost"},
-  {"provider_kind": "self_hosted", "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-   "input_per_mtok": 0.0, "output_per_mtok": 0.0,
-   "as_of": "2026-08-07", "notes": "self-hosted: marginal token cost is zero; GPU time is the real cost"}
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0,
+    "cache_read_per_mtok": 0.3,
+    "cache_write_per_mtok": 3.75,
+    "as_of": "2026-08-07",
+    "notes": "vendor list price"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-opus-4-1",
+    "input_per_mtok": 15.0,
+    "output_per_mtok": 75.0,
+    "cache_read_per_mtok": 1.5,
+    "cache_write_per_mtok": 18.75,
+    "as_of": "2026-08-07",
+    "notes": "vendor list price"
+  },
+  {
+    "provider_kind": "anthropic",
+    "model": "claude-haiku-4-5",
+    "input_per_mtok": 1.0,
+    "output_per_mtok": 5.0,
+    "as_of": "2026-08-07",
+    "notes": "vendor list price"
+  },
+  {
+    "provider_kind": "openai",
+    "model": "gpt-4o",
+    "input_per_mtok": 2.5,
+    "output_per_mtok": 10.0,
+    "as_of": "2026-08-07",
+    "notes": "vendor list price"
+  },
+  {
+    "provider_kind": "openai",
+    "model": "gpt-4o-mini",
+    "input_per_mtok": 0.15,
+    "output_per_mtok": 0.6,
+    "as_of": "2026-08-07",
+    "notes": "vendor list price"
+  },
+  {
+    "provider_kind": "openrouter",
+    "provider_id": "deepseek",
+    "model": "deepseek/deepseek-v4-flash",
+    "input_per_mtok": 0.14,
+    "output_per_mtok": 0.28,
+    "as_of": "2026-08-07",
+    "notes": "measured from the gateway's own /models"
+  },
+  {
+    "provider_kind": "openrouter",
+    "provider_id": "moonshot",
+    "model": "moonshotai/kimi-k2.6",
+    "input_per_mtok": 0.5795,
+    "output_per_mtok": 2.44,
+    "as_of": "2026-08-07",
+    "notes": "measured from the gateway's own /models"
+  },
+  {
+    "provider_kind": "openrouter",
+    "provider_id": "mistral",
+    "model": "mistralai/mistral-small-24b-instruct-2501",
+    "input_per_mtok": 0.05,
+    "output_per_mtok": 0.08,
+    "as_of": "2026-08-07",
+    "notes": "measured from the gateway's own /models"
+  },
+  {
+    "provider_kind": "openrouter",
+    "provider_id": "zhipu",
+    "model": "z-ai/glm-5.2",
+    "input_per_mtok": 0.532,
+    "output_per_mtok": 1.672,
+    "as_of": "2026-08-07",
+    "notes": "measured from the gateway's own /models"
+  },
+  {
+    "provider_kind": "openrouter",
+    "provider_id": "qwen",
+    "model": "qwen/qwen3.7-plus",
+    "input_per_mtok": 0.32,
+    "output_per_mtok": 1.28,
+    "as_of": "2026-08-07",
+    "notes": "measured from the gateway's own /models"
+  },
+  {
+    "provider_kind": "openai_compatible",
+    "provider_id": "novaroute",
+    "model": "deepseek-v4-flash",
+    "input_per_mtok": 0.206,
+    "output_per_mtok": 0.412,
+    "as_of": "2026-08-07",
+    "notes": "NovaRoute gateway list price, measured"
+  },
+  {
+    "provider_kind": "openai_compatible",
+    "provider_id": "novaroute",
+    "model": "kimi-k2.6",
+    "input_per_mtok": 1.338235,
+    "output_per_mtok": 5.558824,
+    "as_of": "2026-08-07",
+    "notes": "NovaRoute gateway list price, measured"
+  },
+  {
+    "provider_kind": "openai_compatible",
+    "provider_id": "novaroute",
+    "model": "glm-5.2",
+    "input_per_mtok": 1.647059,
+    "output_per_mtok": 5.764706,
+    "as_of": "2026-08-07",
+    "notes": "NovaRoute gateway list price, measured"
+  },
+  {
+    "provider_kind": "openai_compatible",
+    "provider_id": "novaroute",
+    "model": "qwen3.7-plus",
+    "input_per_mtok": 0.411765,
+    "output_per_mtok": 1.647059,
+    "as_of": "2026-08-07",
+    "notes": "NovaRoute gateway list price, measured"
+  },
+  {
+    "provider_kind": "self_hosted",
+    "model": "Qwen/Qwen3-32B",
+    "input_per_mtok": 0.0,
+    "output_per_mtok": 0.0,
+    "as_of": "2026-08-07",
+    "notes": "self-hosted: marginal token cost is zero; GPU time is the real cost"
+  },
+  {
+    "provider_kind": "self_hosted",
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "input_per_mtok": 0.0,
+    "output_per_mtok": 0.0,
+    "as_of": "2026-08-07",
+    "notes": "self-hosted: marginal token cost is zero; GPU time is the real cost"
+  }
 ]

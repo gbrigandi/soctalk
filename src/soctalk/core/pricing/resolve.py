@@ -43,8 +43,14 @@ SOURCE_UNKNOWN = "unknown"
 # "openai-compatible" endpoint still gets attributed where the host makes it
 # obvious. Deliberately small and literal: a guess that is wrong is worse than
 # no guess, because it would price against another vendor's rate card.
+# A gateway reselling somebody else's model is its OWN rate card: the price a
+# tenant pays for ``deepseek-v4-flash`` through a reseller is the reseller's
+# price, not DeepSeek's, and the two differ by up to 2.3x in our own
+# measurements. So the slug names whoever is billing, which for a gateway is
+# the gateway.
 _HOST_VENDORS = {
     "api.deepseek.com": "deepseek",
+    "novarouteai.com": "novaroute",
     "api.moonshot.cn": "moonshot",
     "api.mistral.ai": "mistral",
     "openrouter.ai": "openrouter",

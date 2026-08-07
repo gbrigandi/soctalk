@@ -79,19 +79,6 @@
           "minimum": 0.10,
           "maximum": 10000
         },
-        "modelPrices": {
-          "description": "Per-tenant price overlay (issue #121), USD per million tokens, keyed by model prefix. Rendered to SOCTALK_MODEL_PRICES; graph/budget.py overlays it onto the built-in table so a model absent from that table bills at what the tenant actually pays instead of the fail-expensive $15/$75 fallback. Absent = no overlay.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "input": { "type": "number", "minimum": 0 },
-              "output": { "type": "number", "minimum": 0 }
-            },
-            "required": ["input", "output"],
-            "additionalProperties": false
-          }
-        },
         "tokenBudgetPerRun": {
           "description": "Per-tenant case-run token cap. Rendered to SOCTALK_CASE_RUN_TOKEN_BUDGET. Absent = the worker default.",
           "type": "integer",

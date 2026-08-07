@@ -634,14 +634,6 @@ def render_tenant_values(
     # directly (over_budget → supervisor CLOSE).
     if integration.llm_dollar_budget_per_run is not None:
         values["llm"]["dollarBudgetPerRun"] = integration.llm_dollar_budget_per_run
-    # Per-tenant price overlay (issue #121). Emitted only when set — NULL leaves
-    # SOCTALK_MODEL_PRICES unset, so the worker keeps the built-in table and its
-    # fail-expensive fallback for anything missing from it. Without this a tenant
-    # pointed at a cheap OpenAI-compatible model through the config API bills at
-    # $15/$75 per Mtok, which halts runs on phantom spend and trips the tenant
-    # daily cap that gates run claiming.
-    if integration.llm_model_prices:
-        values["llm"]["modelPrices"] = integration.llm_model_prices
     # NOTE (#103): the per-run TOKEN budget is no longer rendered to worker env.
     # It is now DB-resolved at run creation (policies.resolve_run_token_budget)
     # and stamped on the run row, so per-tenant token-budget changes take effect

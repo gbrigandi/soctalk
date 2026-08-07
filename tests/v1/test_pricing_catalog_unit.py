@@ -275,3 +275,29 @@ def test_seed_prices_file_is_importable_as_shipped():
     # Every entry carries an as_of, because a price with no date is a price
     # nobody can judge the staleness of.
     assert all(e["as_of"] is not None for e in entries)
+
+
+def test_a_gateways_price_is_attributed_to_the_gateway_not_the_upstream():
+    """A reseller's rate card is its own, and the resolver must reach it.
+
+    Caught on a live deployment: the seed labelled a gateway-served
+    ``deepseek-v4-flash`` with the upstream vendor's slug while carrying the
+    gateway's price, and the resolver derives the slug from the host, so the
+    entry was unreachable and every run resolved ``unknown``. The two prices
+    differ by up to 2.3x, so attributing one to the other is not a cosmetic
+    mistake.
+    """
+    import json
+    from pathlib import Path
+
+    assert provider_id_for("https://novarouteai.com/v1") == "novaroute"
+
+    seed = Path(__file__).resolve().parents[2] / "data" / "pricing" / "seed-prices.json"
+    entries = json.loads(seed.read_text())
+    gateway_rows = [
+        e for e in entries if "NovaRoute" in (e.get("notes") or "")
+    ]
+    assert gateway_rows, "expected gateway-priced rows in the seed"
+    for row in gateway_rows:
+        # Whoever bills is who the slug names.
+        assert row["provider_id"] == "novaroute", row["model"]

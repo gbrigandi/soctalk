@@ -396,7 +396,6 @@ async def update_tenant_llm(
         prior_max_tokens = cfg.llm_max_tokens
         prior_dollar_budget = cfg.llm_dollar_budget_per_run
         prior_tiers = cfg.llm_tiers
-        prior_model_prices = cfg.llm_model_prices
         if payload.provider is not None:
             cfg.llm_provider = payload.provider
         if payload.base_url is not None:
@@ -483,13 +482,6 @@ async def update_tenant_llm(
             or cfg.llm_max_tokens != prior_max_tokens
             or cfg.llm_dollar_budget_per_run != prior_dollar_budget
             or cfg.llm_tiers != prior_tiers
-            # The overlay renders into SOCTALK_MODEL_PRICES, which is the
-            # fallback a worker uses for any call the run snapshot does not
-            # cover — including every worker still running an image that
-            # predates snapshots. Leaving it stale until some unrelated
-            # reconcile means the tenant keeps being billed at the old rate
-            # (Codex review, finding 4).
-            or cfg.llm_model_prices != prior_model_prices
         )
         if chart_affecting_changed:
             # Enqueue a provisioning job so the worker helm-upgrades the

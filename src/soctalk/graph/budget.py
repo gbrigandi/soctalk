@@ -74,50 +74,31 @@ _UNKNOWN_MODEL_FALLBACK = {"input": 15.0, "output": 75.0}
 _ZERO_COST = {"input": 0.0, "output": 0.0}
 
 
-def _parse_price_map(raw: str | None) -> dict[str, dict[str, float]]:
-    """Parse a ``{"model-prefix": {"input": x, "output": y}}`` JSON map.
-
-    Keys are normalized model-family prefixes (same shape as the built-in
-    table); malformed entries are skipped, not fatal.
-    """
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except (ValueError, TypeError):
-        logger.warning("budget_price_override_parse_failed")
-        return {}
-    out: dict[str, dict[str, float]] = {}
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if isinstance(v, dict) and "input" in v and "output" in v:
-                try:
-                    out[str(k)] = {"input": float(v["input"]), "output": float(v["output"])}
-                except (ValueError, TypeError):
-                    continue
-    return out
-
-
-# Cache the parsed overlay keyed on the raw env string so ``track`` doesn't
-# re-parse JSON every call, while still reflecting env changes (tests, reloads).
+# Retained so tests and any in-process caller can reset the module cleanly;
+# the env overlay it used to hold is retired (#125).
 _price_cache: tuple[str | None, dict[str, dict[str, float]]] | None = None
 
 
 def _effective_prices() -> dict[str, dict[str, float]]:
-    """The built-in price table overlaid with ``SOCTALK_MODEL_PRICES``.
+    """The built-in table of shipped defaults.
 
-    An overlay entry adds a self-hosted / newly-released model (or a
-    ``{"input": 0, "output": 0}`` zero-cost entry for local inference) or
-    corrects a stale built-in rate — without editing code.
+    ``SOCTALK_MODEL_PRICES`` is retired (#125). It was the only way to price a
+    model the built-in table had never heard of, and it was the wrong shape for
+    the job: keyed by model string alone, when the same model costs different
+    amounts at different providers; delivered by rendering into worker env, so
+    correcting a price meant a helm upgrade and a pod restart; and invisible,
+    so nobody could tell which rate a run had actually been billed at.
+
+    Prices now resolve from the install catalog (and the tenant's own override)
+    when a run is created, and ride on the run row, which fixes all three: the
+    key carries the provider, a correction takes effect on the next run with no
+    rollout, and the run says what it was priced at and where that came from.
+
+    What remains here is the shipped default for the frontier models, used when
+    a call carries no resolved price — an unstamped legacy run, or a code path
+    with no tenant to resolve against.
     """
-    global _price_cache
-    raw = os.getenv("SOCTALK_MODEL_PRICES")
-    if _price_cache is not None and _price_cache[0] == raw:
-        return _price_cache[1]
-    overrides = _parse_price_map(raw)
-    merged = _MODEL_PRICES_PER_MTOK if not overrides else {**_MODEL_PRICES_PER_MTOK, **overrides}
-    _price_cache = (raw, merged)
-    return merged
+    return _MODEL_PRICES_PER_MTOK
 
 
 def _unknown_model_cost() -> tuple[dict[str, float], bool]:
@@ -159,7 +140,8 @@ def _warn_unpriced_once(model: str | None, price: dict[str, float]) -> None:
         model=model,
         input_price_per_mtok=price["input"],
         output_price_per_mtok=price["output"],
-        hint="add it to SOCTALK_MODEL_PRICES, or set SOCTALK_UNKNOWN_MODEL_COST=zero for local inference",
+        hint="add it to the price catalog (soctalk-prices import), set a tenant "
+             "override, or SOCTALK_UNKNOWN_MODEL_COST=zero for local inference",
     )
 
 
