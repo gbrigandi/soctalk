@@ -304,29 +304,78 @@ def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float
     snapshot = state.get("price_snapshot")
     if not isinstance(snapshot, dict) or not model:
         return None
+
+    # Providers answer with versioned ids (``-20250514``, ``-latest``) that the
+    # configured model string does not carry, so compare on the same stripped
+    # form the built-in table uses. Without this a snapshot for
+    # ``deepseek-v4-flash`` is ignored the moment the API reports
+    # ``deepseek-v4-flash-20260731``, and the call silently falls back to the
+    # fail-expensive rate this feature exists to remove (Codex review, #3).
+    # Strip unconditionally, unlike ``_normalize_model``, which only strips when
+    # the result happens to be a key in the built-in table — that guard is right
+    # for a table lookup and wrong here, where both sides are stripped and
+    # compared to each other.
+    wanted = _VERSION_SUFFIX_RE.sub("", model, count=1)
+    matches: list[dict[str, Any]] = []
     for entry in (snapshot.get("models") or {}).values():
-        if not isinstance(entry, dict) or entry.get("model") != model:
+        if not isinstance(entry, dict):
             continue
-        if entry.get("source") == "unknown":
-            return None
-        try:
-            rates = {
-                "input": float(entry["input_per_mtok"]),
-                "output": float(entry["output_per_mtok"]),
-            }
-        except (KeyError, TypeError, ValueError):
-            return None
-        for key, out in (
-            ("cache_read_per_mtok", "cache_read"),
-            ("cache_write_per_mtok", "cache_write"),
-        ):
-            if entry.get(key) is not None:
-                try:
-                    rates[out] = float(entry[key])
-                except (TypeError, ValueError):
-                    pass
-        return rates
-    return None
+        candidate = entry.get("model")
+        if not candidate:
+            continue
+        if candidate != model and _VERSION_SUFFIX_RE.sub(
+            "", str(candidate), count=1
+        ) != wanted:
+            continue
+        matches.append(entry)
+
+    if not matches:
+        return None
+
+    rated = [_rates_from_entry(e) for e in matches]
+    rated = [r for r in rated if r is not None]
+    if not rated:
+        # Matched, but the entry was ``unknown`` or unreadable. Fall through to
+        # the table rather than pricing at zero, which would hide the gap.
+        return None
+    first = rated[0]
+    if any(other != first for other in rated[1:]):
+        # Two roles resolved the same model string to different rates, which
+        # happens when a hybrid tenant runs one model through two providers.
+        # The call site does not tell us which role is spending, so guessing
+        # would bill half the calls at the wrong provider's rate. Fall through
+        # and say so (Codex review, #2).
+        logger.warning(
+            "price_snapshot_ambiguous",
+            model=model,
+            hint="model appears under multiple roles at different rates; "
+                 "priced from the table instead",
+        )
+        return None
+    return first
+
+
+def _rates_from_entry(entry: dict[str, Any]) -> dict[str, float] | None:
+    """One snapshot entry as rates, or None if it cannot price anything."""
+    if entry.get("source") == "unknown":
+        return None
+    try:
+        rates = {
+            "input": float(entry["input_per_mtok"]),
+            "output": float(entry["output_per_mtok"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+    for key, out in (
+        ("cache_read_per_mtok", "cache_read"),
+        ("cache_write_per_mtok", "cache_write"),
+    ):
+        if entry.get(key) is not None:
+            try:
+                rates[out] = float(entry[key])
+            except (TypeError, ValueError):
+                pass
+    return rates
 
 
 def _cost_dollars(

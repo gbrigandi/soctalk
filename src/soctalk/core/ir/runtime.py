@@ -64,7 +64,17 @@ async def start_run(
     # prices from the row rather than from env that would need a rollout.
     # None when the tenant has no LLM config yet, which leaves the legacy
     # pricing path in charge.
-    price_snapshot = await resolve_run_prices(db, tenant_id)
+    #
+    # Never fatal. The whole contract of this feature is that pricing degrades
+    # to the legacy path; a catalog problem, a half-migrated database mid
+    # rollout, or one malformed operator-entered row must not stop a run from
+    # being created, because that would stop triage — the exact failure the
+    # feature exists to prevent (Codex review, finding 1).
+    try:
+        price_snapshot = await resolve_run_prices(db, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("run_price_resolution_failed", error=str(exc))
+        price_snapshot = None
     # X in "re-triage up to X attempts". The column's DB default is 4
     # (migration v1_0039); the env lets an operator raise or lower it for new
     # runs without a migration. Read per call so a config change applies to

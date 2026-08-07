@@ -163,3 +163,115 @@ def test_snapshot_may_carry_explicit_cache_rates():
         rates={"input": 1.0, "output": 2.0, "cache_read": 0.5},
     )
     assert explicit == pytest.approx(0.0015)
+
+
+# -------------------------------------------------- Codex review regressions
+
+
+def test_versioned_response_ids_still_hit_the_snapshot():
+    """Providers answer with dated ids the configured model string lacks.
+
+    Without stripping, a snapshot for ``deepseek-v4-flash`` is ignored the
+    moment the API reports ``deepseek-v4-flash-20260731``, and the call falls
+    back to the fail-expensive rate this feature exists to remove.
+    """
+    st = _state(
+        {
+            "version": 1,
+            "models": {
+                "fast": {
+                    "model": "deepseek-v4-flash",
+                    "source": "catalog",
+                    "input_per_mtok": 0.206,
+                    "output_per_mtok": 0.412,
+                }
+            },
+        }
+    )
+    for reported in (
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-20260731",
+        "deepseek-v4-flash-latest",
+    ):
+        assert budget._snapshot_rates(st, reported) == {
+            "input": 0.206,
+            "output": 0.412,
+        }, reported
+    # A different SKU must not be folded in.
+    assert budget._snapshot_rates(st, "deepseek-v4-pro") is None
+
+
+def test_one_model_at_two_prices_falls_through_rather_than_guessing():
+    """A hybrid tenant can run one model string through two providers.
+
+    The call site does not say which role is spending, so picking either would
+    bill half the calls at the other provider's rate. Falling through to the
+    table is the honest answer.
+    """
+    ambiguous = _state(
+        {
+            "version": 1,
+            "models": {
+                "fast": {
+                    "model": "m",
+                    "source": "catalog",
+                    "input_per_mtok": 0.1,
+                    "output_per_mtok": 0.2,
+                },
+                "reasoning": {
+                    "model": "m",
+                    "source": "catalog",
+                    "input_per_mtok": 9.0,
+                    "output_per_mtok": 9.0,
+                },
+            },
+        }
+    )
+    assert budget._snapshot_rates(ambiguous, "m") is None
+
+    # Same model at the same price under both roles is not ambiguous at all.
+    agreed = _state(
+        {
+            "version": 1,
+            "models": {
+                "fast": {
+                    "model": "m",
+                    "source": "catalog",
+                    "input_per_mtok": 0.1,
+                    "output_per_mtok": 0.2,
+                },
+                "reasoning": {
+                    "model": "m",
+                    "source": "catalog",
+                    "input_per_mtok": 0.1,
+                    "output_per_mtok": 0.2,
+                },
+            },
+        }
+    )
+    assert budget._snapshot_rates(agreed, "m") == {"input": 0.1, "output": 0.2}
+
+
+def test_seed_prices_file_is_importable_as_shipped():
+    """The shipped seed must satisfy the importer's own validation.
+
+    A seed that the CLI would reject is worse than no seed: the operator finds
+    out at install time, on the one path that is supposed to just work.
+    """
+    import json
+    from pathlib import Path
+
+    from soctalk.core.cli.prices import _parse_entries
+
+    seed = Path(__file__).resolve().parents[2] / "data" / "pricing" / "seed-prices.json"
+    entries = _parse_entries(json.loads(seed.read_text()))
+    assert len(entries) >= 10
+    # Self-hosted entries are deliberately zero: the marginal token cost really
+    # is nothing, and the GPU hour is accounted elsewhere.
+    zero = [e for e in entries if e["provider_kind"] == "self_hosted"]
+    assert zero and all(
+        e["dimensions"]["input_per_mtok_microusd"] == 0 for e in zero
+    )
+    # Every entry carries an as_of, because a price with no date is a price
+    # nobody can judge the staleness of.
+    assert all(e["as_of"] is not None for e in entries)

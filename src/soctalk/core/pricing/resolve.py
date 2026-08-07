@@ -180,26 +180,41 @@ async def resolve_run_prices(
     if cfg is None:
         return None
 
-    provider_kind = provider_kind_for(cfg.llm_provider, cfg.llm_base_url)
-    provider_id = provider_id_for(cfg.llm_base_url)
     overrides = getattr(cfg, "llm_model_prices", None)
+    tiers = cfg.llm_tiers or {}
 
-    # NULL or empty override falls back to the primary model, matching how
-    # render.py resolves fastModel / reasoningModel.
-    roles = {
-        "fast": (cfg.llm_fast_model or cfg.llm_model),
-        "reasoning": (cfg.llm_reasoning_model or cfg.llm_model),
-    }
-
-    models: dict[str, Any] = {}
-    for role, model in roles.items():
+    # Each role is resolved against ITS OWN backend. A hybrid tenant (#12) can
+    # run the fast tier on one provider and the reasoning tier on another, and
+    # those cost different amounts even for the same model string — pricing
+    # both against the primary config would silently bill one of them at the
+    # other's rate (Codex review, finding 2).
+    #
+    # NULL or empty falls back to the primary, matching how render.py resolves
+    # fastModel / reasoningModel.
+    roles: dict[str, dict[str, Any]] = {}
+    for role, fallback_model in (
+        ("fast", cfg.llm_fast_model or cfg.llm_model),
+        ("reasoning", cfg.llm_reasoning_model or cfg.llm_model),
+    ):
+        tier = tiers.get(role) or {}
+        provider = tier.get("provider") or cfg.llm_provider
+        base_url = tier.get("base_url") or cfg.llm_base_url
+        model = tier.get("model") or fallback_model
         if not model:
             continue
+        roles[role] = {
+            "model": model,
+            "provider_kind": provider_kind_for(provider, base_url),
+            "provider_id": provider_id_for(base_url),
+        }
+
+    models: dict[str, Any] = {}
+    for role, spec in roles.items():
         models[role] = await _resolve_one(
             db,
-            model=model,
-            provider_kind=provider_kind,
-            provider_id=provider_id,
+            model=spec["model"],
+            provider_kind=spec["provider_kind"],
+            provider_id=spec["provider_id"],
             overrides=overrides,
         )
 

@@ -345,7 +345,8 @@ async def cmd_pull(args: argparse.Namespace) -> int:
         return 2
 
     entries: list[dict[str, Any]] = []
-    for m in payload.get("data", payload if isinstance(payload, list) else []):
+    models = payload if isinstance(payload, list) else (payload or {}).get("data") or []
+    for m in models:
         pricing = (m or {}).get("pricing") or {}
         try:
             inp = float(pricing["prompt"]) * 1_000_000
