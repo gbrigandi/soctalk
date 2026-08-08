@@ -9,5 +9,5 @@ An autonomous security operations agent that integrates with:
 Architecture: Supervisor + Specialized Workers with Human-in-the-Loop gate
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Gianluca Brigandi"

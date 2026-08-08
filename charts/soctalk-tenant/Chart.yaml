@@ -10,10 +10,10 @@ description: |
 type: application
 
 # Chart version is independent of application versions.
-version: 0.2.0
+version: 0.2.1
 
 # Application version identifier (bumped when subchart versions change)
-appVersion: 0.2.0
+appVersion: 0.2.1
 
 kubeVersion: ">=1.28.0-0"
 
@@ -46,11 +46,11 @@ annotations:
 # lands their patched charts under ./charts/.
 dependencies:
   - name: wazuh
-    version: "0.2.0"
+    version: "0.2.1"
     repository: "file://../wazuh"
     condition: components.wazuh.enabled
   - name: linux-ep
     alias: linuxep
-    version: "0.2.0"
+    version: "0.2.1"
     repository: "file://../linux-ep"
     condition: components.linuxep.enabled

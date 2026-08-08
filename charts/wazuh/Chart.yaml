@@ -2,7 +2,7 @@ apiVersion: v2
 name: wazuh
 description: Minimal Wazuh manager + indexer deployment for SocTalk dev clusters.
 type: application
-version: 0.2.0
+version: 0.2.1
 appVersion: "4.12.0"
 keywords:
   - wazuh

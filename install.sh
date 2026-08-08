@@ -33,7 +33,7 @@ case ":$PATH:" in *":/usr/local/bin:"*) ;; *) export PATH="/usr/local/bin:$PATH"
 # it from a release tag (…/soctalk/<version>/install.sh).
 # --------------------------------------------------------------------- #
 CHART_REF="${SOCTALK_CHART_REF:-oci://ghcr.io/soctalk/charts/soctalk-system}"
-CHART_VERSION="${SOCTALK_CHART_VERSION:-0.2.0}"
+CHART_VERSION="${SOCTALK_CHART_VERSION:-0.2.1}"
 # Pin images to the chart version by default so a release-tagged installer
 # deploys a matching image set, not whatever 'latest' has moved to. The
 # publish workflow tags images with the release version (e.g. 0.1.2).

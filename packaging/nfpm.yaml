@@ -1,6 +1,6 @@
 # nFPM spec for the `soctalk` OS package (rpm / deb) — see issue #70.
 # One spec -> yum/dnf and apt. Build:
-#   VERSION=0.2.0 nfpm pkg -f packaging/nfpm.yaml -p rpm -t dist/
+#   VERSION=0.2.1 nfpm pkg -f packaging/nfpm.yaml -p rpm -t dist/
 # (run from the repo root; paths below are repo-root-relative). ${VERSION} and
 # ${ARCH} are expanded from the environment by nfpm.
 #

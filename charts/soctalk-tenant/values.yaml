@@ -147,7 +147,7 @@ agentIngress:
 adapter:
   image:
     repository: "ghcr.io/soctalk/soctalk-adapter"
-    tag: "0.2.0"
+    tag: "0.2.1"
     pullPolicy: IfNotPresent
   resources:
     requests: { cpu: 50m, memory: 128Mi }
@@ -183,7 +183,7 @@ runsWorker:
   replicas: 1
   image:
     repository: "ghcr.io/soctalk/soctalk-orchestrator"
-    tag: "0.2.0"
+    tag: "0.2.1"
     pullPolicy: IfNotPresent
   resources:
     requests: { cpu: "100m", memory: "256Mi" }

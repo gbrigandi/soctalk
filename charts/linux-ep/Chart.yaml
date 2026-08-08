@@ -8,8 +8,8 @@ description: |
   has real Wazuh-native alerts to triage. Pods register as agents
   ``linux-ep-0``, ``linux-ep-1``, ... by default.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.2.1
+appVersion: "0.2.1"
 keywords:
   - soctalk
   - wazuh

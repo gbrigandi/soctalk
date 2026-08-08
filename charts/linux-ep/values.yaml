@@ -9,7 +9,7 @@
 
 image:
   repository: ghcr.io/soctalk/soctalk-linux-ep
-  tag: 0.2.0
+  tag: 0.2.1
   pullPolicy: IfNotPresent
 
 # Number of simulated endpoints. Each registers with the Wazuh
