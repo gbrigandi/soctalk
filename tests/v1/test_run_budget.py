@@ -134,7 +134,7 @@ async def test_api_set_clear_and_audit(mssp_session: AsyncSession, seed_two_tena
     req = _req(mssp_session)
 
     # Set an override -> effective reflects it.
-    view = await update_run_budget(a.tenant_id, RunBudgetUpdate(override=40_000), req)
+    view = await update_run_budget(a.tenant_id, RunBudgetUpdate(token_override=40_000), req)
     assert view.tenant_override == 40_000
     assert view.effective == 40_000
 
@@ -151,7 +151,7 @@ async def test_api_set_clear_and_audit(mssp_session: AsyncSession, seed_two_tena
     assert n >= 1
 
     # Clear (override=null) DELETES the policy row -> revert to install default.
-    cleared = await update_run_budget(a.tenant_id, RunBudgetUpdate(override=None), req)
+    cleared = await update_run_budget(a.tenant_id, RunBudgetUpdate(token_override=None), req)
     assert cleared.tenant_override is None
     assert cleared.effective == run_token_budget_default()
     remaining = (
@@ -169,7 +169,7 @@ async def test_api_set_clear_and_audit(mssp_session: AsyncSession, seed_two_tena
 async def test_api_empty_patch_does_not_clear(mssp_session: AsyncSession, seed_two_tenants):
     a, _ = seed_two_tenants
     req = _req(mssp_session)
-    await update_run_budget(a.tenant_id, RunBudgetUpdate(override=40_000), req)
+    await update_run_budget(a.tenant_id, RunBudgetUpdate(token_override=40_000), req)
     # An empty body {} must NOT silently clear the override.
     with pytest.raises(HTTPException) as ei:
         await update_run_budget(a.tenant_id, RunBudgetUpdate(), req)
@@ -184,11 +184,11 @@ async def test_api_validation_bounds(mssp_session: AsyncSession, seed_two_tenant
     monkeypatch.setenv("SOCTALK_RUN_TOKEN_BUDGET_MAX", "100000")
     # Above the cap -> 422.
     with pytest.raises(HTTPException) as e1:
-        await update_run_budget(a.tenant_id, RunBudgetUpdate(override=200_000), req)
+        await update_run_budget(a.tenant_id, RunBudgetUpdate(token_override=200_000), req)
     assert e1.value.status_code == 422
     # Below the floor -> 422.
     with pytest.raises(HTTPException) as e2:
-        await update_run_budget(a.tenant_id, RunBudgetUpdate(override=999), req)
+        await update_run_budget(a.tenant_id, RunBudgetUpdate(token_override=999), req)
     assert e2.value.status_code == 422
 
 
@@ -196,7 +196,14 @@ def test_api_rejects_non_int_override():
     # StrictInt: a numeric string / bool / float is rejected at parse time.
     for bad in ("40000", 4.5, True):
         with pytest.raises(ValidationError):
-            RunBudgetUpdate(override=bad)
+            RunBudgetUpdate(token_override=bad)
+
+    # The dollar dimension is strict about the same things, but a whole
+    # number is a legitimate dollar amount.
+    for bad in ("2.5", True):
+        with pytest.raises(ValidationError):
+            RunBudgetUpdate(dollar_override=bad)
+    assert RunBudgetUpdate(dollar_override=3).dollar_override == 3
 
 
 async def test_api_unknown_tenant_404(mssp_session: AsyncSession):

@@ -1887,19 +1887,12 @@ async def test_patch_llm_sampling_out_of_range_rejected():
         LlmConfigUpdate(temperature=True)  # bool must not coerce to 1.0
     with _pytest.raises(ValidationError):
         LlmConfigUpdate(max_tokens=True)
-    # Budget caps: $0.10 floor (sub-cent halts after one call), tokens ≥ 1000,
-    # both reject booleans.
-    with _pytest.raises(ValidationError):
-        LlmConfigUpdate(dollar_budget_per_run=0.05)
-    with _pytest.raises(ValidationError):
-        LlmConfigUpdate(dollar_budget_per_run=True)
-    with _pytest.raises(ValidationError):
-        LlmConfigUpdate(token_budget_per_run=500)
-    # A valid cap and an explicit null (clear) are both accepted.
-    assert LlmConfigUpdate(dollar_budget_per_run=2.5).dollar_budget_per_run == 2.5
-    assert "dollar_budget_per_run" in LlmConfigUpdate(
-        dollar_budget_per_run=None
-    ).model_fields_set
+    # Both per-run budget caps are gone from this surface entirely (#103, #128).
+    # They rendered to worker env, so a change needed a rollout, and the value
+    # never reached the run row. Unknown fields are ignored by the model rather
+    # than raising, so assert they are not part of it at all.
+    assert "dollar_budget_per_run" not in LlmConfigUpdate.model_fields
+    assert "token_budget_per_run" not in LlmConfigUpdate.model_fields
 
 
 async def test_patch_llm_reasoning_model_degraded_tenant_enqueues_provision(
