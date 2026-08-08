@@ -393,3 +393,41 @@ def test_day_window_handles_sub_hour_offsets():
         # Local midnight expressed in UTC lands offset minutes BEFORE midnight UTC.
         minutes_past_utc_midnight = start.hour * 60 + start.minute
         assert (minutes_past_utc_midnight + offset_minutes) % (24 * 60) == 0, tz
+
+
+# --- #134: unknown fields on the money models -----------------------------
+#
+# Both models used to be bare BaseModel, so an unrecognised key was dropped.
+# The dangerous shape is not the all-typo body (that fails closed) but the
+# mixed one: half the payload applies, the response is 200, and the caller
+# believes it set both ceilings.
+
+
+def test_run_budget_update_rejects_unknown_fields():
+    from pydantic import ValidationError
+
+    from soctalk.core.api.run_budget import RunBudgetUpdate
+
+    # A mixed payload must not half-apply: one good field, one typo.
+    with pytest.raises(ValidationError) as exc:
+        RunBudgetUpdate(token_override=1000, dollars_override=3.25)
+    assert "dollars_override" in str(exc.value)
+
+    # The correctly-spelled pair still works.
+    ok = RunBudgetUpdate(token_override=1000, dollar_override=3.25)
+    assert ok.dollar_override == 3.25
+
+
+def test_run_unlock_request_rejects_the_plausible_misspelling():
+    from pydantic import ValidationError
+
+    from soctalk.core.api.run_budget import RunUnlockRequest
+
+    # ``dollars_budget`` is the field name a caller reaches for first; it must
+    # be a loud 422 naming the field, not a silent "keep the current ceiling"
+    # whose error then blames a value the caller never sent.
+    with pytest.raises(ValidationError) as exc:
+        RunUnlockRequest(dollars_budget=5.0)
+    assert "dollars_budget" in str(exc.value)
+
+    assert RunUnlockRequest(dollar_budget=5.0).dollar_budget == 5.0

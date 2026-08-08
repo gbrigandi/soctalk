@@ -26,6 +26,7 @@ export const tenantContext = writable<PublicScope | null>(null);
  *   labz.soctalk.ai       → 'labz'
  *   pw-kmo36q.soctalk.ai  → 'pw-kmo36q'
  *   localhost / IPs / 1-label → null
+ *   100.102.223.8.nip.io  → null  (embedded IP, #136)
  *
  * Reserved subdomains (``www``, ``api``, ``cloud``, ``mssp``,
  * ``customer``, ``tenant``) return null. Resolution of the slug
@@ -48,13 +49,20 @@ export function detectSlugFromHostname(
 ): string | null {
 	if (!hostname) return null;
 	const lower = hostname.toLowerCase();
-	// Reject IPs and bare hostnames
+	// Reject IPs and bare hostnames. The bare form is not enough: wildcard DNS
+	// that embeds an address — nip.io, sslip.io, xip.io — is how a bare-IP
+	// install gets a hostname, and `100.102.223.8.nip.io` is not a bare IP, so
+	// it used to slip through and yield the slug `100` (#136).
 	if (/^\d+\.\d+\.\d+\.\d+$/.test(lower)) return null;
+	if (/^\d+\.\d+\.\d+\.\d+\./.test(lower)) return null;
 	const parts = lower.split('.');
 	if (parts.length < 2) return null;
 	const slug = parts[0];
 	if (RESERVED.has(slug)) return null;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) return null;
+	// An all-digit label is never a real slug, and is what an embedded-IP host
+	// degrades to. Belt and braces with the check above (#136).
+	if (/^\d+$/.test(slug)) return null;
 	return slug;
 }
 

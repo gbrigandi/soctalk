@@ -81,6 +81,12 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# Arbitrary but fixed: every runner must pick the same key or the lock does
+# nothing. Derived from "soctalk-alembic" so it will not collide with an
+# application-level advisory lock chosen independently.
+_MIGRATION_LOCK_KEY = 8104729163554821001
+
+
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
@@ -95,6 +101,27 @@ def run_migrations_online() -> None:
     from sqlalchemy import text
 
     with connectable.connect() as connection:
+        # Serialise concurrent migration runners (#135). Migrations run in the
+        # API Deployment's db-init initContainer, so every replica starts one,
+        # and values.schema.json puts no maximum on replicas — a fresh install
+        # at replicas: 2 raced two Alembic runs with nothing to stop them.
+        #
+        # This must be the FIRST statement on the connection, before the
+        # alembic_version pre-create below: `CREATE TABLE IF NOT EXISTS` is not
+        # atomic against a concurrent create, and two racing runners fail there
+        # with a duplicate pg_type row long before alembic itself is involved.
+        # A lock taken after that block leaves the real race untouched (caught
+        # by racing two runners against one empty database, not by reading).
+        #
+        # Session-level, not transaction-level: alembic commits per revision,
+        # so a xact lock would be released after the first one. The loser
+        # blocks here until the winner finishes, then proceeds and finds itself
+        # already at head — a slow start instead of a half-applied schema.
+        connection.execute(
+            text("SELECT pg_advisory_lock(:k)"), {"k": _MIGRATION_LOCK_KEY}
+        )
+        connection.commit()
+
         # Some revision ids in this chain exceed alembic's default
         # VARCHAR(32) for ``alembic_version.version_num`` (e.g.
         # ``add_llm_settings_to_user_settings`` = 37 chars). Pre-create
@@ -118,8 +145,14 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
         )
 
-        with context.begin_transaction():
-            context.run_migrations()
+        try:
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(:k)"), {"k": _MIGRATION_LOCK_KEY}
+            )
+            connection.commit()
 
 
 if context.is_offline_mode():

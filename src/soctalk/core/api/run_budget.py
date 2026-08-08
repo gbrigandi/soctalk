@@ -19,7 +19,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, StrictFloat, StrictInt
+from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,7 +114,13 @@ class RunBudgetUpdate(BaseModel):
     must be able to change one without touching the other), so the handler
     requires that AT LEAST ONE field be present instead — an empty body still
     cannot silently clear anything (Codex review, finding 7).
+
+    Unknown fields are rejected, not ignored (#134). A mixed payload — one
+    field spelled right, one wrong — would otherwise apply half of it and
+    return 200, leaving a money ceiling nobody chose and reporting success.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     token_override: StrictInt | None = None
     # StrictFloat, not float: bool is a subclass of int, so a JSON `true`
@@ -390,7 +396,15 @@ async def get_tenant_run_budget(request: Request) -> RunBudgetView:
 
 
 class RunUnlockRequest(BaseModel):
-    """New ceilings for the resumed run. Absent means keep the current one."""
+    """New ceilings for the resumed run. Absent means keep the current one.
+
+    Extra fields are rejected (#134): with them ignored, posting the plausible
+    ``dollars_budget`` instead of ``dollar_budget`` silently became "keep the
+    current ceiling", and the 422 that followed blamed the value the caller
+    never sent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     # Strict for the same reason as RunBudgetUpdate: this is a money field, and
     # a JSON `true` coercing to a $1.00 ceiling is not a rounding error
