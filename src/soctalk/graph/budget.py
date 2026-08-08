@@ -25,6 +25,7 @@ import re
 from typing import Any
 
 import structlog
+from soctalk.core.pricing.names import VERSION_SUFFIX_RE
 from soctalk.core.pricing.usage import canonical_usage
 
 logger = structlog.get_logger()
@@ -55,7 +56,13 @@ _MODEL_PRICES_PER_MTOK: dict[str, dict[str, float]] = {
     "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
     "claude-3-7-sonnet": {"input": 3.0, "output": 15.0},
     "claude-haiku-4": {"input": 1.0, "output": 5.0},
+    "claude-haiku-4-5": {"input": 1.0, "output": 5.0},
     "claude-3-5-haiku": {"input": 0.8, "output": 4.0},
+    # Current families. Their absence is why normalizing alone was not enough:
+    # claude-haiku-4-5-20251001 stripped correctly to claude-haiku-4-5 and then
+    # still missed the table, billing at the $15/$75 fallback (#139).
+    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+    "claude-opus-4-1": {"input": 15.0, "output": 75.0},
     # OpenAI — public list price, $/MTok
     "gpt-4o-mini": {"input": 0.15, "output": 0.6},
     "gpt-4o": {"input": 2.5, "output": 10.0},
@@ -146,15 +153,9 @@ def _warn_unpriced_once(model: str | None, price: dict[str, float]) -> None:
     )
 
 
-_VERSION_SUFFIX_RE = re.compile(
-    # Trailing ``-YYYYMMDD`` (Anthropic style), ``-YYYY-MM-DD`` (OpenAI
-    # style), or the literal ``-latest`` alias. We strip ONLY these
-    # known suffix shapes — never a free-form trailing token — because
-    # variants like ``gpt-4-32k`` or ``gpt-4-vision`` are *different
-    # SKUs* with different pricing and must not be folded into the
-    # base family.
-    r"(?:-(?:\d{8}|\d{4}-\d{2}-\d{2})|-latest)$"
-)
+# Shared with the catalog path so the two cannot drift (#139) — see
+# ``core/pricing/names.py`` for why only known suffix shapes are stripped.
+_VERSION_SUFFIX_RE = VERSION_SUFFIX_RE
 
 
 def _normalize_model(model: str | None, prices: dict[str, dict[str, float]] | None = None) -> str:

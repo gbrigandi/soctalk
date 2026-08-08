@@ -17,6 +17,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import Column, DateTime, Text, text
+from soctalk.core.pricing.names import base_model_id
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Field, SQLModel
@@ -150,39 +151,55 @@ async def lookup(
     for the same protocol, because a gateway's price for a model is not the
     vendor's price for it.
 
+    Each candidate is tried as the exact ID, then as the version-stripped family
+    ID (#139). Exact first so a genuinely distinct dated SKU can be priced
+    separately if one is ever seeded; family second so the dated IDs providers
+    actually return — and that operators are told to pin — do not miss the
+    catalog and get billed at the fail-expensive unknown-model rate.
+
     Runs outside tenant context on purpose — the catalog is install-global, and
     a tenant-scoped read would find nothing.
     """
-    if provider_id:
+    # Exact ID, then the version-stripped family. dict.fromkeys keeps order and
+    # collapses the duplicate when the model carries no version suffix.
+    candidates = list(dict.fromkeys([model, base_model_id(model)]))
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if provider_id:
+            row = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT * FROM model_prices
+                         WHERE provider_kind = :kind
+                           AND provider_id = :pid
+                           AND model = :model
+                         LIMIT 1
+                        """
+                    ),
+                    {"kind": provider_kind, "pid": provider_id, "model": candidate},
+                )
+            ).mappings().first()
+            if row is not None:
+                return ModelPrice(**dict(row))
+
         row = (
             await db.execute(
                 text(
                     """
                     SELECT * FROM model_prices
                      WHERE provider_kind = :kind
-                       AND provider_id = :pid
+                       AND provider_id IS NULL
                        AND model = :model
                      LIMIT 1
                     """
                 ),
-                {"kind": provider_kind, "pid": provider_id, "model": model},
+                {"kind": provider_kind, "model": candidate},
             )
         ).mappings().first()
         if row is not None:
             return ModelPrice(**dict(row))
 
-    row = (
-        await db.execute(
-            text(
-                """
-                SELECT * FROM model_prices
-                 WHERE provider_kind = :kind
-                   AND provider_id IS NULL
-                   AND model = :model
-                 LIMIT 1
-                """
-            ),
-            {"kind": provider_kind, "model": model},
-        )
-    ).mappings().first()
-    return ModelPrice(**dict(row)) if row is not None else None
+    return None

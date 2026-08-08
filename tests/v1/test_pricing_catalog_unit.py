@@ -516,3 +516,66 @@ def test_provider_reported_cost_beats_our_estimate():
     )
     assert state["dollars_used"] == 0.000123
     assert state["cost_basis"] == "provider_reported"
+
+
+# ------------------------------------------------------- model-id normalization
+#
+# #139: the catalog lookup matched the raw model ID exactly, so a dated ID like
+# ``claude-haiku-4-5-20251001`` — the form providers return, and the form
+# operators are told to pin — missed the seeded ``claude-haiku-4-5`` row,
+# resolved ``unknown``, and billed at the $15/$75 fail-expensive fallback.
+# Measured at ~13x on a real run before the fix.
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+        ("claude-3-5-sonnet-20241022", "claude-3-5-sonnet"),
+        ("claude-3-5-sonnet-latest", "claude-3-5-sonnet"),
+        ("gpt-4o-2024-08-06", "gpt-4o"),
+        ("gpt-4o-mini-2024-07-18", "gpt-4o-mini"),
+        # Already a base ID: idempotent.
+        ("claude-haiku-4-5", "claude-haiku-4-5"),
+        ("", ""),
+    ],
+)
+def test_base_model_id_strips_only_version_suffixes(model, expected):
+    from soctalk.core.pricing.names import base_model_id
+
+    assert base_model_id(model) == expected
+
+
+@pytest.mark.parametrize("model", ["gpt-4-32k", "gpt-4-vision", "gpt-4-turbo"])
+def test_base_model_id_never_folds_a_distinct_sku(model):
+    """A wrong strip under-charges silently; a missed strip fails loudly."""
+    from soctalk.core.pricing.names import base_model_id
+
+    assert base_model_id(model) == model
+
+
+def test_the_model_demo_actually_runs_is_priced_not_unknown():
+    """Regression for #139, pinned to the real deployment's model ID.
+
+    demo.soctalk.ai runs ``claude-haiku-4-5-20251001``. Before the fix this
+    resolved to the fail-expensive fallback through BOTH paths: the catalog
+    matched exactly and missed, and the legacy table normalized correctly but
+    had no ``claude-haiku-4-5`` row to land on.
+    """
+    normalized = budget._normalize_model("claude-haiku-4-5-20251001")
+    assert normalized == "claude-haiku-4-5"
+    assert normalized in budget._MODEL_PRICES_PER_MTOK
+
+    rates = budget._MODEL_PRICES_PER_MTOK[normalized]
+    fallback, _ = budget._unknown_model_cost()
+    assert rates != fallback, "priced model must not resolve to the fallback rate"
+    assert rates == {"input": 1.0, "output": 5.0}
+
+
+def test_seeded_families_cover_the_shipped_model_defaults():
+    """Normalizing is not enough if the table lacks the current families.
+
+    This is the half of #139 that the regex fix alone would have missed.
+    """
+    for family in ("claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-1"):
+        assert family in budget._MODEL_PRICES_PER_MTOK, f"{family} unpriced"

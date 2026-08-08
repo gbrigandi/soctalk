@@ -59,6 +59,9 @@ ADMIN_PASSWORD="${SOCTALK_ADMIN_PASSWORD:-}"
 HOSTNAME_IN="${SOCTALK_HOSTNAME:-}"
 LLM_PROVIDER="${SOCTALK_LLM_PROVIDER:-anthropic}"
 LLM_API_KEY="${SOCTALK_LLM_API_KEY:-}"
+# Endpoint for OpenAI-compatible gateways and self-hosted models. Empty for
+# first-party providers, which know their own endpoint (#138).
+LLM_BASE_URL="${SOCTALK_LLM_BASE_URL:-}"
 
 KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
 
@@ -102,6 +105,7 @@ Flags:
   --chart-dir <path>      install from a local chart dir instead of OCI (appliance)
   --values-file <path>    use a pre-rendered values.yaml (appliance/unattended)
   --llm-key-file <path>   read the LLM key from a file instead of env/prompt
+  --llm-base-url <url>    endpoint for openai-compatible / self-hosted models
   --onboard-env <path>    onboard a tenant from a sourced env file (appliance)
   --onboard-demo          onboard a "demo" tenant after install
   --skip-preflight        skip the host preflight checks
@@ -111,6 +115,7 @@ Flags:
 
 Env: SOCTALK_MSSP_NAME, SOCTALK_ADMIN_EMAIL, SOCTALK_ADMIN_PASSWORD,
      SOCTALK_HOSTNAME, SOCTALK_LLM_PROVIDER, SOCTALK_LLM_API_KEY,
+     SOCTALK_LLM_BASE_URL (required for openai-compatible providers),
      SOCTALK_CHART_REF, SOCTALK_CHART_VERSION, SOCTALK_HELM_TIMEOUT,
      SOCTALK_ASSUME_YES (auto-set when all three required vars above
      are present, so curl|bash unattended flows don't need -y)
@@ -201,9 +206,25 @@ check_firewalld() {
   return 1
 }
 
+# An "openai-compatible" provider names a protocol, not an endpoint. Without a
+# base URL the runtime falls back to api.openai.com — the one endpoint the
+# operator has just said they are not using — and the install reports success
+# while every triage run 401s on first contact (#138). Fail here instead: the
+# whole point of choosing "compatible" is that the endpoint is elsewhere.
+validate_llm_endpoint() {
+  case "$(printf '%s' "$LLM_PROVIDER" | tr '[:upper:]' '[:lower:]')" in
+    openai-compatible|openai_compatible|compatible|self-hosted|self_hosted)
+      [[ -n "$LLM_BASE_URL" ]] || die \
+        "SOCTALK_LLM_PROVIDER='$LLM_PROVIDER' needs an endpoint: set SOCTALK_LLM_BASE_URL (or pass --llm-base-url). Without it SocTalk would call https://api.openai.com/v1 and every triage run would fail with 401."
+      ;;
+  esac
+}
+
 preflight() {
   log "Preflight checks"
   local fail=0
+
+  validate_llm_endpoint
 
   [[ "$(uname -s)" == "Linux" ]] || die "this installer is Linux-only. On Windows/macOS use the VM appliance: https://soctalk.github.io/soctalk-docs/downloads"
 
@@ -457,7 +478,13 @@ ingress:
     customer: $host_q
 defaults:
   llm:
-    provider: $(yaml_sq "$LLM_PROVIDER")
+    provider: $(yaml_sq "$LLM_PROVIDER")$(
+      # camelCase to match the chart key (charts/soctalk-system/values.yaml
+      # defaults.llm.baseUrl); snake_case here would render a key the chart
+      # ignores, leaving the OpenAI default in place — the exact silent
+      # failure this is meant to remove.
+      [[ -n "$LLM_BASE_URL" ]] && printf '\n    baseUrl: %s' "$(yaml_sq "$LLM_BASE_URL")"
+    )
 tenantProvisioning:
   # Explicit null-map guard: helm merges an empty tenantProvisioning block
   # (which happens when none of the SOCTALK_TENANT_* env vars below are set)
@@ -680,6 +707,7 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --demo) MODE="demo"; ASSUME_YES="true";;  # usage promises non-interactive (#108)
+      --llm-base-url) LLM_BASE_URL="$2"; shift;;
       --chart-version) CHART_VERSION="$2"; shift;;
       --chart-dir) CHART_DIR="$2"; MODE="values-file"; shift;;
       --values-file) VALUES_FILE="$2"; MODE="values-file"; shift;;
