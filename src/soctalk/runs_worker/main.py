@@ -406,17 +406,7 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         # ignored for claimed runs.
         **_tokens_budget_kv(claim.get("tokens_budget")),
         "dollars_used": float(claim.get("dollars_used") or 0.0),
-        # Per-run dollar budget precedence (highest to lowest):
-        #   1. ``SOCTALK_CASE_RUN_DOLLAR_BUDGET`` env var, **if positive**
-        #      — operator override for the whole worker; useful for
-        #      tightening the cap below the DB policy default. A
-        #      non-positive value is treated as "ignore" rather than
-        #      "no budget" so an operator typo like ``=0`` or ``=-1``
-        #      doesn't halt every claimed run before any work is done.
-        #   2. Claim payload ``dollars_budget`` (if positive) — the DB
-        #      row, which typically reflects the per-investigation
-        #      policy.
-        #   3. Unset → ``token_budget.ensure`` falls back to $5.
+        # The run row is the only source; see _dollars_budget_kv.
         **_dollars_budget_kv(claim.get("dollars_budget")),
         # Rates this run is priced at, frozen when the run was created (#125).
         # Absent for a run created before the column existed, or by an API that
@@ -506,44 +496,18 @@ def _dollars_budget_kv(claim_dollars_budget: Any) -> dict[str, float]:
     Returns ``{"dollars_budget": value}`` or ``{}`` (let
     ``token_budget.ensure`` pick the default).
 
-    The CLAIM WINS (#128). It used to be the other way round, and that made the
-    run row a lie: the row kept its 5.0 column default while the worker enforced
-    whatever env said, so a run capped at $0.0005 displayed $5 to the API, the
-    UI and the flight recorder. The claim value is resolved from policy and
-    stamped on the row at run creation, so preferring it makes the row the
-    single source of truth and removes the rollout needed to change a budget.
-
-    Env stays as the fallback for installs that carry no per-run value yet, and
-    a disagreement is logged rather than silently resolved: migration v1_0043
-    copies the rendered column into policy so the two normally agree, but an
-    operator who set the env directly is about to see different behaviour and
-    should be told (Codex review, finding 1).
+    The run row is the ONLY source. It is resolved from policy and stamped at
+    run creation, so it is both what the operator set and what every reader of
+    the row sees. SOCTALK_CASE_RUN_DOLLAR_BUDGET used to override it, which is
+    how a run capped at $0.0005 came to display $5 to the API, the UI and the
+    flight recorder; that env var is gone rather than demoted to a fallback,
+    because a second source of truth is exactly what produced the drift.
     """
     try:
         claim_v = float(claim_dollars_budget) if claim_dollars_budget is not None else 0.0
     except (TypeError, ValueError):
         claim_v = 0.0
-
-    env_v = 0.0
-    env_raw = os.environ.get("SOCTALK_CASE_RUN_DOLLAR_BUDGET")
-    if env_raw:
-        try:
-            env_v = float(env_raw)
-        except ValueError:
-            env_v = 0.0
-
-    if claim_v > 0:
-        if env_v > 0 and env_v != claim_v:
-            logger.warning(
-                "dollar_budget_env_ignored env=%s claim=%s "
-                "(the run's own budget wins since #128; drop the env var)",
-                env_v,
-                claim_v,
-            )
-        return {"dollars_budget": claim_v}
-    if env_v > 0:
-        return {"dollars_budget": env_v}
-    return {}
+    return {"dollars_budget": claim_v} if claim_v > 0 else {}
 
 
 async def _flush_replay_events(

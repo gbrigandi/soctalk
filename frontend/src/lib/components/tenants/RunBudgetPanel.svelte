@@ -271,7 +271,7 @@
 			<div>
 				<dt class="opacity-60">Used today</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-spend">
-					{num(budget.spend_24h_tokens)} tokens · {money(budget.spend_24h_dollars)}
+					{num(budget.spend_today_tokens)} tokens · {money(budget.spend_today_dollars)}
 				</dd>
 			</div>
 			<div>

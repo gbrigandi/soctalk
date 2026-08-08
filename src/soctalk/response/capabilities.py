@@ -105,6 +105,13 @@ class ResponseCapability:
     approval: ApprovalPolicy
     description: str
     handler: Handler
+    # Param keys the handler actually reads. Authoring-time validation rejects
+    # anything else, so a typo (``note`` for ``body``) fails when the playbook is
+    # written instead of silently producing an empty action at execution time.
+    # None means the handler takes free-form params and no check is applied.
+    # Presence/emptiness stays a runtime concern: annotate_investigation
+    # deliberately tolerates an absent body and annotates what fired instead.
+    allowed_params: frozenset[str] | None = None
 
 
 async def _annotate_investigation(
@@ -266,6 +273,7 @@ RESPONSE_CAPABILITIES: dict[str, ResponseCapability] = {
             approval=ApprovalPolicy.AUTONOMOUS,
             description="Write a system note on the investigation (local only).",
             handler=_annotate_investigation,
+            allowed_params=frozenset({"body"}),
         ),
         ResponseCapability(
             name="notify_webhook",
@@ -288,6 +296,7 @@ RESPONSE_CAPABILITIES: dict[str, ResponseCapability] = {
                 "action endpoint (concrete stack behavior lives outside core)."
             ),
             handler=_external_action,
+            allowed_params=frozenset({"endpoint", "action", "payload"}),
         ),
     )
 }

@@ -97,16 +97,15 @@ export interface RunBudget {
 	install_max: number;
 	tenant_override: number | null;
 	effective: number;
-	spend_24h_tokens: number;
+	spend_today_tokens: number;
 	// Per-run dollar ceiling (#128), same shape as the token one.
 	dollar_install_default: number;
 	dollar_install_max: number;
 	dollar_tenant_override: number | null;
 	dollar_effective: number;
 	// Daily ceilings and remaining headroom (#129). The window is a CALENDAR
-	// day in daily_timezone, not a rolling 24 hours; the spend_24h_* names are
-	// kept only for API compatibility.
-	spend_24h_dollars: number;
+	// day in daily_timezone, not a rolling 24 hours.
+	spend_today_dollars: number;
 	daily_token_cap: number;
 	daily_dollar_cap: number;
 	daily_tokens_remaining: number;

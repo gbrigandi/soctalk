@@ -59,20 +59,26 @@ def test_dollars_claim_now_beats_env(monkeypatch):
     assert _dollars_budget_kv(5.0) == {"dollars_budget": 5.0}
 
 
-def test_dollars_env_is_the_fallback_when_the_claim_carries_nothing(monkeypatch):
-    """Installs with no per-run value yet keep working off env."""
+def test_dollars_env_is_ignored_entirely(monkeypatch):
+    """The run row is the ONLY source for the per-run dollar ceiling.
+
+    The env var used to win, then became a fallback; it is now gone. A second
+    source of truth is what let a run capped at $0.0005 display $5 to the API,
+    the UI and the flight recorder, so there is deliberately no way to set this
+    outside the run row.
+    """
     monkeypatch.setenv("SOCTALK_CASE_RUN_DOLLAR_BUDGET", "2.5")
-    assert _dollars_budget_kv(None) == {"dollars_budget": 2.5}
-    assert _dollars_budget_kv(0) == {"dollars_budget": 2.5}
+    assert _dollars_budget_kv(5.0) == {"dollars_budget": 5.0}
+    # No claim value means fall through to ensure()'s default, NOT to the env.
+    assert _dollars_budget_kv(None) == {}
+    assert _dollars_budget_kv(0) == {}
 
 
-def test_dollars_empty_when_neither_is_positive(monkeypatch):
+def test_dollars_empty_when_the_claim_carries_nothing(monkeypatch):
     monkeypatch.delenv("SOCTALK_CASE_RUN_DOLLAR_BUDGET", raising=False)
     assert _dollars_budget_kv(0) == {}
     assert _dollars_budget_kv(None) == {}
-    # An operator typo in the fallback must not zero the ceiling.
-    monkeypatch.setenv("SOCTALK_CASE_RUN_DOLLAR_BUDGET", "notafloat")
-    assert _dollars_budget_kv(None) == {}
+    assert _dollars_budget_kv("nonsense") == {}
 
 
 if __name__ == "__main__":  # pragma: no cover

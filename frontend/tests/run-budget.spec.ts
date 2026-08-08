@@ -24,12 +24,12 @@ function view(override: number | null, dollarOverride: number | null = null) {
 		install_max: INSTALL_MAX,
 		tenant_override: override,
 		effective,
-		spend_24h_tokens: 12345,
+		spend_today_tokens: 12345,
 		dollar_install_default: DOLLAR_DEFAULT,
 		dollar_install_max: DOLLAR_MAX,
 		dollar_tenant_override: dollarOverride,
 		dollar_effective: Math.min(dollarOverride ?? DOLLAR_DEFAULT, DOLLAR_MAX),
-		spend_24h_dollars: 1.25,
+		spend_today_dollars: 1.25,
 		daily_token_cap: 10_000_000,
 		daily_dollar_cap: 50,
 		daily_tokens_remaining: 9_987_655,
@@ -88,10 +88,8 @@ test.describe('Run budget (#103)', () => {
 		await page.route(`**/api/mssp/tenants/${TID}/run-budget`, async (r) => {
 			if (r.request().method() === 'PATCH') {
 				const body = JSON.parse(r.request().postData() || '{}');
-				// The panel sends only CHANGED fields now, and names the token
-				// dimension explicitly; `override` remains a legacy alias.
+				// The panel sends only CHANGED fields, naming each dimension.
 				if ('token_override' in body) override = body.token_override;
-				else if ('override' in body) override = body.override;
 			}
 			await r.fulfill({
 				status: 200,

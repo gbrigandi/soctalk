@@ -78,7 +78,7 @@ class RunBudgetView(BaseModel):
     install_max: int
     tenant_override: int | None
     effective: int
-    spend_24h_tokens: int
+    spend_today_tokens: int
 
     # Per-run dollar ceiling, same shape as the token one.
     dollar_install_default: float = 5.0
@@ -87,9 +87,7 @@ class RunBudgetView(BaseModel):
     dollar_effective: float = 5.0
 
     # Daily (calendar-day, tenant zone) ceilings and what is left of them.
-    # The spend_24h_* names are kept for API compatibility; the WINDOW is a
-    # calendar day since #129, not a rolling 24 hours.
-    spend_24h_dollars: float = 0.0
+    spend_today_dollars: float = 0.0
     daily_token_cap: int = 0
     daily_dollar_cap: float = 0.0
     daily_tokens_remaining: int = 0
@@ -112,14 +110,12 @@ class RunBudgetView(BaseModel):
 class RunBudgetUpdate(BaseModel):
     """Tri-state per field: present = set, present-as-null = clear, absent = unchanged.
 
-    ``override`` is the original token-only field, kept as an alias for one
-    release. With two dimensions, "absent means 422" per field stops working
-    (you must be able to change one without touching the other), so the
-    handler requires that AT LEAST ONE field be present instead — an empty
-    body still cannot silently clear anything (Codex review, finding 7).
+    With multiple dimensions, "absent means 422" per field stops working (you
+    must be able to change one without touching the other), so the handler
+    requires that AT LEAST ONE field be present instead — an empty body still
+    cannot silently clear anything (Codex review, finding 7).
     """
 
-    override: StrictInt | None = None
     token_override: StrictInt | None = None
     # StrictFloat, not float: bool is a subclass of int, so a JSON `true`
     # would coerce to a $1.00 ceiling (Codex review round 2, finding 4).
@@ -181,12 +177,12 @@ async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
         install_max=run_token_budget_max(),
         tenant_override=await _override(db, tenant_id),
         effective=await resolve_run_token_budget(db, tenant_id),
-        spend_24h_tokens=status.spend.tokens,
+        spend_today_tokens=status.spend.tokens,
         dollar_install_default=run_dollar_budget_default(),
         dollar_install_max=run_dollar_budget_max(),
         dollar_tenant_override=await _dollar_override(db, tenant_id),
         dollar_effective=await resolve_run_dollar_budget(db, tenant_id),
-        spend_24h_dollars=round(status.spend.dollars, 6),
+        spend_today_dollars=round(status.spend.dollars, 6),
         daily_token_cap=status.caps.tokens,
         daily_dollar_cap=status.caps.dollars,
         daily_tokens_remaining=status.tokens_remaining,
@@ -228,13 +224,7 @@ async def update_run_budget(
     identity = current_identity(request)
     setf = payload.model_fields_set
 
-    # ``override`` is the legacy token-only name; ``token_override`` is the
-    # explicit one. Both may not disagree in the same request.
-    if "override" in setf and "token_override" in setf:
-        raise HTTPException(
-            422, "send either 'override' (legacy) or 'token_override', not both"
-        )
-    token_present = "override" in setf or "token_override" in setf
+    token_present = "token_override" in setf
     dollar_present = "dollar_override" in setf
     daily_token_present = "daily_token_override" in setf
     daily_dollar_present = "daily_dollar_override" in setf
@@ -248,7 +238,7 @@ async def update_run_budget(
             "null to clear)",
         )
 
-    token_value = payload.token_override if "token_override" in setf else payload.override
+    token_value = payload.token_override
     dollar_value = payload.dollar_override
     daily_token_value = payload.daily_token_override
     daily_dollar_value = payload.daily_dollar_override
