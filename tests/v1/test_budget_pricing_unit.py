@@ -115,3 +115,27 @@ def test_unknown_cost_custom_json_fallback(monkeypatch):
 def test_unknown_cost_malformed_falls_back_to_opus(monkeypatch):
     monkeypatch.setenv("SOCTALK_UNKNOWN_MODEL_COST", "banana")
     assert _dollars("mystery") == pytest.approx(15.0)
+
+
+def test_overlay_prices_a_model_absent_from_the_builtin_table(monkeypatch):
+    """A tenant-supplied price is what the model is billed at (#121).
+
+    The numbers are the exact call shape from a live run that mispriced: 1,316
+    input tokens (1,024 of them cache reads) and 2,252 output tokens on a
+    gateway-served ``deepseek-v4-flash``. Unpriced it recorded $0.174816 at the
+    $15/$75 fallback; at the model's real list price it is a tenth of a cent,
+    and that gap is what halts runs on spend that never happened.
+    """
+    unpriced = budget._cost_dollars(1316, 2252, "deepseek-v4-flash", cache_read_tokens=1024)
+    assert unpriced == pytest.approx(0.174816, abs=1e-6)
+
+    monkeypatch.setenv(
+        "SOCTALK_MODEL_PRICES",
+        '{"deepseek-v4-flash": {"input": 0.206, "output": 0.412}}',
+    )
+    budget._price_cache = None
+    priced = budget._cost_dollars(1316, 2252, "deepseek-v4-flash", cache_read_tokens=1024)
+
+    # (292 uncached + 1024 cache-read at 10%) input + 2252 output, at 0.206/0.412.
+    assert priced == pytest.approx(0.001009, abs=1e-6)
+    assert unpriced > priced * 100

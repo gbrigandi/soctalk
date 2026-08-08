@@ -175,6 +175,16 @@ spec:
             - name: SOCTALK_CASE_RUN_DOLLAR_BUDGET
               value: {{ .Values.llm.dollarBudgetPerRun | quote }}
             {{- end }}
+            {{- /*
+              Per-tenant price overlay (issue #121). graph/budget.py overlays this
+              onto the built-in table, so a model the table has never heard of is
+              billed at what the tenant actually pays instead of the $15/$75
+              fail-expensive fallback. Emitted only when the tenant sets one.
+            */}}
+            {{- if .Values.llm.modelPrices }}
+            - name: SOCTALK_MODEL_PRICES
+              value: {{ .Values.llm.modelPrices | toJson | quote }}
+            {{- end }}
             {{- /* Per-run TOKEN budget is DB-resolved at run creation (#103),
                    no longer rendered per-tenant to worker env. The
                    SOCTALK_CASE_RUN_TOKEN_BUDGET env stays an install-global

@@ -333,6 +333,51 @@ def validate_llm_tiers(raw: dict[str, Any] | None) -> dict[str, dict[str, Any]] 
     return out
 
 
+def validate_llm_model_prices(
+    raw: dict[str, Any] | None,
+) -> dict[str, dict[str, float]] | None:
+    """Validate an ``llm_model_prices`` payload, returning it normalized (or None).
+
+    Shape is ``{"model-prefix": {"input": x, "output": y}}`` in USD per million
+    tokens, matching what ``graph.budget`` parses out of ``SOCTALK_MODEL_PRICES``
+    so a value accepted here cannot be rejected by the worker at startup.
+
+    Raises ``ValueError`` on a malformed entry rather than persisting it: a price
+    that silently fails to parse leaves the tenant on the fail-expensive fallback,
+    which is the exact failure this config exists to prevent (issue #121).
+    """
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("llm_model_prices must be an object keyed by model")
+    out: dict[str, dict[str, float]] = {}
+    for model, block in raw.items():
+        # Never echo the key or the block in an error: a malformed client could
+        # pass pasted credential material as a model KEY, and the message lands
+        # in an API 422 and a UI toast. Report position and reason only.
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("llm_model_prices has an empty model key")
+        if not isinstance(block, dict) or "input" not in block or "output" not in block:
+            raise ValueError(
+                f"llm_model_prices entry {len(out) + 1} must carry 'input' and 'output'"
+            )
+        priced: dict[str, float] = {}
+        for field in ("input", "output"):
+            try:
+                value = float(block[field])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"llm_model_prices entry {len(out) + 1}: {field} must be a number"
+                ) from None
+            if value < 0:
+                raise ValueError(
+                    f"llm_model_prices entry {len(out) + 1}: {field} must not be negative"
+                )
+            priced[field] = value
+        out[model.strip()] = priced
+    return out
+
+
 class IntegrationConfig(SQLModel, table=True):
     """Per-tenant integration endpoints (Wazuh URL, TheHive URL, etc.).
 
@@ -419,6 +464,16 @@ class IntegrationConfig(SQLModel, table=True):
     # runs-worker env only when set.
     llm_dollar_budget_per_run: float | None = Field(default=None)
     llm_token_budget_per_run: int | None = Field(default=None)
+    # Per-tenant price overlay for models absent from the built-in table
+    # (issue #121). NULL = no overlay, so an unpriced model falls back to the
+    # fail-expensive $15/$75 rate, which is right for an unknown hosted API and
+    # actively wrong for the cheap or self-hosted backends the BYO-LLM config
+    # exists to point at. Shape ``{"model-prefix": {"input": x, "output": y}}``
+    # in USD per million tokens, validated by ``validate_llm_model_prices``.
+    # Rendered into the runs-worker env as SOCTALK_MODEL_PRICES only when set.
+    llm_model_prices: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
     # Plaintext LLM API key material stored in Postgres.
     #
     # MVP path: needed for the cross-cluster L1→L2 deploy, where the
