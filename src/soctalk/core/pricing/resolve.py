@@ -26,6 +26,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.ir.policies import resolve_cost_tracking
 from soctalk.core.pricing import catalog
 from soctalk.core.tenancy.models import IntegrationConfig
 
@@ -248,9 +249,20 @@ async def resolve_run_prices(
     if not models:
         return None
 
+    # Never fatal: an unreadable policy must not stop a run being created, and
+    # defaulting to "tracking on" is the safe side — it keeps ceilings enforced
+    # rather than silently switching them off.
+    try:
+        cost_tracking = await resolve_cost_tracking(db, tenant_id)
+    except Exception:  # noqa: BLE001
+        cost_tracking = True
+
     return {
         "version": SNAPSHOT_VERSION,
         "currency": "USD",
         "resolved_at": datetime.now(UTC).isoformat(),
+        # Travels with the run so the worker enforces the policy that was in
+        # force when the run started, without a database read per budget check.
+        "cost_tracking": cost_tracking,
         "models": models,
     }

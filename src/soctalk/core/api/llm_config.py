@@ -33,8 +33,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.llm_provider import normalize_provider
-from soctalk.core.pricing import gate
-from soctalk.core.pricing.resolve import resolve_run_prices
+from soctalk.core.pricing import catalog, gate
+from soctalk.core.pricing.resolve import (
+    provider_id_for,
+    provider_kind_for,
+    resolve_run_prices,
+)
 from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
@@ -293,6 +297,75 @@ def _soctalk_system_ns() -> str:
     return os.getenv("SOCTALK_SYSTEM_NS", "soctalk-system")
 
 
+class ModelPriceSuggestion(BaseModel):
+    """What the catalog knows about a model, for prefilling the rate fields.
+
+    A convenience, not an authority: ``found=false`` simply means we have
+    nothing to offer and the operator types the rates themselves. The endpoint
+    never invents a number — in particular it will not answer with a vendor's
+    rate for a model reached through a gateway, because a gateway's price for a
+    model is not the vendor's price for it.
+    """
+
+    model: str
+    found: bool
+    input_per_mtok: float | None = None
+    output_per_mtok: float | None = None
+    source: str | None = None
+    as_of: str | None = None
+
+
+@router.get(
+    "/{tenant_id}/llm/price-suggestion",
+    response_model=ModelPriceSuggestion,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def suggest_model_price(
+    tenant_id: UUID,
+    request: Request,
+    model: str,
+    provider: str | None = None,
+    base_url: str | None = None,
+) -> ModelPriceSuggestion:
+    """Catalog rates for ``model``, so the config form can prefill them.
+
+    ``provider``/``base_url`` are accepted because the same model string costs
+    different amounts through different backends; when omitted the tenant's
+    stored config is used, which is what an operator editing one field expects.
+    """
+    session = _db(request)
+    async with tenant_context(session, tenant_id):
+        cfg = (await session.execute(
+            select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant_id)
+        )).scalar_one_or_none()
+
+    name = (model or "").strip()
+    if not name:
+        raise HTTPException(422, "model is required")
+
+    prov = provider if provider is not None else (cfg.llm_provider if cfg else None)
+    url = base_url if base_url is not None else (cfg.llm_base_url if cfg else None)
+
+    row = await catalog.lookup(
+        session,
+        provider_kind=provider_kind_for(prov, url),
+        model=name,
+        provider_id=provider_id_for(url),
+    )
+    if row is None:
+        return ModelPriceSuggestion(model=name, found=False)
+
+    dims = row.dimensions or {}
+    return ModelPriceSuggestion(
+        model=name,
+        found=True,
+        input_per_mtok=catalog.dollars_per_mtok(dims, "input_per_mtok_microusd"),
+        output_per_mtok=catalog.dollars_per_mtok(dims, "output_per_mtok_microusd"),
+        source=row.source,
+        as_of=row.as_of.isoformat() if row.as_of else None,
+    )
+
+
 @router.get(
     "/{tenant_id}/llm",
     response_model=LlmConfigRead,
@@ -426,29 +499,6 @@ async def update_tenant_llm(
                 cfg.llm_model_prices = validate_llm_model_prices(payload.model_prices)
             except ValueError as e:
                 raise HTTPException(422, f"invalid model_prices: {e}") from e
-        # A model must be priced before it can be used, unless this tenant has
-        # cost accounting turned off. Checked HERE — after the merge, before any
-        # side effect — so a rejection leaves nothing half-applied: no Secret
-        # written, no provisioning job queued, no chart re-render.
-        #
-        # Configuration time is the right gate. Refusing at run time would stop
-        # triage silently, which is what the pricing feature exists to prevent;
-        # refusing here puts the model name in front of the person choosing it.
-        unpriced = await gate.unpriced_models(
-            session,
-            tenant_id,
-            provider=cfg.llm_provider,
-            base_url=cfg.llm_base_url,
-            models={
-                "model": cfg.llm_model,
-                "fast_model": cfg.llm_fast_model,
-                "reasoning_model": cfg.llm_reasoning_model,
-            },
-            overrides=cfg.llm_model_prices,
-        )
-        if unpriced:
-            raise HTTPException(422, gate.unpriced_message(unpriced))
-
         # Per-tier backends (issue #12): None = unchanged; {} = clear to
         # single-provider (NULL); a map = validate + replace. Replacement
         # assignment (not in-place) so the JSONB column is marked dirty.
@@ -461,6 +511,38 @@ async def update_tenant_llm(
                 cfg.llm_tiers = validate_llm_tiers(merged_tiers)
             except ValueError as e:
                 raise HTTPException(422, f"invalid llm_tiers: {e}") from e
+        # A model must be priced before it can be used, unless this tenant has
+        # cost accounting turned off.
+        #
+        # Placed AFTER the tiers merge on purpose: runtime prices per-tier
+        # backends too, so a gate that ran before this saw a config the worker
+        # never uses and let an unpriced tier model through to be billed at the
+        # fail-expensive fallback (Codex review, finding 2). Still before any
+        # side effect, so a rejection leaves nothing half-applied — no Secret
+        # written, no provisioning job queued.
+        #
+        # Configuration time is the right gate. Refusing at run time would stop
+        # triage silently, which is what the pricing feature exists to prevent;
+        # refusing here puts the model name in front of the person choosing it.
+        gated_models = {
+            "model": cfg.llm_model,
+            "fast_model": cfg.llm_fast_model,
+            "reasoning_model": cfg.llm_reasoning_model,
+        }
+        for tier_name, tier in (cfg.llm_tiers or {}).items():
+            if isinstance(tier, dict) and tier.get("model"):
+                gated_models[f"tier:{tier_name}"] = tier["model"]
+        unpriced = await gate.unpriced_models(
+            session,
+            tenant_id,
+            provider=cfg.llm_provider,
+            base_url=cfg.llm_base_url,
+            models=gated_models,
+            overrides=cfg.llm_model_prices,
+        )
+        if unpriced:
+            raise HTTPException(422, gate.unpriced_message(unpriced))
+
         # A tier on a DIFFERENT provider than the tenant's primary must carry its
         # own key (the tenant mounts only the primary credential). Re-check
         # whenever the primary provider OR the tiers changed — NOT only when

@@ -522,16 +522,37 @@ def track(state: dict[str, Any], response: Any) -> int:
     return state["tokens_used"]
 
 
+def cost_tracking_off(state: dict[str, Any]) -> bool:
+    """True when this run's tenant has dollar accounting turned off.
+
+    Carried on the run's price snapshot, which is stamped at creation and
+    already reaches the worker — so the answer travels with the run rather than
+    needing a database read per budget check, and a mid-run policy change
+    cannot alter how an in-flight run is enforced.
+    """
+    snapshot = state.get("price_snapshot")
+    if isinstance(snapshot, dict) and snapshot.get("cost_tracking") is False:
+        return True
+    return False
+
+
 def over_budget(state: dict[str, Any]) -> bool:
     """True when EITHER the token cap OR the dollar cap is exceeded.
 
     Either-or rather than and-and: dollars is the load-bearing cap, but
     keeping the token check lets the existing 30k-token demo override
     still bite even when the model name isn't priced.
+
+    With cost tracking off the dollar half is skipped entirely: the figure it
+    would compare against is an estimate the operator has said not to keep, and
+    halting a run on it would be enforcing a number nobody is counting. Tokens
+    still bound the work — they are measured, not inferred.
     """
     ensure(state)
     if int(state["tokens_used"]) >= int(state["tokens_budget"]):
         return True
+    if cost_tracking_off(state):
+        return False
     if float(state["dollars_used"]) >= float(state["dollars_budget"]):
         return True
     return False

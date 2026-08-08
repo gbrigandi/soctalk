@@ -548,3 +548,58 @@ async def test_price_gate_is_inert_when_tracking_is_off(monkeypatch):
         provider="self-hosted", base_url="http://localhost:8000/v1",
         models={"model": "some-local-gguf"},
     ) == []
+
+
+# --- cost tracking must actually reach runtime enforcement -----------------
+#
+# Codex review, finding 5: `cost_tracking_enabled` gated only the config-time
+# check. `over_budget` still halted on dollars, and the UI checkbox said
+# "Dollar ceilings are not enforced" — which was false. The answer now travels
+# on the run's price snapshot, so it is fixed at run creation and a mid-run
+# policy change cannot re-enforce an in-flight run.
+
+
+def _state(dollars_used: float, dollars_budget: float, *, tracking: bool | None):
+    snapshot = {"version": 1, "models": {}}
+    if tracking is not None:
+        snapshot["cost_tracking"] = tracking
+    return {
+        "tokens_used": 0,
+        "tokens_budget": 1_000_000,
+        "dollars_used": dollars_used,
+        "dollars_budget": dollars_budget,
+        "price_snapshot": snapshot,
+    }
+
+
+def test_dollar_cap_halts_when_cost_tracking_is_on():
+    from soctalk.graph.budget import over_budget
+
+    assert over_budget(_state(5.0, 5.0, tracking=True)) is True
+
+
+def test_dollar_cap_is_inert_when_cost_tracking_is_off():
+    from soctalk.graph.budget import over_budget
+
+    assert over_budget(_state(999.0, 5.0, tracking=False)) is False
+
+
+def test_token_cap_still_bites_with_cost_tracking_off():
+    """Tokens are measured, not inferred, so they bound work either way."""
+    from soctalk.graph.budget import over_budget
+
+    st = _state(0.0, 5.0, tracking=False)
+    st["tokens_used"] = st["tokens_budget"]
+    assert over_budget(st) is True
+
+
+def test_a_snapshot_without_the_flag_still_enforces_dollars():
+    """Runs created before this shipped must not silently stop being capped."""
+    from soctalk.graph.budget import over_budget
+
+    assert over_budget(_state(5.0, 5.0, tracking=None)) is True
+    st = {
+        "tokens_used": 0, "tokens_budget": 1_000_000,
+        "dollars_used": 5.0, "dollars_budget": 5.0,
+    }
+    assert over_budget(st) is True
