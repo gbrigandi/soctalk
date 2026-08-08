@@ -1020,3 +1020,27 @@ def test_chart_fqdn_egress_covers_worker_and_adapter():  # codex P1 on #109
         "soctalk-adapter",
         "soctalk-runs-worker",
     }
+
+
+def test_price_overlay_is_no_longer_rendered_into_worker_env():
+    """The env overlay is retired (#125), so the chart must stop carrying it.
+
+    Prices now resolve from the catalog when a run is created and ride on the
+    run row, so a price correction takes effect on the next run instead of
+    needing a helm upgrade and a pod restart. A tenant that still has an
+    override keeps it — the resolver reads the column directly — but nothing
+    renders it into ``SOCTALK_MODEL_PRICES`` any more.
+    """
+    t = _make_tenant("poc")
+    priced = _make_integration(t.id)
+    priced.llm_model_prices = {"deepseek-v4-flash": {"input": 0.206, "output": 0.412}}
+    v = render_tenant_values(
+        tenant=t,
+        integration=priced,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    assert "modelPrices" not in v["llm"]

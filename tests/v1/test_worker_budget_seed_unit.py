@@ -47,10 +47,32 @@ def test_tokens_empty_when_nothing_positive(monkeypatch):
     assert _tokens_budget_kv(None) == {}
 
 
-def test_dollars_env_overrides_claim(monkeypatch):
-    # Parity check for the pre-existing dollar path.
+def test_dollars_claim_now_beats_env(monkeypatch):
+    """Inverted deliberately in #128.
+
+    Env used to win, which made the run row a lie: the row kept its 5.0 column
+    default while the worker enforced the env value, so a run capped at $0.0005
+    displayed $5 everywhere. The claim value is resolved from policy and stamped
+    on the row at creation, so preferring it makes the row authoritative.
+    """
     monkeypatch.setenv("SOCTALK_CASE_RUN_DOLLAR_BUDGET", "2.5")
-    assert _dollars_budget_kv(5.0) == {"dollars_budget": 2.5}
+    assert _dollars_budget_kv(5.0) == {"dollars_budget": 5.0}
+
+
+def test_dollars_env_is_the_fallback_when_the_claim_carries_nothing(monkeypatch):
+    """Installs with no per-run value yet keep working off env."""
+    monkeypatch.setenv("SOCTALK_CASE_RUN_DOLLAR_BUDGET", "2.5")
+    assert _dollars_budget_kv(None) == {"dollars_budget": 2.5}
+    assert _dollars_budget_kv(0) == {"dollars_budget": 2.5}
+
+
+def test_dollars_empty_when_neither_is_positive(monkeypatch):
+    monkeypatch.delenv("SOCTALK_CASE_RUN_DOLLAR_BUDGET", raising=False)
+    assert _dollars_budget_kv(0) == {}
+    assert _dollars_budget_kv(None) == {}
+    # An operator typo in the fallback must not zero the ceiling.
+    monkeypatch.setenv("SOCTALK_CASE_RUN_DOLLAR_BUDGET", "notafloat")
+    assert _dollars_budget_kv(None) == {}
 
 
 if __name__ == "__main__":  # pragma: no cover

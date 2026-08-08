@@ -2,7 +2,7 @@
 
 Both the worker-claim path (``worker_runs.claim_run``) and the chat
 turn handler (``core/api/chat.messages_post``) need to refuse new work
-once the tenant has blown through its rolling 24h spend ceiling. The
+once the tenant has blown through its DAILY spend ceiling. The
 query unions two cost sources:
 
 * ``investigation_runs`` — LLM spend incurred by the worker on the
@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import structlog
 from sqlalchemy import text
@@ -34,8 +36,140 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = structlog.get_logger()
 
 
+# ---------------------------------------------------------------------------
+# When "today" starts
+# ---------------------------------------------------------------------------
+#
+# The ceilings are CALENDAR-DAY, not a sliding 24h sum. A rolling window never
+# fully clears -- each charge ages out on its own anniversary -- so a tenant
+# that blew its ceiling at 14:00 is still partly blocked at 13:00 the next day,
+# and there is no moment an operator can point at and say "it resets then".
+# A calendar day resets in one step at local midnight, which is what "daily
+# budget" means to the person paying it.
+#
+# The zone matters for an MSSP whose customers span regions: midnight has to be
+# the customer's midnight, not the cluster's. Install default via env, per
+# tenant via the same policy mechanism as the ceilings themselves.
+
+BUDGET_DAY_TZ_KEY = "budget_day_timezone"
+
+
+def install_budget_day_timezone() -> str:
+    """Install default zone for the day boundary. UTC unless configured."""
+    raw = (os.getenv("SOCTALK_BUDGET_DAY_TIMEZONE") or "").strip()
+    return raw if _is_valid_timezone(raw) else "UTC"
+
+
+def _is_valid_timezone(name: str) -> bool:
+    """True when Postgres would accept this zone name.
+
+    Checked in Python rather than by asking the database, because an invalid
+    zone makes the spend query itself raise -- and a cap that errors is a cap
+    that stops all triage.
+    """
+    if not name:
+        return False
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        return False
+    return True
+
+
+_DAY_WINDOW_SQL = """
+    SELECT (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)               AS day_start,
+           ((date_trunc('day', now() AT TIME ZONE :tz) + interval '1 day')
+             AT TIME ZONE :tz)                                                        AS day_end
+"""
+
+
+async def postgres_knows_timezone(db: AsyncSession, name: str) -> bool:
+    """Whether POSTGRES recognises this zone name.
+
+    Python's tzdata and the database's can differ between images, and the zone
+    is used inside the spend query: a name Python accepts but Postgres does not
+    makes that query raise, and a cap that errors is a cap that stops all
+    triage (Codex review round 4, finding 3).
+    """
+    row = (
+        await db.execute(
+            text("SELECT EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = :n)"),
+            {"n": name},
+        )
+    ).scalar()
+    return bool(row)
+
+
+async def db_day_window(db: AsyncSession, tz_name: str) -> tuple[datetime, datetime]:
+    """(start, end) of the current day, computed by the SAME engine and clock
+    that scopes the spend.
+
+    Deriving the displayed reset time from Postgres rather than from the app
+    process removes the skew: otherwise the API could report old-day spend with
+    a next-day reset, or refuse one more claim after the time it just told the
+    operator it would clear (Codex review round 4, finding 2).
+    """
+    row = (
+        await db.execute(text(_DAY_WINDOW_SQL), {"tz": tz_name})
+    ).mappings().first()
+    if row is None:  # pragma: no cover - defensive
+        return day_window(tz_name)
+    return row["day_start"], row["day_end"]
+
+
+async def resolve_budget_day_timezone(db: AsyncSession, tenant_id: UUID) -> str:
+    """The zone whose midnight resets this tenant's daily ceilings."""
+    default = install_budget_day_timezone()
+    try:
+        from soctalk.core.ir.policies import effective_policy
+
+        eff = await effective_policy(db, tenant_id)
+    except Exception:  # noqa: BLE001
+        return default
+    raw = eff.get(BUDGET_DAY_TZ_KEY)
+    if raw is None:
+        return default
+    if not isinstance(raw, str) or not _is_valid_timezone(raw.strip()):
+        logger.warning(
+            "budget_day_timezone_invalid", tenant_id=str(tenant_id), value=str(raw)[:40]
+        )
+        return default
+    name = raw.strip()
+    try:
+        if not await postgres_knows_timezone(db, name):
+            logger.warning(
+                "budget_day_timezone_unknown_to_postgres",
+                tenant_id=str(tenant_id),
+                value=name[:40],
+            )
+            return default
+    except Exception:  # noqa: BLE001 - never let the check itself break the cap
+        return default
+    return name
+
+
+def day_window(tz_name: str, at: datetime | None = None) -> tuple[datetime, datetime]:
+    """(start, end) of the calendar day containing ``at`` in ``tz_name``, in UTC.
+
+    ``end`` is when the ceiling next resets, which is the thing an operator
+    staring at a blocked queue actually wants to know.
+
+    ``at`` exists so the DST behaviour is testable at a chosen instant rather
+    than only at whatever "now" happens to be; production passes nothing.
+    """
+    zone = ZoneInfo(tz_name) if _is_valid_timezone(tz_name) else ZoneInfo("UTC")
+    local_now = at.astimezone(zone) if at is not None else datetime.now(zone)
+    start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Add a day on the LOCAL clock, so a DST transition shortens or lengthens
+    # the day rather than landing an hour off.
+    next_local = (start_local + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return start_local.astimezone(UTC), next_local.astimezone(UTC)
+
+
 def tenant_daily_token_cap() -> int:
-    """Per-tenant rolling 24h token ceiling. Default 10M."""
+    """Per-tenant daily token ceiling. Default 10M."""
     raw = os.getenv("SOCTALK_TENANT_DAILY_TOKEN_CAP", "")
     try:
         v = int(raw) if raw else 10_000_000
@@ -45,7 +179,7 @@ def tenant_daily_token_cap() -> int:
 
 
 def tenant_daily_dollar_cap() -> float:
-    """Per-tenant rolling 24h dollar ceiling. Default $50."""
+    """Per-tenant daily dollar ceiling. Default $50."""
     raw = os.getenv("SOCTALK_TENANT_DAILY_DOLLAR_CAP", "")
     try:
         v = float(raw) if raw else 50.0
@@ -76,18 +210,24 @@ _DAILY_SPEND_SQL = """
     SELECT COALESCE(SUM(s.tokens), 0)::bigint AS tokens,
            COALESCE(SUM(s.dollars), 0)::float AS dollars
     FROM (
-        SELECT tokens_used::bigint AS tokens,
-               dollars_used        AS dollars
-          FROM investigation_runs
+        -- Worker spend comes from the LEDGER, not from investigation_runs.
+        -- The runs table only has lifecycle timestamps, so bucketing on them
+        -- charged a run that spent before midnight to the new day, and let an
+        -- unlock after midnight drag yesterday's spend forward. Ledger rows are
+        -- stamped when the spend was reported and nothing moves them after
+        -- (#129, Codex review round 4, finding 1).
+        SELECT tokens_delta::bigint AS tokens,
+               dollars_delta        AS dollars
+          FROM llm_spend_ledger
          WHERE tenant_id = :t
-           AND COALESCE(ended_at, lease_expires_at, claimed_at, started_at)
-               >= now() - interval '24 hours'
+           AND occurred_at
+               >= (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)
         UNION ALL
         SELECT (COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0))::bigint AS tokens,
                COALESCE(dollars, 0.0)                                     AS dollars
           FROM chat_messages
          WHERE tenant_id = :t
-           AND created_at >= now() - interval '24 hours'
+           AND created_at >= (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)
     ) s
 """
 
@@ -104,7 +244,10 @@ async def get_tenant_daily_spend(
     UUID (defence in depth).
     """
     row = (
-        await db.execute(text(_DAILY_SPEND_SQL), {"t": str(tenant_id)})
+        await db.execute(
+            text(_DAILY_SPEND_SQL),
+            {"t": str(tenant_id), "tz": await resolve_budget_day_timezone(db, tenant_id)},
+        )
     ).mappings().first()
     if row is None:
         return TenantDailySpend(tokens=0, dollars=0.0)
@@ -123,19 +266,20 @@ async def assert_tenant_daily_cap_ok(
     chat returns 429). ``source`` is logged so we can tell which path
     tripped the breaker.
     """
-    spend = await get_tenant_daily_spend(db, tenant_id)
-    if spend.cap_hit:
+    status = await get_tenant_daily_status(db, tenant_id)
+    if status.cap_hit:
         logger.warning(
             "tenant_daily_cap_hit",
             source=source,
             tenant_id=str(tenant_id),
-            tokens_24h=spend.tokens,
-            token_cap=tenant_daily_token_cap(),
-            dollars_24h=round(spend.dollars, 4),
-            dollar_cap=tenant_daily_dollar_cap(),
+            tokens_24h=status.spend.tokens,
+            token_cap=status.caps.tokens,
+            dollars_24h=round(status.spend.dollars, 4),
+            dollar_cap=status.caps.dollars,
+            reason=status.reason,
         )
         return None
-    return spend
+    return status.spend
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +336,7 @@ _MSSP_USER_DAILY_SPEND_SQL = """
       JOIN conversations c ON c.id = m.conversation_id
      WHERE c.scope = 'mssp_fleet'
        AND c.created_by_user_id = :u
-       AND m.created_at >= now() - interval '24 hours'
+       AND m.created_at >= (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)
 """
 
 
@@ -201,7 +345,10 @@ async def get_mssp_user_daily_spend(
 ) -> MsspUserDailySpend:
     row = (
         await db.execute(
-            text(_MSSP_USER_DAILY_SPEND_SQL), {"u": str(user_id)}
+            text(_MSSP_USER_DAILY_SPEND_SQL),
+            # The fleet-scope cap is not tenant-scoped, so it uses the install
+            # zone; there is no single customer whose midnight would apply.
+            {"u": str(user_id), "tz": install_budget_day_timezone()},
         )
     ).mappings().first()
     if row is None:
@@ -228,3 +375,136 @@ async def assert_mssp_user_daily_cap_ok(
         )
         return None
     return spend
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant daily ceilings (#129)
+# ---------------------------------------------------------------------------
+#
+# The env values above stay meaningful as the INSTALL default. What they were
+# not is per-tenant: every other budget in the system is, so an MSSP could not
+# give one customer more headroom without raising it for all of them.
+
+DAILY_TOKEN_CAP_KEY = "max_tokens_per_24h"
+DAILY_DOLLAR_CAP_KEY = "max_dollars_per_24h"
+
+
+def tenant_daily_token_cap_max() -> int:
+    """Ceiling a tenant override cannot exceed. Generous unless configured."""
+    raw = os.getenv("SOCTALK_TENANT_DAILY_TOKEN_CAP_MAX", "")
+    try:
+        v = int(raw) if raw else 0
+    except ValueError:
+        v = 0
+    return v if v > 0 else 10_000_000_000
+
+
+def tenant_daily_dollar_cap_max() -> float:
+    raw = os.getenv("SOCTALK_TENANT_DAILY_DOLLAR_CAP_MAX", "")
+    try:
+        v = float(raw) if raw else 0.0
+    except ValueError:
+        v = 0.0
+    return v if v > 0 else 100_000.0
+
+
+@dataclass(frozen=True, slots=True)
+class DailyCaps:
+    tokens: int
+    dollars: float
+
+
+async def resolve_tenant_daily_caps(db: AsyncSession, tenant_id: UUID) -> DailyCaps:
+    """Effective daily ceilings: env install default -> tenant override -> clamp.
+
+    Never raises. A cap that cannot be resolved falls back to the install
+    default rather than leaving the tenant uncapped, because failing open on a
+    spend ceiling is the expensive direction.
+    """
+    from soctalk.core.ir.policies import effective_policy
+
+    tokens = tenant_daily_token_cap()
+    dollars = tenant_daily_dollar_cap()
+    try:
+        eff = await effective_policy(db, tenant_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("tenant_daily_caps_unresolved", tenant_id=str(tenant_id))
+        return DailyCaps(tokens=tokens, dollars=dollars)
+
+    raw_tokens = eff.get(DAILY_TOKEN_CAP_KEY)
+    if raw_tokens is not None:
+        try:
+            v = int(raw_tokens)
+            if v > 0:
+                tokens = min(v, tenant_daily_token_cap_max())
+        except (TypeError, ValueError):
+            logger.warning("tenant_daily_token_cap_unreadable", value=raw_tokens)
+
+    raw_dollars = eff.get(DAILY_DOLLAR_CAP_KEY)
+    if raw_dollars is not None:
+        try:
+            v = float(raw_dollars)
+            if v > 0 and v == v and v != float("inf"):
+                dollars = min(v, tenant_daily_dollar_cap_max())
+        except (TypeError, ValueError):
+            logger.warning("tenant_daily_dollar_cap_unreadable", value=raw_dollars)
+
+    return DailyCaps(tokens=tokens, dollars=dollars)
+
+
+@dataclass(frozen=True, slots=True)
+class DailyCapStatus:
+    """Spend against the effective ceilings, with the headroom left.
+
+    Exists because a tripped 24h cap is otherwise invisible: the worker claim
+    simply returns nothing, which is indistinguishable from an idle queue.
+    """
+
+    spend: TenantDailySpend
+    caps: DailyCaps
+    # Zone whose midnight resets this, and the next reset instant. Defaults
+    # keep older callers constructing this with two arguments working.
+    timezone: str = "UTC"
+    resets_at: datetime | None = None
+
+    @property
+    def token_cap_hit(self) -> bool:
+        return self.spend.tokens >= self.caps.tokens
+
+    @property
+    def dollar_cap_hit(self) -> bool:
+        return self.spend.dollars >= self.caps.dollars
+
+    @property
+    def cap_hit(self) -> bool:
+        return self.token_cap_hit or self.dollar_cap_hit
+
+    @property
+    def tokens_remaining(self) -> int:
+        return max(0, self.caps.tokens - self.spend.tokens)
+
+    @property
+    def dollars_remaining(self) -> float:
+        return max(0.0, self.caps.dollars - self.spend.dollars)
+
+    @property
+    def reason(self) -> str | None:
+        """Which dimension tripped, for an operator reading it cold."""
+        if self.token_cap_hit:
+            return f"tokens {self.spend.tokens}/{self.caps.tokens} today"
+        if self.dollar_cap_hit:
+            return f"spend ${self.spend.dollars:.4f}/${self.caps.dollars:.2f} today"
+        return None
+
+
+async def get_tenant_daily_status(
+    db: AsyncSession, tenant_id: UUID
+) -> DailyCapStatus:
+    """Spend and the ceilings it is measured against, in one read."""
+    tz = await resolve_budget_day_timezone(db, tenant_id)
+    return DailyCapStatus(
+        spend=await get_tenant_daily_spend(db, tenant_id),
+        caps=await resolve_tenant_daily_caps(db, tenant_id),
+        timezone=tz,
+        resets_at=(await db_day_window(db, tz))[1],
+    )

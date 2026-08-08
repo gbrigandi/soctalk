@@ -330,49 +330,19 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		expect(handles.patchCount()).toBe(0);
 	});
 
-	test('setting then clearing a run budget PATCHes the value then null', async ({ page }) => {
+	test('the deprecated dollar-budget control is gone from this panel', async ({ page }) => {
+		// It moved to the run-budget resource (#128). It used to render to worker
+		// env, so changing it needed a rollout and the value never reached the run
+		// row -- the row showed $5 while the worker enforced something else. The
+		// API now 422s on the field, so leaving the control here would make an
+		// operator's save fail.
 		const handles = await mockApi(page);
 		await page.goto(`/tenants/${TENANT_ID}`);
 		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
-		// Read view shows the default when the cap is null.
-		await expect(page.getByTestId('llm-dollar-budget')).toContainText('default');
-
-		// Set a $ cap.
-		await page.getByTestId('llm-edit').click();
-		await expect(page.locator('input[name="dollar_budget"]')).toHaveValue('');
-		await page.fill('input[name="dollar_budget"]', '2.5');
-		let patchReq = page.waitForRequest(
-			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
-		);
-		await page.getByTestId('llm-save').click();
-		await patchReq;
-		await expect.poll(() => handles.lastPatchBody()).not.toBeNull();
-		expect(handles.lastPatchBody()).toEqual({ dollar_budget_per_run: 2.5 });
-		await expect(page.getByTestId('llm-dollar-budget')).toContainText('$2.5');
-
-		// Clear it — blank over a set value sends null (revert to default).
-		await page.getByTestId('llm-edit').click();
-		await expect(page.locator('input[name="dollar_budget"]')).toHaveValue('2.5');
-		await page.fill('input[name="dollar_budget"]', '');
-		patchReq = page.waitForRequest(
-			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
-		);
-		await page.getByTestId('llm-save').click();
-		await patchReq;
-		expect(handles.lastPatchBody()).toEqual({ dollar_budget_per_run: null });
-		await expect(page.getByTestId('llm-dollar-budget')).toContainText('default');
-	});
-
-	test('dollar budget of 0 is rejected (would kill every run)', async ({ page }) => {
-		const handles = await mockApi(page);
-		await page.goto(`/tenants/${TENANT_ID}`);
-		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+		await expect(page.getByTestId('llm-dollar-budget')).toHaveCount(0);
 
 		await page.getByTestId('llm-edit').click();
-		await page.fill('input[name="dollar_budget"]', '0');
-		await page.getByTestId('llm-save').click();
-
-		await expect(page.getByTestId('llm-form-error')).toContainText('at least 0.10');
+		await expect(page.locator('input[name="dollar_budget"]')).toHaveCount(0);
 		expect(handles.patchCount()).toBe(0);
 	});
 

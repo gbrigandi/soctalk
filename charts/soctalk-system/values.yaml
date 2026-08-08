@@ -74,6 +74,12 @@ defaults:
   # fleet-wide.
   runTokenBudget:
     max: ""
+  # Install hard cap for the per-tenant per-run DOLLAR budget (#128).
+  runDollarBudget:
+    max: ""
+  # Zone whose midnight resets the daily spend ceilings (#129). Empty -> UTC.
+  # An IANA name, e.g. "Europe/Madrid". Tenants can override it in policy.
+  budgetDayTimezone: ""
   llm:
     provider: openai-compatible
     baseUrl: https://api.openai.com/v1

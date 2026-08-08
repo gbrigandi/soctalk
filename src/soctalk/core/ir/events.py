@@ -63,6 +63,7 @@ class EventKind(str, Enum):
     AUTO_CLOSED = "auto_closed"
     BUDGET_WARNING = "budget_warning"
     BUDGET_HALT = "budget_halt"
+    BUDGET_UNLOCK = "budget_unlock"
 
     # Pipeline replay beats (issue #72). Emitted by the triage pipeline —
     # graph nodes via the worker event sink, plus the L1 close paths — and
