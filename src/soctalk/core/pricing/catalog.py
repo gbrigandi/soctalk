@@ -138,6 +138,16 @@ def dollars_per_mtok(dimensions: dict[str, Any], key: str) -> float | None:
     return float(raw) / MICRO
 
 
+async def count(db: AsyncSession) -> int:
+    """How many entries the catalog holds, install-wide.
+
+    Used to tell "this one model is unknown" from "pricing was never seeded",
+    which read identically at the point of failure but need different fixes.
+    """
+    row = await db.execute(text("SELECT count(*) FROM model_prices"))
+    return int(row.scalar_one() or 0)
+
+
 async def lookup(
     db: AsyncSession,
     *,

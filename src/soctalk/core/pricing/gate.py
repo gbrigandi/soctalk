@@ -82,6 +82,23 @@ async def unpriced_models(
             return []
         if row is None:
             missing.append(f"{role}: {name}")
+
+    if missing:
+        # An ENTIRELY empty catalog is a different fault from one unknown model
+        # among many known ones: it means the install never seeded, and the
+        # operator will read "no price is known for gpt-4o" as "gpt-4o is
+        # exotic" rather than "pricing was never set up". Still refuse — the
+        # rule is the rule — but say which situation this is.
+        try:
+            total = await catalog.count(db)
+        except Exception:  # noqa: BLE001
+            total = None
+        if total == 0:
+            logger.warning(
+                "price_gate_catalog_empty",
+                hint="run 'soctalk-prices import --apply'; db-init does this "
+                "automatically on a normal install",
+            )
     return missing
 
 

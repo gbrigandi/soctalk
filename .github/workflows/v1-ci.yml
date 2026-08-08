@@ -109,6 +109,16 @@ jobs:
           # CI uses a temporary alembic.ini override pointed at the test Postgres.
           alembic -x database_url="postgresql://soctalk_admin:soctalk_admin@localhost:5432/soctalk" upgrade head
 
+      - name: Seed the model price catalog
+        env:
+          DATABASE_URL_MSSP: postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk
+        run: |
+          # Mirrors what db-init does on a real install: a model must be priced
+          # before it can be used, so an unseeded catalog means every LLM config
+          # change is refused. Without this the suite tests a state no install
+          # is ever in.
+          soctalk-prices import --apply
+
       - name: Run integration tests (RLS isolation)
         env:
           # In-process alembic reversibility tests (test_migration_v1_00*.py)
