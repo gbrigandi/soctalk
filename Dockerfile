@@ -26,6 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy project files
 COPY pyproject.toml README.md ./
+# The price catalog seed is force-included into the wheel (pyproject), so it
+# must be in the build context or the build fails at metadata generation.
+COPY data/pricing ./data/pricing
 COPY src/soctalk ./src/soctalk
 # pyproject declares soctalk_wire + soctalk_entities as packages too, and
 # soctalk.core.ir.graph imports soctalk_entities at startup — without these the
