@@ -5,6 +5,8 @@ parts that must hold when the database is unavailable or half-migrated.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from soctalk.core.ir import policies
@@ -483,3 +485,66 @@ def test_unpriced_message_names_every_way_out():
     assert "soctalk-prices import" in msg   # seed the catalog
     assert "override" in msg                # or state the rate yourself
     assert "off" in msg.lower()             # or stop counting dollars
+
+
+@pytest.mark.asyncio
+async def test_price_gate_calls_the_catalog_with_a_valid_signature(monkeypatch):
+    """Exercises the lookup path, not just the message.
+
+    The first version of this gate called ``provider_id_for(provider, base_url)``
+    — two arguments to a one-argument function. Every unit test passed because
+    none of them reached the lookup; CI's integration suite caught it as a
+    TypeError on eight unrelated LLM-PATCH tests. Cover the call itself.
+    """
+    from soctalk.core.pricing import gate
+
+    seen: dict[str, object] = {}
+
+    async def fake_lookup(db, *, provider_kind, model, provider_id=None):
+        seen["kind"] = provider_kind
+        seen["model"] = model
+        seen["pid"] = provider_id
+        return None  # unpriced
+
+    monkeypatch.setattr(gate.catalog, "lookup", fake_lookup)
+
+    async def tracking_on(_db, _tenant):
+        return True
+
+    monkeypatch.setattr(gate, "resolve_cost_tracking", tracking_on)
+
+    missing = await gate.unpriced_models(
+        object(),
+        uuid.uuid4(),
+        provider="openai-compatible",
+        base_url="https://novarouteai.com/v1",
+        models={"model": "claude-x-9", "fast_model": None},
+    )
+
+    assert missing == ["model: claude-x-9"]
+    assert seen["model"] == "claude-x-9"
+    # provider_id carries the VENDOR BEHIND A GATEWAY, read from the host — a
+    # gateway's price for a model is not the vendor's price for it. First-party
+    # endpoints are identified by provider_kind instead and carry no id.
+    assert seen["pid"] == "novaroute"
+
+
+@pytest.mark.asyncio
+async def test_price_gate_is_inert_when_tracking_is_off(monkeypatch):
+    from soctalk.core.pricing import gate
+
+    async def boom(*a, **k):  # must never be reached
+        raise AssertionError("catalog consulted while cost tracking is off")
+
+    monkeypatch.setattr(gate.catalog, "lookup", boom)
+
+    async def tracking_off(_db, _tenant):
+        return False
+
+    monkeypatch.setattr(gate, "resolve_cost_tracking", tracking_off)
+
+    assert await gate.unpriced_models(
+        object(), uuid.uuid4(),
+        provider="self-hosted", base_url="http://localhost:8000/v1",
+        models={"model": "some-local-gguf"},
+    ) == []

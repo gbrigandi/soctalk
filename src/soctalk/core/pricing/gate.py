@@ -59,7 +59,7 @@ async def unpriced_models(
         return []
 
     kind = provider_kind_for(provider, base_url)
-    pid = provider_id_for(provider, base_url)
+    pid = provider_id_for(base_url)
     overlay = overrides or {}
 
     missing: list[str] = []
