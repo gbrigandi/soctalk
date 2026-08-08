@@ -363,18 +363,43 @@ def validate_llm_model_prices(
             )
         priced: dict[str, float] = {}
         for field in ("input", "output"):
+            raw_value = block[field]
+            # bool is a subclass of int, so float(True) is 1.0 and would store a
+            # price of $1/Mtok from a JSON `true`. Reject it as the wrong type
+            # rather than coercing (Codex review round 2, finding 2).
+            if isinstance(raw_value, bool):
+                raise ValueError(
+                    f"llm_model_prices entry {len(out) + 1}: {field} must be a number"
+                )
             try:
-                value = float(block[field])
+                value = float(raw_value)
             except (TypeError, ValueError):
                 raise ValueError(
                     f"llm_model_prices entry {len(out) + 1}: {field} must be a number"
                 ) from None
+            # NaN and infinity survive float() and would reach JSONB, where they
+            # are not representable, and from there a price snapshot. NaN also
+            # defeats every comparison downstream, so a run priced with one can
+            # never halt.
+            if value != value or value in (float("inf"), float("-inf")):
+                raise ValueError(
+                    f"llm_model_prices entry {len(out) + 1}: {field} must be finite"
+                )
             if value < 0:
                 raise ValueError(
                     f"llm_model_prices entry {len(out) + 1}: {field} must not be negative"
                 )
             priced[field] = value
-        out[model.strip()] = priced
+        key = model.strip()
+        # Keys are normalized by stripping, so "gpt-4o" and " gpt-4o " collapse
+        # to the same model. Silently keeping the last one would mis-price a
+        # tenant while the caller believes both entries took effect
+        # (Codex review round 3, finding 3).
+        if key in out:
+            raise ValueError(
+                f"llm_model_prices entry {len(out) + 1} duplicates an earlier model"
+            )
+        out[key] = priced
     return out
 
 

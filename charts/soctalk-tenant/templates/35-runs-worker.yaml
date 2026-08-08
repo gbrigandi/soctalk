@@ -181,10 +181,6 @@ spec:
               billed at what the tenant actually pays instead of the $15/$75
               fail-expensive fallback. Emitted only when the tenant sets one.
             */}}
-            {{- if .Values.llm.modelPrices }}
-            - name: SOCTALK_MODEL_PRICES
-              value: {{ .Values.llm.modelPrices | toJson | quote }}
-            {{- end }}
             {{- /* Per-run TOKEN budget is DB-resolved at run creation (#103),
                    no longer rendered per-tenant to worker env. The
                    SOCTALK_CASE_RUN_TOKEN_BUDGET env stays an install-global

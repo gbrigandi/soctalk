@@ -4,7 +4,17 @@
   "title": "SocTalk Tenant Chart Values",
   "description": "Validation schema for soctalk-tenant Helm chart values (rendered by SocTalk controller from per-tenant config).",
   "type": "object",
-  "required": ["tenant", "branding", "llm", "components", "networkPolicies", "resourceQuota", "limitRange", "adapter", "runsWorker"],
+  "required": [
+    "tenant",
+    "branding",
+    "llm",
+    "components",
+    "networkPolicies",
+    "resourceQuota",
+    "limitRange",
+    "adapter",
+    "runsWorker"
+  ],
   "additionalProperties": false,
   "properties": {
     "wazuh": {
@@ -24,73 +34,128 @@
     },
     "tenant": {
       "type": "object",
-      "required": ["id", "slug", "msspId", "installId"],
+      "required": [
+        "id",
+        "slug",
+        "msspId",
+        "installId"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id":          { "type": "string", "format": "uuid" },
-        "slug":        { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63 },
-        "msspId":      { "type": "string", "format": "uuid" },
-        "installId":   { "type": "string", "format": "uuid" },
-        "displayName": { "type": "string" }
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "msspId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "installId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "displayName": {
+          "type": "string"
+        }
       }
     },
     "branding": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "appName":         { "type": "string" },
-        "logoUrl":         { "type": "string" },
-        "primaryColor":    { "type": "string", "pattern": "^#[0-9A-Fa-f]{3,8}$" },
-        "secondaryColor":  { "type": "string", "pattern": "^#[0-9A-Fa-f]{3,8}$" },
-        "favicon":         { "type": "string" }
+        "appName": {
+          "type": "string"
+        },
+        "logoUrl": {
+          "type": "string"
+        },
+        "primaryColor": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{3,8}$"
+        },
+        "secondaryColor": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{3,8}$"
+        },
+        "favicon": {
+          "type": "string"
+        }
       }
     },
     "llm": {
       "type": "object",
-      "required": ["provider", "baseUrl", "model", "apiKeyRef"],
+      "required": [
+        "provider",
+        "baseUrl",
+        "model",
+        "apiKeyRef"
+      ],
       "additionalProperties": false,
       "properties": {
-        "provider": { "enum": ["openai-compatible", "anthropic"] },
-        "baseUrl":  { "type": "string", "format": "uri" },
-        "temperature": { "description": "Tenant-global default sampling temperature for the router/supervisor tier. Rendered to SOCTALK_LLM_TEMPERATURE.", "type": "number", "minimum": 0, "maximum": 2 },
-        "maxTokens": { "description": "Tenant-global default max output tokens for the router/supervisor tier. Rendered to SOCTALK_LLM_MAX_TOKENS. Capped at a router-appropriate ceiling — a schema-constrained decision is small.", "type": "integer", "minimum": 1, "maximum": 8192 },
-        "model":    { "type": "string", "minLength": 1 },
+        "provider": {
+          "enum": [
+            "openai-compatible",
+            "anthropic"
+          ]
+        },
+        "baseUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "temperature": {
+          "description": "Tenant-global default sampling temperature for the router/supervisor tier. Rendered to SOCTALK_LLM_TEMPERATURE.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "maxTokens": {
+          "description": "Tenant-global default max output tokens for the router/supervisor tier. Rendered to SOCTALK_LLM_MAX_TOKENS. Capped at a router-appropriate ceiling \u2014 a schema-constrained decision is small.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
         "apiKeyRef": {
           "type": "object",
-          "required": ["namespace", "name", "key"],
+          "required": [
+            "namespace",
+            "name",
+            "key"
+          ],
           "additionalProperties": false,
           "properties": {
-            "namespace": { "type": "string" },
-            "name":      { "type": "string" },
-            "key":       { "type": "string" }
+            "namespace": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
           }
         },
         "apiKey": {
-          "description": "Plaintext LLM API key. When non-empty the chart creates the Secret referenced by apiKeyRef in the release namespace; when empty the Secret must be pre-provisioned (legacy in-cluster mode). Passes through the AgentJob spec — same trust boundary as the agent runtime token.",
+          "description": "Plaintext LLM API key. When non-empty the chart creates the Secret referenced by apiKeyRef in the release namespace; when empty the Secret must be pre-provisioned (legacy in-cluster mode). Passes through the AgentJob spec \u2014 same trust boundary as the agent runtime token.",
           "type": "string"
         },
         "secretChecksum": {
-          "description": "sha256 of the LLM key material (primary + per-tier own keys), salted with the tenant id. Rendered as a runs-worker pod-template annotation (checksum/llm-secret) so a key-only rotation — which leaves the rest of the values byte-identical — still rolls the worker (env-from-secret does not hot-reload). Not a secret; a sha256 of a high-entropy key is not reversible.",
+          "description": "sha256 of the LLM key material (primary + per-tier own keys), salted with the tenant id. Rendered as a runs-worker pod-template annotation (checksum/llm-secret) so a key-only rotation \u2014 which leaves the rest of the values byte-identical \u2014 still rolls the worker (env-from-secret does not hot-reload). Not a secret; a sha256 of a high-entropy key is not reversible.",
           "type": "string"
         },
         "dollarBudgetPerRun": {
-          "description": "Per-tenant case-run dollar spend cap. Rendered to SOCTALK_CASE_RUN_DOLLAR_BUDGET; enforced in graph/budget.py (over_budget → supervisor CLOSE). Absent = the worker default. Floor $0.10 so a sub-cent cap can't halt the run after one call.",
+          "description": "Per-tenant case-run dollar spend cap. Rendered to SOCTALK_CASE_RUN_DOLLAR_BUDGET; enforced in graph/budget.py (over_budget \u2192 supervisor CLOSE). Absent = the worker default. Floor $0.10 so a sub-cent cap can't halt the run after one call.",
           "type": "number",
-          "minimum": 0.10,
+          "minimum": 0.1,
           "maximum": 10000
-        },
-        "modelPrices": {
-          "description": "Per-tenant price overlay (issue #121), USD per million tokens, keyed by model prefix. Rendered to SOCTALK_MODEL_PRICES; graph/budget.py overlays it onto the built-in table so a model absent from that table bills at what the tenant actually pays instead of the fail-expensive $15/$75 fallback. Absent = no overlay.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "input": { "type": "number", "minimum": 0 },
-              "output": { "type": "number", "minimum": 0 }
-            },
-            "required": ["input", "output"],
-            "additionalProperties": false
-          }
         },
         "tokenBudgetPerRun": {
           "description": "Per-tenant case-run token cap. Rendered to SOCTALK_CASE_RUN_TOKEN_BUDGET. Absent = the worker default.",
@@ -103,8 +168,12 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "fast": { "$ref": "#/$defs/llmTier" },
-            "reasoning": { "$ref": "#/$defs/llmTier" }
+            "fast": {
+              "$ref": "#/$defs/llmTier"
+            },
+            "reasoning": {
+              "$ref": "#/$defs/llmTier"
+            }
           }
         },
         "tierKeys": {
@@ -112,8 +181,12 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "fast": { "type": "string" },
-            "reasoning": { "type": "string" }
+            "fast": {
+              "type": "string"
+            },
+            "reasoning": {
+              "type": "string"
+            }
           }
         }
       }
@@ -127,8 +200,12 @@
           "description": "Full L1 API URL the adapter POSTs heartbeats + events to (e.g. https://l1.mssp.example). When set, overrides adapter.api.serviceHost/servicePort. Empty string disables the cross-cluster path (collapsed-tier mode).",
           "type": "string",
           "anyOf": [
-            { "format": "uri" },
-            { "maxLength": 0 }
+            {
+              "format": "uri"
+            },
+            {
+              "maxLength": 0
+            }
           ]
         },
         "adapterToken": {
@@ -141,12 +218,19 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["ip", "hostnames"],
+            "required": [
+              "ip",
+              "hostnames"
+            ],
             "properties": {
-              "ip": { "type": "string" },
+              "ip": {
+                "type": "string"
+              },
               "hostnames": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -165,57 +249,91 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" },
-            "manager":    { "$ref": "#/$defs/componentBlock" },
+            "enabled": {
+              "type": "boolean"
+            },
+            "manager": {
+              "$ref": "#/$defs/componentBlock"
+            },
             "indexer": {
               "allOf": [
-                { "$ref": "#/$defs/componentBlock" },
+                {
+                  "$ref": "#/$defs/componentBlock"
+                },
                 {
                   "type": "object",
                   "properties": {
                     "jvm": {
                       "type": "object",
                       "additionalProperties": false,
-                      "properties": { "heap": { "type": "string" } }
+                      "properties": {
+                        "heap": {
+                          "type": "string"
+                        }
+                      }
                     }
                   }
                 }
               ]
             },
-            "dashboard": { "$ref": "#/$defs/componentBlock" }
+            "dashboard": {
+              "$ref": "#/$defs/componentBlock"
+            }
           }
         },
         "thehive": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled":    { "type": "boolean" },
-            "resources":  { "$ref": "#/$defs/resources" },
-            "cassandra":  { "$ref": "#/$defs/componentBlock" }
+            "enabled": {
+              "type": "boolean"
+            },
+            "resources": {
+              "$ref": "#/$defs/resources"
+            },
+            "cassandra": {
+              "$ref": "#/$defs/componentBlock"
+            }
           }
         },
         "cortex": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled":        { "type": "boolean" },
-            "resources":      { "$ref": "#/$defs/resources" },
-            "elasticsearch":  { "$ref": "#/$defs/componentBlock" },
-            "analyzers":      { "type": "array", "items": { "type": "string" } }
+            "enabled": {
+              "type": "boolean"
+            },
+            "resources": {
+              "$ref": "#/$defs/resources"
+            },
+            "elasticsearch": {
+              "$ref": "#/$defs/componentBlock"
+            },
+            "analyzers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         },
         "misp": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean", "const": false }
+            "enabled": {
+              "type": "boolean",
+              "const": false
+            }
           }
         },
         "linuxep": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" }
+            "enabled": {
+              "type": "boolean"
+            }
           },
           "description": "linux-ep simulator subchart gate. Only 'poc' profile installs it; false for 'persistent' + 'provided'."
         }
@@ -223,15 +341,37 @@
     },
     "networkPolicies": {
       "type": "object",
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "additionalProperties": false,
       "properties": {
-        "enabled":         { "type": "boolean" },
-        "allowedLlmHosts": { "type": "array", "items": { "type": "string" } },
-        "llmEgressPort":   { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port the runs-worker egress policy opens for outbound LLM calls. Controller-derived from the LLM base URL (443 https / 80 http / explicit port) so self-hosted endpoints on non-standard ports aren't blocked." },
-        "extraLlmEgressPorts": { "description": "Additional distinct LLM egress ports opened for the runs-worker when per-tier backends (llm.tiers) use ports other than llmEgressPort (issue #12). Empty/absent for single-provider tenants.", "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
+        "enabled": {
+          "type": "boolean"
+        },
+        "allowedLlmHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "llmEgressPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "TCP port the runs-worker egress policy opens for outbound LLM calls. Controller-derived from the LLM base URL (443 https / 80 http / explicit port) so self-hosted endpoints on non-standard ports aren't blocked."
+        },
+        "extraLlmEgressPorts": {
+          "description": "Additional distinct LLM egress ports opened for the runs-worker when per-tier backends (llm.tiers) use ports other than llmEgressPort (issue #12). Empty/absent for single-provider tenants.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
         "externalSiemHosts": {
-          "description": "FQDNs of the externally-provided Wazuh indexer + API the adapter must reach (deduped). Populated for the 'provided' profile; empty for in-cluster profiles. Feeds the Cilium FQDN egress allow-list (matchName entries). Items are bare hostnames — no scheme, no port.",
+          "description": "FQDNs of the externally-provided Wazuh indexer + API the adapter must reach (deduped). Populated for the 'provided' profile; empty for in-cluster profiles. Feeds the Cilium FQDN egress allow-list (matchName entries). Items are bare hostnames \u2014 no scheme, no port.",
           "type": "array",
           "items": {
             "type": "string",
@@ -243,144 +383,302 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" }
+            "enabled": {
+              "type": "boolean"
+            }
           }
         }
       }
     },
     "resourceQuota": {
       "type": "object",
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "requests": { "$ref": "#/$defs/resourceQuantities" },
-        "limits":   { "$ref": "#/$defs/resourceQuantities" },
-        "persistentVolumeClaims": { "type": "string" },
-        "pods":                    { "type": "string" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "requests": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "limits": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "persistentVolumeClaims": {
+          "type": "string"
+        },
+        "pods": {
+          "type": "string"
+        }
       }
     },
     "limitRange": {
       "type": "object",
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "additionalProperties": false,
       "properties": {
-        "enabled":         { "type": "boolean" },
-        "defaults":        { "$ref": "#/$defs/resourceQuantities" },
-        "defaultRequests": { "$ref": "#/$defs/resourceQuantities" },
-        "max":             { "$ref": "#/$defs/resourceQuantities" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "defaults": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "defaultRequests": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "max": {
+          "$ref": "#/$defs/resourceQuantities"
+        }
       }
     },
     "agentIngress": {
       "type": "object",
-      "required": ["hostname"],
+      "required": [
+        "hostname"
+      ],
       "additionalProperties": false,
       "properties": {
-        "hostname": { "type": "string", "format": "hostname" },
+        "hostname": {
+          "type": "string",
+          "format": "hostname"
+        },
         "tls": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "issuerRef":  { "type": "string" },
-            "secretName": { "type": "string" }
+            "issuerRef": {
+              "type": "string"
+            },
+            "secretName": {
+              "type": "string"
+            }
           }
         }
       }
     },
     "adapter": {
       "type": "object",
-      "required": ["image", "resources", "tokenSecretRef", "api"],
+      "required": [
+        "image",
+        "resources",
+        "tokenSecretRef",
+        "api"
+      ],
       "additionalProperties": false,
       "properties": {
         "image": {
           "type": "object",
-          "required": ["repository", "tag"],
+          "required": [
+            "repository",
+            "tag"
+          ],
           "additionalProperties": false,
           "properties": {
-            "repository": { "type": "string", "minLength": 1 },
-            "tag":        { "type": "string", "minLength": 1 },
-            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] },
-            "command":    { "type": "array", "items": { "type": "string" } },
-            "args":       { "type": "array", "items": { "type": "string" } }
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            },
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         },
-        "resources": { "$ref": "#/$defs/resources" },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
         "api": {
           "type": "object",
-          "required": ["serviceHost", "servicePort"],
+          "required": [
+            "serviceHost",
+            "servicePort"
+          ],
           "additionalProperties": false,
           "properties": {
-            "serviceHost": { "type": "string", "minLength": 1 },
-            "servicePort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "serviceHost": {
+              "type": "string",
+              "minLength": 1
+            },
+            "servicePort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
           }
         },
         "tokenSecretRef": {
           "type": "object",
-          "required": ["name", "key"],
+          "required": [
+            "name",
+            "key"
+          ],
           "additionalProperties": false,
           "properties": {
-            "name":      { "type": "string" },
-            "key":       { "type": "string" }
+            "name": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
           }
         },
         "readinessProbe": {
-          "type": ["object", "null"]
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "wazuhIndexer": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "url":         { "type": "string" },
-            "credsSecret": { "type": "string" },
-            "usernameKey": { "type": "string" },
-            "passwordKey": { "type": "string" },
-            "verifySsl":   { "type": "boolean" },
-            "minSeverity": { "type": "integer", "minimum": 0, "maximum": 15 }
+            "url": {
+              "type": "string"
+            },
+            "credsSecret": {
+              "type": "string"
+            },
+            "usernameKey": {
+              "type": "string"
+            },
+            "passwordKey": {
+              "type": "string"
+            },
+            "verifySsl": {
+              "type": "boolean"
+            },
+            "minSeverity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 15
+            }
           }
         }
       }
     },
     "namespaceLabels": {
       "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "runsWorker": {
       "type": "object",
-      "required": ["enabled", "image", "resources", "tokenSecretRef"],
+      "required": [
+        "enabled",
+        "image",
+        "resources",
+        "tokenSecretRef"
+      ],
       "additionalProperties": false,
       "properties": {
-        "enabled":  { "type": "boolean" },
-        "replicas": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
         "image": {
           "type": "object",
-          "required": ["repository", "tag"],
+          "required": [
+            "repository",
+            "tag"
+          ],
           "additionalProperties": false,
           "properties": {
-            "repository": { "type": "string", "minLength": 1 },
-            "tag":        { "type": "string", "minLength": 1 },
-            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
           }
         },
-        "resources": { "$ref": "#/$defs/resources" },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
         "tokenSecretRef": {
           "type": "object",
-          "required": ["name", "key"],
+          "required": [
+            "name",
+            "key"
+          ],
           "additionalProperties": false,
           "properties": {
-            "name": { "type": "string" },
-            "key":  { "type": "string" }
+            "name": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
           }
         },
-        "token":          { "type": "string", "description": "Optional plaintext JWT used by the cross-cluster L2 path; chart materializes tokenSecretRef from this value when non-empty." },
-        "fastModel":      { "type": "string" },
-        "reasoningModel": { "type": "string" },
-        "concurrency": { "type": "integer", "minimum": 1, "description": "Concurrent in-flight investigations per runs-worker process (issue #61). >1 lets a shared self-hosted vLLM/SGLang backend fill its continuous batch (runs execute concurrently, each an independent claim under FOR UPDATE ... SKIP LOCKED). Bound by the backend's max_inputs and KV-cache/VRAM. Rendered as WORKER_RUN_CONCURRENCY only when >1, so the default (1) render is byte-identical to the pre-change chart." },
-        "drainSeconds": { "type": "integer", "minimum": 1, "description": "Seconds to let in-flight runs finish on SIGTERM before cancelling stragglers (the server-side lease reaper requeues any cancelled run). Rendered as WORKER_DRAIN_SECONDS only when concurrency >1." },
+        "token": {
+          "type": "string",
+          "description": "Optional plaintext JWT used by the cross-cluster L2 path; chart materializes tokenSecretRef from this value when non-empty."
+        },
+        "fastModel": {
+          "type": "string"
+        },
+        "reasoningModel": {
+          "type": "string"
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Concurrent in-flight investigations per runs-worker process (issue #61). >1 lets a shared self-hosted vLLM/SGLang backend fill its continuous batch (runs execute concurrently, each an independent claim under FOR UPDATE ... SKIP LOCKED). Bound by the backend's max_inputs and KV-cache/VRAM. Rendered as WORKER_RUN_CONCURRENCY only when >1, so the default (1) render is byte-identical to the pre-change chart."
+        },
+        "drainSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds to let in-flight runs finish on SIGTERM before cancelling stragglers (the server-side lease reaper requeues any cancelled run). Rendered as WORKER_DRAIN_SECONDS only when concurrency >1."
+        },
         "triagePolicies": {
           "type": "object",
           "description": "Declarative triage-policy files (issue #44): filename -> YAML content string. Rendered as ConfigMap soctalk-triage-policies, mounted read-only into the runs-worker, with SOCTALK_TRIAGE_POLICY_DIR pointing at the mount. Content is validated fail-closed by the worker's registry loader at startup (and again by render.py on the controller path); files default to status: shadow until explicitly activated. Empty map (default) renders nothing.",
-          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 65536 },
-          "propertyNames": { "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$", "maxLength": 253 },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$",
+            "maxLength": 253
+          },
           "maxProperties": 32
         },
         "wazuh": {
@@ -388,12 +686,29 @@
           "description": "Wazuh MCP enrichment wiring for the triage graph (issue #109). apiUrl -> WAZUH_URL (manager REST :55000); indexerHost/indexerPort -> the MCP indexer client; credsSecret holds WAZUH_API_USERNAME/WAZUH_API_PASSWORD/INDEXER_USERNAME/INDEXER_PASSWORD (same key layout in wazuh-<slug>-wazuh-creds and tenant-external-siem-creds). Populated per profile by render.py; disabled by default.",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" },
-            "apiUrl": { "type": "string", "maxLength": 500 },
-            "indexerHost": { "type": "string", "maxLength": 253 },
-            "indexerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
-            "credsSecret": { "type": "string", "maxLength": 253 },
-            "verifySsl": { "type": "boolean" }
+            "enabled": {
+              "type": "boolean"
+            },
+            "apiUrl": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "indexerHost": {
+              "type": "string",
+              "maxLength": 253
+            },
+            "indexerPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "credsSecret": {
+              "type": "string",
+              "maxLength": 253
+            },
+            "verifySsl": {
+              "type": "boolean"
+            }
           }
         },
         "demoTiSeeding": {
@@ -403,8 +718,15 @@
         "playbooks": {
           "type": "object",
           "description": "DEPRECATED alias of triagePolicies, accepted for one release. Same shape and semantics.",
-          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 65536 },
-          "propertyNames": { "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$", "maxLength": 253 },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$",
+            "maxLength": 253
+          },
           "maxProperties": 32
         }
       }
@@ -413,46 +735,104 @@
   "$defs": {
     "llmTier": {
       "type": "object",
-      "required": ["provider", "baseUrl", "model"],
+      "required": [
+        "provider",
+        "baseUrl",
+        "model"
+      ],
       "additionalProperties": false,
       "properties": {
-        "provider": { "enum": ["openai", "anthropic"] },
-        "baseUrl":  { "type": "string", "format": "uri" },
-        "model":    { "type": "string", "minLength": 1 },
-        "engine":   { "enum": ["frontier", "openai_compatible", "vllm", "sglang"] },
-        "decodingMode": { "enum": ["auto", "none", "tool_use", "json_schema_strict", "json_object", "guided_json", "guided_grammar"] },
-        "temperature": { "description": "Per-tier sampling temperature override. Rendered to SOCTALK_<TIER>_TEMPERATURE.", "type": "number", "minimum": 0, "maximum": 2 },
-        "maxTokens": { "description": "Per-tier max output tokens override. Rendered to SOCTALK_<TIER>_MAX_TOKENS.", "type": "integer", "minimum": 1, "maximum": 8192 }
+        "provider": {
+          "enum": [
+            "openai",
+            "anthropic"
+          ]
+        },
+        "baseUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "engine": {
+          "enum": [
+            "frontier",
+            "openai_compatible",
+            "vllm",
+            "sglang"
+          ]
+        },
+        "decodingMode": {
+          "enum": [
+            "auto",
+            "none",
+            "tool_use",
+            "json_schema_strict",
+            "json_object",
+            "guided_json",
+            "guided_grammar"
+          ]
+        },
+        "temperature": {
+          "description": "Per-tier sampling temperature override. Rendered to SOCTALK_<TIER>_TEMPERATURE.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "maxTokens": {
+          "description": "Per-tier max output tokens override. Rendered to SOCTALK_<TIER>_MAX_TOKENS.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        }
       }
     },
     "resourceQuantities": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "cpu":    { "type": "string" },
-        "memory": { "type": "string" }
+        "cpu": {
+          "type": "string"
+        },
+        "memory": {
+          "type": "string"
+        }
       }
     },
     "resources": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "requests": { "$ref": "#/$defs/resourceQuantities" },
-        "limits":   { "$ref": "#/$defs/resourceQuantities" }
+        "requests": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "limits": {
+          "$ref": "#/$defs/resourceQuantities"
+        }
       }
     },
     "componentBlock": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled":     { "type": "boolean" },
-        "resources":   { "$ref": "#/$defs/resources" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
         "persistence": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "size":              { "type": "string" },
-            "storageClassName":  { "type": "string" }
+            "size": {
+              "type": "string"
+            },
+            "storageClassName": {
+              "type": "string"
+            }
           }
         }
       }

@@ -1022,29 +1022,16 @@ def test_chart_fqdn_egress_covers_worker_and_adapter():  # codex P1 on #109
     }
 
 
-def test_model_prices_render_only_when_set():
-    """The price overlay reaches the worker env, and stays absent otherwise (#121).
+def test_price_overlay_is_no_longer_rendered_into_worker_env():
+    """The env overlay is retired (#125), so the chart must stop carrying it.
 
-    Without this the config API can point a tenant at any OpenAI-compatible model
-    but never say what it costs, so anything outside the built-in table bills at
-    the $15/$75 fail-expensive fallback: runs halt on phantom spend and the
-    tenant daily cap stops the worker claiming.
+    Prices now resolve from the catalog when a run is created and ride on the
+    run row, so a price correction takes effect on the next run instead of
+    needing a helm upgrade and a pod restart. A tenant that still has an
+    override keeps it — the resolver reads the column directly — but nothing
+    renders it into ``SOCTALK_MODEL_PRICES`` any more.
     """
     t = _make_tenant("poc")
-    unset = _make_integration(t.id)
-    v = render_tenant_values(
-        tenant=t,
-        integration=unset,
-        branding=_make_branding(t.id),
-        mssp_id=str(uuid4()),
-        install_id=str(uuid4()),
-        llm_secret_name="tenant-x-llm",
-        profile="poc",
-    )
-    # NULL column leaves the key out entirely, so the worker keeps the built-in
-    # table rather than being handed an empty overlay to parse.
-    assert "modelPrices" not in v["llm"]
-
     priced = _make_integration(t.id)
     priced.llm_model_prices = {"deepseek-v4-flash": {"input": 0.206, "output": 0.412}}
     v = render_tenant_values(
@@ -1056,6 +1043,4 @@ def test_model_prices_render_only_when_set():
         llm_secret_name="tenant-x-llm",
         profile="poc",
     )
-    assert v["llm"]["modelPrices"] == {
-        "deepseek-v4-flash": {"input": 0.206, "output": 0.412}
-    }
+    assert "modelPrices" not in v["llm"]

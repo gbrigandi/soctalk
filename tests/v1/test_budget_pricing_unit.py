@@ -56,38 +56,70 @@ def test_unknown_model_warns_once(monkeypatch):
         == {"qwen3-32b", "mistral-large"}
 
 
-# ------------------------------------------------------------------- overlay
+# ------------------------------------------------------ retired env overlay
 
 
-def test_overlay_adds_self_hosted_model(monkeypatch):
-    monkeypatch.setenv("SOCTALK_MODEL_PRICES",
-                       '{"qwen3-32b": {"input": 0.2, "output": 0.6}}')
-    assert _dollars("qwen3-32b", inp=1_000_000, out=1_000_000) == pytest.approx(0.8)
+def _snapshot(model, inp, out, source="catalog"):
+    return {
+        "version": 1,
+        "models": {
+            "fast": {
+                "model": model,
+                "source": source,
+                "input_per_mtok": inp,
+                "output_per_mtok": out,
+            }
+        },
+    }
 
 
-def test_overlay_zero_cost_entry_for_local_inference(monkeypatch):
-    monkeypatch.setenv("SOCTALK_MODEL_PRICES",
-                       '{"llama3-70b": {"input": 0, "output": 0}}')
-    assert _dollars("llama3-70b", inp=5_000_000, out=2_000_000) == 0.0
+def _dollars_with(snapshot, model, inp=1_000_000, out=0):
+    st = {}
+    budget.ensure(st)
+    st["price_snapshot"] = snapshot
+    return budget._cost_dollars(
+        inp, out, model, rates=budget._snapshot_rates(st, model)
+    )
 
 
-def test_overlay_corrects_builtin_rate(monkeypatch):
-    monkeypatch.setenv("SOCTALK_MODEL_PRICES",
-                       '{"gpt-4o-mini": {"input": 1.0, "output": 2.0}}')
-    assert _dollars("gpt-4o-mini") == pytest.approx(1.0)
+def test_env_overlay_is_retired(monkeypatch):
+    """``SOCTALK_MODEL_PRICES`` no longer prices anything (#125).
 
-
-def test_overlay_matches_versioned_ids_via_normalization(monkeypatch):
-    monkeypatch.setenv("SOCTALK_MODEL_PRICES",
-                       '{"qwen3-32b": {"input": 0.5, "output": 1.0}}')
-    # A served endpoint reporting a dated variant still hits the overlay key.
-    assert _dollars("qwen3-32b-20250101") == pytest.approx(0.5)
-
-
-def test_malformed_overlay_is_ignored_not_fatal(monkeypatch):
-    monkeypatch.setenv("SOCTALK_MODEL_PRICES", "{not valid json")
-    # Falls back to the built-in table without raising.
+    It was keyed by model string alone when the same model costs different
+    amounts at different providers, it needed a helm upgrade and a pod restart
+    to change, and it left no trace of which rate a run was billed at. The
+    catalog and the per-run snapshot replace it on all three counts.
+    """
+    monkeypatch.setenv(
+        "SOCTALK_MODEL_PRICES", '{"qwen3-32b": {"input": 0.2, "output": 0.6}}'
+    )
+    budget._price_cache = None
+    # Ignored: the model is still unpriced, so the fallback applies.
+    assert _dollars("qwen3-32b") == pytest.approx(15.0)
+    # And a model the built-in table ships is unaffected by the env either way.
     assert _dollars("gpt-4o-mini") == pytest.approx(0.15)
+
+
+def test_a_self_hosted_model_is_priced_by_its_snapshot():
+    """What the overlay used to do, done by the mechanism that replaced it."""
+    assert _dollars_with(
+        _snapshot("qwen3-32b", 0.2, 0.6), "qwen3-32b", inp=1_000_000, out=1_000_000
+    ) == pytest.approx(0.8)
+
+
+def test_zero_cost_is_expressible_for_local_inference():
+    """Self-hosted marginal token cost really is nothing, and must survive.
+
+    A zero rate has to be distinguishable from a missing one, or local
+    inference gets billed at the fail-expensive fallback.
+    """
+    assert _dollars_with(
+        _snapshot("llama3-70b", 0.0, 0.0), "llama3-70b", inp=5_000_000, out=2_000_000
+    ) == 0.0
+
+
+def test_a_snapshot_overrides_a_stale_builtin_rate():
+    assert _dollars_with(_snapshot("gpt-4o-mini", 1.0, 2.0), "gpt-4o-mini") == pytest.approx(1.0)
 
 
 # --------------------------------------------------- configurable fallback
@@ -117,25 +149,45 @@ def test_unknown_cost_malformed_falls_back_to_opus(monkeypatch):
     assert _dollars("mystery") == pytest.approx(15.0)
 
 
-def test_overlay_prices_a_model_absent_from_the_builtin_table(monkeypatch):
-    """A tenant-supplied price is what the model is billed at (#121).
+def test_the_live_mispricing_is_corrected_by_a_resolved_price():
+    """The incident that motivated the feature, pinned (#121, #125).
 
-    The numbers are the exact call shape from a live run that mispriced: 1,316
-    input tokens (1,024 of them cache reads) and 2,252 output tokens on a
-    gateway-served ``deepseek-v4-flash``. Unpriced it recorded $0.174816 at the
-    $15/$75 fallback; at the model's real list price it is a tenth of a cent,
-    and that gap is what halts runs on spend that never happened.
+    The call shape is verbatim from a run on a live install: 1,316 input tokens
+    (1,024 of them cache reads) and 2,252 output tokens on a gateway-served
+    ``deepseek-v4-flash``. Unpriced it recorded $0.174816 at the fail-expensive
+    fallback; at the model's real rate it is a tenth of a cent, and that gap is
+    what halts runs on spend that never happened.
     """
     unpriced = budget._cost_dollars(1316, 2252, "deepseek-v4-flash", cache_read_tokens=1024)
     assert unpriced == pytest.approx(0.174816, abs=1e-6)
 
-    monkeypatch.setenv(
-        "SOCTALK_MODEL_PRICES",
-        '{"deepseek-v4-flash": {"input": 0.206, "output": 0.412}}',
+    st = {}
+    budget.ensure(st)
+    st["price_snapshot"] = _snapshot("deepseek-v4-flash", 0.206, 0.412)
+    priced = budget._cost_dollars(
+        1316, 2252, "deepseek-v4-flash",
+        cache_read_tokens=1024,
+        rates=budget._snapshot_rates(st, "deepseek-v4-flash"),
     )
-    budget._price_cache = None
-    priced = budget._cost_dollars(1316, 2252, "deepseek-v4-flash", cache_read_tokens=1024)
-
     # (292 uncached + 1024 cache-read at 10%) input + 2252 output, at 0.206/0.412.
     assert priced == pytest.approx(0.001009, abs=1e-6)
     assert unpriced > priced * 100
+
+
+def test_halt_reason_stays_legible_below_a_cent():
+    """A sub-cent cap must not report itself as $0.00/$0.00.
+
+    Observed on a live run that halted at $0.000686 against a $0.0005 budget:
+    the reason string read ``dollars=$0.00/$0.00``, which explains nothing.
+    """
+    from soctalk.graph import budget
+
+    state = {"tokens_used": 5904, "tokens_budget": 200000,
+             "dollars_used": 0.000686, "dollars_budget": 0.0005}
+    r = budget.reason(state)
+    assert r == "dollars=$0.000686/$0.000500", r
+
+    # The ordinary case keeps its two-decimal form.
+    state = {"tokens_used": 1, "tokens_budget": 200000,
+             "dollars_used": 6.0, "dollars_budget": 5.0}
+    assert budget.reason(state) == "dollars=$6.00/$5.00"
