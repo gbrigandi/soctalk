@@ -60,6 +60,7 @@ dev = [
 
 [project.scripts]
 soctalk-auth = "soctalk.core.cli.auth:main"
+soctalk-prices = "soctalk.core.cli.prices:main"
 
 [build-system]
 requires = ["hatchling"]

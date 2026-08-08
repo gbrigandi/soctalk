@@ -62,6 +62,8 @@ from soctalk.persistence.models import (
     IOCStats,
     MetricsHourly,
     RuleStats,
+    LLMTokenBudget  # Add this import
+    LLMTokenBudget,  # Add the missing import
 )
 
 

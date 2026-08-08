@@ -13,8 +13,12 @@ frontier).
 It exercises the seams shipped this program:
   * #4  — per-tier / OpenAI-compatible provider via SOCTALK_LLM_PROVIDER=openai +
           OPENAI_BASE_URL, and (``--mixed``) the SOCTALK_<TIER>_* per-tier env.
-  * #5  — SOCTALK_MODEL_PRICES overlay so cost accounting works for models absent
-          from the built-in table (DeepSeek/Qwen).
+  * #125 — prices come from the install catalog now, not an env overlay. The
+          eval drives graph nodes directly with no run row, so a model outside
+          the built-in table prices at the fail-expensive fallback here. The
+          ``prices`` below are printed for context and no longer configure the
+          app; seed the catalog (``soctalk-prices import``) if you want the
+          eval's own dollar figures to be right.
   * #9  — the golden triage eval drives the REAL supervisor + verdict nodes; no
           real tenant data leaves the machine.
 
@@ -46,8 +50,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # One row per hosted model config. ``provider`` picks the client; for
 # openai-compatible endpoints ``base_url`` is the API root (``/v1`` appended when
-# missing). ``prices`` feeds SOCTALK_MODEL_PRICES (#5) keyed by the model id the
-# API reports. ``key_env`` names the env var holding the credential.
+# missing). ``prices`` is context for the printed table (#125 retired the env
+# overlay it used to feed). ``key_env`` names the env var holding the credential.
 ENDPOINTS: list[dict] = [
     {
         # DeepSeek's non-thinking "flash" model — the successor to the
@@ -95,16 +99,12 @@ ENDPOINTS: list[dict] = [
 ]
 
 
-def _prices_env(prices: dict) -> str:
-    return json.dumps(prices) if prices else ""
-
-
 def _base_env(ep: dict, key: str) -> dict:
     """Env for a single-provider endpoint (both tiers on the same backend)."""
     env = {**os.environ,
            "SOCTALK_EVAL_ROUTING_THRESHOLD": "0",  # collect scores, never abort
            "SOCTALK_EVAL_VERDICT_THRESHOLD": "0",
-           "SOCTALK_MODEL_PRICES": _prices_env(ep["prices"])}
+           }
     if ep["provider"] == "anthropic":
         env["SOCTALK_LLM_PROVIDER"] = "anthropic"
         env["ANTHROPIC_API_KEY"] = key
@@ -128,7 +128,6 @@ def _mixed_env(fast_ep: dict, fast_key: str, reason_ep: dict, reason_key: str) -
     prices = {**fast_ep["prices"], **reason_ep["prices"]}
     env = {**os.environ,
            "SOCTALK_EVAL_ROUTING_THRESHOLD": "0", "SOCTALK_EVAL_VERDICT_THRESHOLD": "0",
-           "SOCTALK_MODEL_PRICES": _prices_env(prices),
            # Global/default provider = the reasoning tier's; the fast tier
            # overrides via SOCTALK_FAST_*.
            "SOCTALK_LLM_PROVIDER": reason_ep["provider"],

@@ -33,11 +33,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.llm_provider import normalize_provider
+from soctalk.core.pricing.resolve import resolve_run_prices
 from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role, require_tenant_role
+import structlog
+
 from soctalk.core.tenancy.models import IntegrationConfig, Role
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/mssp/tenants", tags=["mssp-tenant-llm"])
 
@@ -66,6 +71,17 @@ class LlmConfigRead(BaseModel):
     # Per-tenant case-run budget caps (issue #5). ``None`` = the worker default
     # ($5 / 15k). Rendered into SOCTALK_CASE_RUN_*_BUDGET; enforced in budget.py.
     dollar_budget_per_run: float | None = None
+    # Per-tenant price overlay (#121). ``None`` = no overlay, so unpriced models
+    # bill at the fail-expensive fallback. Not secret: prices are public list
+    # values, so unlike the tier keys this round-trips verbatim.
+    model_prices: dict[str, Any] | None = None
+    # What this tenant's models would actually be priced at right now, resolved
+    # the same way a run resolves it (#125): tenant override, then catalog,
+    # then unknown. Read-only and derived — the catalog has no write path from
+    # here, because a price typed into a form loses the source and age that
+    # make it trustworthy. Present so the config surface can show the effective
+    # rate and where it came from rather than leaving the fallback invisible.
+    effective_prices: dict[str, Any] | None = None
     # token_budget_per_run REMOVED from this surface (#103): the per-run token
     # budget moved to the dedicated GET/PATCH /api/mssp/tenants/{id}/run-budget
     # resource (DB-resolved, capped, no worker rollout).
@@ -222,6 +238,12 @@ class LlmConfigUpdate(BaseModel):
     # a $0.10 floor (not just > 0) so a sub-cent cap can't halt the run right
     # after the first priced call (Codex); tokens ≥ 1000.
     dollar_budget_per_run: float | None = Field(default=None, ge=0.10, le=10000)
+    # Per-tenant price overlay (#121), USD per million tokens, shape
+    # ``{"model-prefix": {"input": x, "output": y}}``. Tri-state like the tier
+    # map: omitted = unchanged, ``{}`` = clear the overlay, a map = replace.
+    # Validated server-side by ``validate_llm_model_prices`` (422 on a bad entry)
+    # so a price the worker would fail to parse never reaches the DB.
+    model_prices: dict[str, Any] | None = Field(default=None)
     token_budget_per_run: int | None = Field(default=None, ge=1000, le=100_000_000)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     # Per-tier LLM backends for a hybrid tenant (issue #12). ``None`` = leave
@@ -290,6 +312,16 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
     # spec builder reads ``integration.llm_api_key_plain`` and emits
     # an empty ``values.llm.apiKey`` when cleared, so GET and the
     # install contract stay aligned.
+    # Resolved live rather than stored: the catalog can change under a config
+    # that has not, and the point of showing it is to say what the NEXT run
+    # would be priced at. Never fatal — a pricing problem must not make the
+    # config unreadable.
+    try:
+        effective = await resolve_run_prices(session, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("effective_prices_unresolved", error=str(exc))
+        effective = None
+
     return LlmConfigRead(
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
@@ -299,6 +331,8 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
+        model_prices=cfg.llm_model_prices,
+        effective_prices=effective,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -385,7 +419,18 @@ async def update_tenant_llm(
         # (field absent) from "clear to the default" (field sent as null).
         fields_set = payload.model_fields_set
         if "dollar_budget_per_run" in fields_set:
-            cfg.llm_dollar_budget_per_run = payload.dollar_budget_per_run
+            # Deprecated here (#128), same reasoning as the token budget below:
+            # this field rendered to worker env, so a change needed a helm
+            # rollout, and the value never reached the run row — the row kept
+            # its default while the worker enforced the env, which is how a run
+            # capped at $0.0005 came to display $5. The dedicated resource
+            # resolves at run creation and stamps the row.
+            raise HTTPException(
+                422,
+                "dollar_budget_per_run is managed at "
+                "PATCH /api/mssp/tenants/{tenant_id}/run-budget (#128), "
+                "not on the LLM config.",
+            )
         if "token_budget_per_run" in fields_set:
             # Deprecated here (#103): the per-run token budget is now managed by
             # the dedicated run-budget resource so it resolves at run creation
@@ -397,6 +442,16 @@ async def update_tenant_llm(
                 "PATCH /api/mssp/tenants/{tenant_id}/run-budget (#103), "
                 "not on the LLM config.",
             )
+        # Price overlay (#121): None = unchanged; {} = clear to NULL (back to the
+        # fail-expensive fallback); a map = validate + replace. Replacement
+        # assignment (not in-place) so the JSONB column is marked dirty.
+        if payload.model_prices is not None:
+            from soctalk.core.tenancy.models import validate_llm_model_prices
+
+            try:
+                cfg.llm_model_prices = validate_llm_model_prices(payload.model_prices)
+            except ValueError as e:
+                raise HTTPException(422, f"invalid model_prices: {e}") from e
         # Per-tier backends (issue #12): None = unchanged; {} = clear to
         # single-provider (NULL); a map = validate + replace. Replacement
         # assignment (not in-place) so the JSONB column is marked dirty.
@@ -513,6 +568,18 @@ async def update_tenant_llm(
                 error=str(exc),
             )
 
+    # Resolve the effective prices here too, so PATCH and GET return the same
+    # shape. Without this a caller that treats the PATCH response as the fresh
+    # config sees effective_prices: null immediately after editing the very
+    # overlay that determines it (Codex review round 3, finding 4). Same
+    # non-fatal contract as GET: a pricing problem must not fail the write that
+    # already succeeded.
+    try:
+        effective = await resolve_run_prices(session, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("effective_prices_unresolved", error=str(exc))
+        effective = None
+
     # Same Postgres-authoritative contract as GET — see get_tenant_llm.
     return LlmConfigRead(
         provider=cfg.llm_provider,
@@ -523,6 +590,8 @@ async def update_tenant_llm(
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
+        model_prices=cfg.llm_model_prices,
+        effective_prices=effective,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -886,6 +955,7 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
+        model_prices=cfg.llm_model_prices,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),

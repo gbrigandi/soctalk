@@ -224,7 +224,10 @@
           "description": "Install hard cap for the per-tenant run token budget override (#103).",
           "properties": {
             "max": {
-              "type": ["integer", "string"],
+              "type": [
+                "integer",
+                "string"
+              ],
               "description": "Ceiling a tenant override may not exceed. Empty = API default."
             }
           }
@@ -253,24 +256,73 @@
             "fastTier": {
               "type": "object",
               "additionalProperties": false,
-              "description": "Optional install-wide default FAST (router) tier injected into every newly onboarded tenant's llm_tiers (hybrid: router on this backend, reasoning on the primary provider). Consumed by tenants.py::_install_default_llm_tiers. The API key rides an out-of-band Secret via apiKeySecret — never put it in values.",
+              "description": "Optional install-wide default FAST (router) tier injected into every newly onboarded tenant's llm_tiers (hybrid: router on this backend, reasoning on the primary provider). Consumed by tenants.py::_install_default_llm_tiers. The API key rides an out-of-band Secret via apiKeySecret \u2014 never put it in values.",
               "properties": {
-                "provider": { "enum": ["openai-compatible", "anthropic"] },
-                "baseUrl": { "type": "string", "format": "uri" },
-                "model": { "type": "string" },
-                "engine": { "enum": ["frontier", "openai_compatible", "vllm", "sglang"] },
-                "decodingMode": { "enum": ["auto", "none", "tool_use", "json_schema_strict", "json_object", "guided_json", "guided_grammar"] },
+                "provider": {
+                  "enum": [
+                    "openai-compatible",
+                    "anthropic"
+                  ]
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "engine": {
+                  "enum": [
+                    "frontier",
+                    "openai_compatible",
+                    "vllm",
+                    "sglang"
+                  ]
+                },
+                "decodingMode": {
+                  "enum": [
+                    "auto",
+                    "none",
+                    "tool_use",
+                    "json_schema_strict",
+                    "json_object",
+                    "guided_json",
+                    "guided_grammar"
+                  ]
+                },
                 "apiKeySecret": {
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "name": { "type": "string" },
-                    "key": { "type": "string" }
+                    "name": {
+                      "type": "string"
+                    },
+                    "key": {
+                      "type": "string"
+                    }
                   }
                 }
               }
             }
           }
+        },
+        "runDollarBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Install hard cap for the per-tenant per-run dollar budget override (#128).",
+          "properties": {
+            "max": {
+              "type": [
+                "number",
+                "string"
+              ],
+              "description": "Ceiling a tenant override may not exceed. Empty = API default."
+            }
+          }
+        },
+        "budgetDayTimezone": {
+          "type": "string",
+          "description": "IANA zone whose midnight resets the daily spend ceilings (#129). Empty = UTC. Tenants may override it in policy."
         }
       }
     },
@@ -389,7 +441,7 @@
         },
         "agentChartRef": {
           "type": "string",
-          "description": "OCI ref for the soctalk-cloud-agent chart the tenant admin helm-installs after :issue-agent. Mirrors tenantChartRef — override to point at a lab / staging OCI mirror when validating a pilot."
+          "description": "OCI ref for the soctalk-cloud-agent chart the tenant admin helm-installs after :issue-agent. Mirrors tenantChartRef \u2014 override to point at a lab / staging OCI mirror when validating a pilot."
         },
         "agentChartVersion": {
           "type": "string"
