@@ -164,8 +164,8 @@ try {
     check(
       'halted run offers the unlock control',
       false,
-      'no investigation reported disposition=halted_budget — the detail endpoint ' +
-        'returns no run data at all (tokens_used is null too, which predates this work)'
+      'no halted_budget run present to exercise it — create one by setting a tiny ' +
+        'max_dollars_per_investigation policy and injecting an alert'
     );
   }
 } catch (e) {
