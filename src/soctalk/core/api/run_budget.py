@@ -23,7 +23,15 @@ from pydantic import BaseModel, StrictInt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from soctalk.core.cost import get_tenant_daily_status
+from soctalk.core.cost import (
+    DAILY_DOLLAR_CAP_KEY,
+    DAILY_TOKEN_CAP_KEY,
+    get_tenant_daily_status,
+    tenant_daily_dollar_cap,
+    tenant_daily_dollar_cap_max,
+    tenant_daily_token_cap,
+    tenant_daily_token_cap_max,
+)
 from soctalk.core.ir.events import EventKind, append_event
 from soctalk.core.ir.policies import (
     RUN_DOLLAR_BUDGET_KEY,
@@ -87,6 +95,12 @@ class RunBudgetView(BaseModel):
     daily_dollars_remaining: float = 0.0
     daily_cap_hit: bool = False
     daily_cap_reason: str | None = None
+    daily_token_install_default: int = 0
+    daily_dollar_install_default: float = 0.0
+    daily_token_max: int = 0
+    daily_dollar_max: float = 0.0
+    daily_token_override: int | None = None
+    daily_dollar_override: float | None = None
 
 
 class RunBudgetUpdate(BaseModel):
@@ -102,6 +116,9 @@ class RunBudgetUpdate(BaseModel):
     override: StrictInt | None = None
     token_override: StrictInt | None = None
     dollar_override: float | None = None
+    # Rolling 24h ceilings (#129). Same tri-state, same clamping.
+    daily_token_override: StrictInt | None = None
+    daily_dollar_override: float | None = None
 
 
 async def _assert_tenant_exists(db: AsyncSession, tenant_id: UUID) -> None:
@@ -118,6 +135,24 @@ async def _override(db: AsyncSession, tenant_id: UUID) -> int | None:
     return int(v) if v is not None else None
 
 
+async def _daily_overrides(
+    db: AsyncSession, tenant_id: UUID
+) -> tuple[int | None, float | None]:
+    """The tenant's own 24h ceilings, where set."""
+    pol = await tenant_policies(db, tenant_id)
+    tok = pol.get(DAILY_TOKEN_CAP_KEY)
+    dol = pol.get(DAILY_DOLLAR_CAP_KEY)
+    try:
+        tok_v = int(tok) if tok is not None else None
+    except (TypeError, ValueError):
+        tok_v = None
+    try:
+        dol_v = float(dol) if dol is not None else None
+    except (TypeError, ValueError):
+        dol_v = None
+    return tok_v, dol_v
+
+
 async def _dollar_override(db: AsyncSession, tenant_id: UUID) -> float | None:
     pol = await tenant_policies(db, tenant_id)
     v = pol.get(RUN_DOLLAR_BUDGET_KEY)
@@ -131,6 +166,7 @@ async def _dollar_override(db: AsyncSession, tenant_id: UUID) -> float | None:
 
 async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
     status = await get_tenant_daily_status(db, tenant_id)
+    daily_tok, daily_dol = await _daily_overrides(db, tenant_id)
     return RunBudgetView(
         install_default=run_token_budget_default(),
         install_max=run_token_budget_max(),
@@ -148,6 +184,12 @@ async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
         daily_dollars_remaining=round(status.dollars_remaining, 6),
         daily_cap_hit=status.cap_hit,
         daily_cap_reason=status.reason,
+        daily_token_install_default=tenant_daily_token_cap(),
+        daily_dollar_install_default=tenant_daily_dollar_cap(),
+        daily_token_max=tenant_daily_token_cap_max(),
+        daily_dollar_max=tenant_daily_dollar_cap_max(),
+        daily_token_override=daily_tok,
+        daily_dollar_override=daily_dol,
     )
 
 
@@ -183,15 +225,22 @@ async def update_run_budget(
         )
     token_present = "override" in setf or "token_override" in setf
     dollar_present = "dollar_override" in setf
-    if not token_present and not dollar_present:
+    daily_token_present = "daily_token_override" in setf
+    daily_dollar_present = "daily_dollar_override" in setf
+    if not any(
+        (token_present, dollar_present, daily_token_present, daily_dollar_present)
+    ):
         raise HTTPException(
             422,
-            "body must include at least one of 'token_override' or "
-            "'dollar_override' (a value to set, or null to clear)",
+            "body must include at least one of 'token_override', 'dollar_override', "
+            "'daily_token_override' or 'daily_dollar_override' (a value to set, or "
+            "null to clear)",
         )
 
     token_value = payload.token_override if "token_override" in setf else payload.override
     dollar_value = payload.dollar_override
+    daily_token_value = payload.daily_token_override
+    daily_dollar_value = payload.daily_dollar_override
 
     await _assert_tenant_exists(db, tenant_id)
 
@@ -220,6 +269,32 @@ async def update_run_budget(
                 f"({dollar_cap})",
             )
 
+    # The 24h ceilings clamp against their own install maxima. A ceiling of
+    # zero would stop all work with no way to tell it from "unset", so it is
+    # rejected rather than stored.
+    if daily_token_present and daily_token_value is not None:
+        cap = tenant_daily_token_cap_max()
+        if daily_token_value <= 0:
+            raise HTTPException(422, "daily_token_override must be > 0")
+        if daily_token_value > cap:
+            raise HTTPException(
+                422,
+                f"daily_token_override {daily_token_value} must not exceed the "
+                f"install cap ({cap})",
+            )
+    if daily_dollar_present and daily_dollar_value is not None:
+        cap_d = tenant_daily_dollar_cap_max()
+        if daily_dollar_value != daily_dollar_value:
+            raise HTTPException(422, "daily_dollar_override must be a number")
+        if daily_dollar_value <= 0:
+            raise HTTPException(422, "daily_dollar_override must be > 0")
+        if daily_dollar_value > cap_d:
+            raise HTTPException(
+                422,
+                f"daily_dollar_override {daily_dollar_value} must not exceed the "
+                f"install cap ({cap_d})",
+            )
+
     async with tenant_context(db, tenant_id):
         before = await _view(db, tenant_id)
         if token_present:
@@ -236,6 +311,20 @@ async def update_run_budget(
                 await set_tenant_policy(
                     db, tenant_id, RUN_DOLLAR_BUDGET_KEY, dollar_value
                 )
+        if daily_token_present:
+            if daily_token_value is None:
+                await delete_tenant_policy(db, tenant_id, DAILY_TOKEN_CAP_KEY)
+            else:
+                await set_tenant_policy(
+                    db, tenant_id, DAILY_TOKEN_CAP_KEY, daily_token_value
+                )
+        if daily_dollar_present:
+            if daily_dollar_value is None:
+                await delete_tenant_policy(db, tenant_id, DAILY_DOLLAR_CAP_KEY)
+            else:
+                await set_tenant_policy(
+                    db, tenant_id, DAILY_DOLLAR_CAP_KEY, daily_dollar_value
+                )
         after = await _view(db, tenant_id)
         await log_audit(
             db,
@@ -250,12 +339,16 @@ async def update_run_budget(
                 "effective": before.effective,
                 "dollar_override": before.dollar_tenant_override,
                 "dollar_effective": before.dollar_effective,
+                "daily_token_cap": before.daily_token_cap,
+                "daily_dollar_cap": before.daily_dollar_cap,
             },
             after={
                 "override": after.tenant_override,
                 "effective": after.effective,
                 "dollar_override": after.dollar_tenant_override,
                 "dollar_effective": after.dollar_effective,
+                "daily_token_cap": after.daily_token_cap,
+                "daily_dollar_cap": after.daily_dollar_cap,
             },
         )
     return after
@@ -376,6 +469,14 @@ async def unlock_run(
             if payload.dollar_budget is not None
             else float(row["dollars_budget"] or 0.0)
         )
+        # NaN fails every comparison below, so without this it would slip past
+        # the cap and the exceeds-spend check and land in the column as a
+        # ceiling that can never be reached (Codex review, finding 6).
+        if new_dollars != new_dollars or new_dollars in (
+            float("inf"),
+            float("-inf"),
+        ):
+            raise HTTPException(422, "dollar_budget must be a finite number")
         new_tokens = (
             int(payload.token_budget)
             if payload.token_budget is not None

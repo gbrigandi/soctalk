@@ -112,6 +112,12 @@ export interface RunBudget {
 	daily_dollars_remaining: number;
 	daily_cap_hit: boolean;
 	daily_cap_reason: string | null;
+	daily_token_install_default: number;
+	daily_dollar_install_default: number;
+	daily_token_max: number;
+	daily_dollar_max: number;
+	daily_token_override: number | null;
+	daily_dollar_override: number | null;
 }
 
 /** Result of resuming a budget-halted run (#127). */
@@ -884,7 +890,12 @@ export const api = {
 		// null to clear the override, a number to set it.
 		update: (
 			tenantId: string,
-			patch: { token_override?: number | null; dollar_override?: number | null }
+			patch: {
+				token_override?: number | null;
+				dollar_override?: number | null;
+				daily_token_override?: number | null;
+				daily_dollar_override?: number | null;
+			}
 		) =>
 			request<RunBudget>(`/mssp/tenants/${tenantId}/run-budget`, {
 				method: 'PATCH',

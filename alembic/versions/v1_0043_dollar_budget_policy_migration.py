@@ -44,6 +44,27 @@ def upgrade() -> None:
         ON CONFLICT (tenant_id, key) DO NOTHING;
         """
     )
+    # Backfill the RUNS too, not just the policy. Copying the policy alone is
+    # not enough to make the precedence flip safe: every run row that already
+    # exists carries the 5.0 column default, because nothing stamped
+    # dollars_budget before this release. The moment the worker starts
+    # preferring the claim, those rows would raise a tenant that was capped
+    # lower -- exactly the silent-raise this migration exists to prevent
+    # (Codex review, finding 1).
+    #
+    # Only runs that can still spend are touched. A completed or failed run's
+    # budget is history and rewriting it would falsify what it actually ran
+    # under.
+    op.execute(
+        """
+        UPDATE investigation_runs r
+           SET dollars_budget = c.llm_dollar_budget_per_run
+          FROM integration_configs c
+         WHERE c.tenant_id = r.tenant_id
+           AND c.llm_dollar_budget_per_run IS NOT NULL
+           AND r.status IN ('active', 'paused', 'waiting_on_gate', 'halted_budget');
+        """
+    )
 
 
 def downgrade() -> None:

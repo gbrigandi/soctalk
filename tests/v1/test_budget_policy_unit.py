@@ -168,3 +168,50 @@ def test_daily_status_is_what_reports_a_cap_hit_not_the_spend_object():
     status = DailyCapStatus(spend, DailyCaps(tokens=10_000_000, dollars=0.01))
     assert status.cap_hit and status.dollar_cap_hit
     assert "0.01" in (status.reason or "")
+
+
+# --- Codex review fixes ----------------------------------------------------
+
+
+def test_provider_reported_cost_is_validated_before_it_is_trusted():
+    """This figure overrides our arithmetic AND gates the budget halt.
+
+    A negative, NaN or infinite value from a provider would under-bill, and an
+    inf would stop over_budget from ever tripping. A bad number is discarded so
+    the call degrades to our own estimate, not to no ceiling at all
+    (Codex review, finding 7).
+    """
+    from soctalk.core.pricing.usage import canonical_usage
+
+    for bad in (float("nan"), float("inf"), -1.0):
+        u = canonical_usage(
+            {"usage": {"prompt_tokens": 10, "completion_tokens": 10, "cost": bad}}
+        )
+        assert u.actual_cost_usd is None, bad
+    good = canonical_usage(
+        {"usage": {"prompt_tokens": 10, "completion_tokens": 10, "cost": 0.5}}
+    )
+    assert good.actual_cost_usd == 0.5
+    # Zero is a legitimate actual (free tier), not a bad number.
+    zero = canonical_usage(
+        {"usage": {"prompt_tokens": 10, "completion_tokens": 10, "cost": 0}}
+    )
+    assert zero.actual_cost_usd == 0.0
+
+
+def test_a_non_finite_budget_cannot_survive_the_halt_check():
+    """Why NaN must never reach dollars_budget: it disables the ceiling.
+
+    over_budget compares used >= budget; every comparison against NaN is
+    False, so a run carrying a NaN budget can never halt (Codex review,
+    finding 6 — the unlock endpoint now rejects it at the edge).
+    """
+    from soctalk.graph import budget
+
+    state = {
+        "tokens_used": 0,
+        "tokens_budget": 200_000,
+        "dollars_used": 1_000_000.0,
+        "dollars_budget": float("nan"),
+    }
+    assert budget.over_budget(state) is False

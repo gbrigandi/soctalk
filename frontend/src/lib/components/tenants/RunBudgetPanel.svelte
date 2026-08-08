@@ -29,6 +29,8 @@
 	let saving = false;
 	let overrideInput = '';
 	let dollarInput = '';
+	let dailyTokenInput = '';
+	let dailyDollarInput = '';
 
 	$: editable = tenantId != null && canEdit;
 
@@ -42,6 +44,8 @@
 	function syncInputs(b: RunBudget) {
 		overrideInput = b.tenant_override != null ? String(b.tenant_override) : '';
 		dollarInput = b.dollar_tenant_override != null ? String(b.dollar_tenant_override) : '';
+		dailyTokenInput = b.daily_token_override != null ? String(b.daily_token_override) : '';
+		dailyDollarInput = b.daily_dollar_override != null ? String(b.daily_dollar_override) : '';
 	}
 
 	async function load() {
@@ -93,13 +97,62 @@
 		return n;
 	}
 
+	/** What the loaded budget says each field should currently read as. */
+	function pristine(b: RunBudget) {
+		return {
+			token: b.tenant_override != null ? String(b.tenant_override) : '',
+			dollar: b.dollar_tenant_override != null ? String(b.dollar_tenant_override) : '',
+			dailyToken: b.daily_token_override != null ? String(b.daily_token_override) : '',
+			dailyDollar: b.daily_dollar_override != null ? String(b.daily_dollar_override) : ''
+		};
+	}
+
+	/** Shared validation for the two 24h ceilings. */
+	function dailyPatch(raw: string, max: number, whole: boolean, label: string): number | null {
+		const v = raw.trim();
+		if (v === '') return null;
+		const n = Number(v);
+		if (!Number.isFinite(n) || n <= 0 || (whole && !Number.isInteger(n))) {
+			throw new Error(`${label} must be a ${whole ? 'whole number' : 'number'} greater than zero.`);
+		}
+		if (n > max) {
+			throw new Error(`${label} must not exceed the install cap of ${whole ? formatNumber(max) : money(max)}.`);
+		}
+		return n;
+	}
+
 	async function save() {
 		if (!editable || !budget) return;
-		let patch: { token_override: number | null; dollar_override: number | null };
+		// Send ONLY the fields the operator actually changed. Sending both every
+		// time defeats the API's tri-state contract: a blank token box that was
+		// simply never touched would arrive as an explicit null and clear an
+		// override another admin had just set (Codex review, finding 4).
+		const was = pristine(budget);
+		const patch: {
+			token_override?: number | null;
+			dollar_override?: number | null;
+			daily_token_override?: number | null;
+			daily_dollar_override?: number | null;
+		} = {};
 		try {
-			patch = { token_override: tokenPatch(), dollar_override: dollarPatch() };
+			if (overrideInput.trim() !== was.token) patch.token_override = tokenPatch();
+			if (dollarInput.trim() !== was.dollar) patch.dollar_override = dollarPatch();
+			if (dailyTokenInput.trim() !== was.dailyToken) {
+				patch.daily_token_override = dailyPatch(
+					dailyTokenInput, budget.daily_token_max, true, 'Daily token ceiling'
+				);
+			}
+			if (dailyDollarInput.trim() !== was.dailyDollar) {
+				patch.daily_dollar_override = dailyPatch(
+					dailyDollarInput, budget.daily_dollar_max, false, 'Daily spend ceiling'
+				);
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
+			return;
+		}
+		if (Object.keys(patch).length === 0) {
+			error = 'Nothing changed.';
 			return;
 		}
 		saving = true;
@@ -114,10 +167,25 @@
 		}
 	}
 
-	function clearOverrides() {
-		overrideInput = '';
-		dollarInput = '';
-		void save();
+	async function clearOverrides() {
+		// Explicit intent, so both nulls are sent deliberately rather than as a
+		// side effect of blank inputs.
+		if (!editable || !budget) return;
+		saving = true;
+		error = null;
+		try {
+			budget = await api.runBudget.update(tenantId as string, {
+				token_override: null,
+				dollar_override: null,
+				daily_token_override: null,
+				daily_dollar_override: null
+			});
+			syncInputs(budget);
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			saving = false;
+		}
 	}
 
 	onMount(load);
@@ -236,11 +304,44 @@
 					class="btn variant-soft"
 					on:click={clearOverrides}
 					disabled={saving ||
-						(budget.tenant_override == null && budget.dollar_tenant_override == null)}
+						(budget.tenant_override == null &&
+							budget.dollar_tenant_override == null &&
+							budget.daily_token_override == null &&
+							budget.daily_dollar_override == null)}
 					data-testid="run-budget-clear"
 				>
 					Clear
 				</button>
+			</div>
+			<div class="flex items-end gap-2 flex-wrap mt-3">
+				<label class="label flex-1 min-w-40">
+					<span class="text-sm opacity-70">
+						Tokens/24h (blank = {formatNumber(budget.daily_token_install_default)})
+					</span>
+					<input
+						class="input font-mono"
+						type="text"
+						inputmode="numeric"
+						placeholder={String(budget.daily_token_install_default)}
+						bind:value={dailyTokenInput}
+						data-testid="run-budget-daily-token-input"
+						disabled={saving}
+					/>
+				</label>
+				<label class="label flex-1 min-w-40">
+					<span class="text-sm opacity-70">
+						Dollars/24h (blank = {money(budget.daily_dollar_install_default)})
+					</span>
+					<input
+						class="input font-mono"
+						type="text"
+						inputmode="decimal"
+						placeholder={String(budget.daily_dollar_install_default)}
+						bind:value={dailyDollarInput}
+						data-testid="run-budget-daily-dollar-input"
+						disabled={saving}
+					/>
+				</label>
 			</div>
 			{#if error}
 				<p class="text-error-500 text-sm mt-2" data-testid="run-budget-error">{error}</p>

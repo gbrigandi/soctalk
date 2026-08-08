@@ -144,12 +144,19 @@ def canonical_usage(response: Any) -> CanonicalUsage:
                 output_details.get("reasoning") or output_details.get("thinking_tokens")
             )
 
-        # An actual, where the provider gives one.
+        # An actual, where the provider gives one. Validated before it is
+        # trusted: this figure OVERRIDES our own arithmetic and is what budget
+        # enforcement compares against, so a negative, NaN or infinite value
+        # from a provider would under-bill or stop over_budget from ever
+        # tripping (Codex review, finding 7). A bad number is discarded, which
+        # degrades to our estimate rather than to no ceiling at all.
         if usage.actual_cost_usd is None and block.get("cost") is not None:
             try:
-                usage.actual_cost_usd = float(block["cost"])
+                cost = float(block["cost"])
             except (TypeError, ValueError):
-                pass
+                cost = None
+            if cost is not None and cost == cost and cost >= 0.0 and cost != float("inf"):
+                usage.actual_cost_usd = cost
         if usage.reported_provider is None and isinstance(block.get("provider"), str):
             usage.reported_provider = block["provider"]
 
