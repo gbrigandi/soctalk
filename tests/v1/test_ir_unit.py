@@ -238,6 +238,36 @@ def test_event_idempotency_key_differs_by_payload():
     assert k1 != k2
 
 
+def test_run_scoped_key_is_lease_independent_unlike_worker_key():
+    # #103: a run-scoped beat (the soft budget warning) must dedupe on
+    # (run_id, kind) so a RECLAIMED run — a NEW lease re-running the graph and
+    # re-crossing the threshold — collapses onto the first row instead of
+    # minting a duplicate. The per-lease worker key intentionally does not.
+    from soctalk.core.ir.events import (
+        EventKind,
+        run_scoped_event_idempotency_key,
+        worker_event_idempotency_key,
+    )
+
+    run = uuid4()
+    lease_a, lease_b = uuid4(), uuid4()
+
+    rk_a = run_scoped_event_idempotency_key(run_id=run, kind=EventKind.BUDGET_WARNING)
+    rk_b = run_scoped_event_idempotency_key(run_id=run, kind=EventKind.BUDGET_WARNING)
+    assert rk_a == rk_b, "same run + kind must dedupe across leases"
+    # A different run, or a different kind, is a different beat.
+    assert rk_a != run_scoped_event_idempotency_key(
+        run_id=uuid4(), kind=EventKind.BUDGET_WARNING
+    )
+    assert rk_a != run_scoped_event_idempotency_key(
+        run_id=run, kind=EventKind.WORKER_RESULT
+    )
+    # Contrast: the per-lease worker key changes with the lease (by design).
+    wk_a = worker_event_idempotency_key(run_id=run, lease_id=lease_a, client_ord=1)
+    wk_b = worker_event_idempotency_key(run_id=run, lease_id=lease_b, client_ord=1)
+    assert wk_a != wk_b
+
+
 # ---------------------------------------------------------------------------
 # Tool registry
 # ---------------------------------------------------------------------------

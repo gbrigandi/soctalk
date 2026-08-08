@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 import structlog
 from langchain_core.messages import HumanMessage
@@ -84,6 +83,28 @@ async def supervisor_node(
     app_config = get_config()
 
     token_budget.ensure(state)
+    # Soft warning at the configured ratio (75% default, #103): surface an
+    # approaching budget once, before the hard halt below. Does not stop the run.
+    if not state.get("budget_warned") and token_budget.crossed_soft_warn(state):
+        state["budget_warned"] = True
+        _ratio = token_budget.soft_warn_ratio()
+        logger.warning(
+            "case_run_budget_warning",
+            tokens_used=state["tokens_used"],
+            tokens_budget=state["tokens_budget"],
+            dollars_used=round(state["dollars_used"], 4),
+            dollars_budget=state["dollars_budget"],
+            ratio=_ratio,
+        )
+        emit_replay(
+            replay_events.budget_warning(
+                tokens_used=state["tokens_used"],
+                tokens_budget=state["tokens_budget"],
+                dollars_used=state["dollars_used"],
+                dollars_budget=state["dollars_budget"],
+                ratio=_ratio,
+            )
+        )
     if token_budget.over_budget(state):
         cap_reason = token_budget.reason(state)
         logger.warning(
@@ -220,10 +241,12 @@ def _build_context_summary(state: dict[str, Any]) -> str:
     if len(alerts) > 5:
         lines.append(f"- ... and {len(alerts) - 5} more alerts")
 
-    # Observables status
-    total_obs = len(investigation.get("observables", []))
+    # Observables status. Fall back to enriched+pending when the raw observables
+    # list is not carried (e.g. state assembled from enrichments only), so the
+    # ratio never reads as a nonsensical "1/0 enriched".
     enriched_count = len(enrichments)
     pending_count = len(pending)
+    total_obs = max(len(investigation.get("observables", [])), enriched_count + pending_count)
 
     lines.append("")
     lines.append(f"### Observables ({enriched_count}/{total_obs} enriched, {pending_count} pending)")
@@ -241,6 +264,8 @@ def _build_context_summary(state: dict[str, Any]) -> str:
         analyzer = e.get("analyzer", "unknown")
 
         entry = f"{obs_type}: {value} ({analyzer})"
+        if e.get("synthetic"):
+            entry = f"[SYNTHETIC DEMO DATA] {entry}"
 
         if verdict == "malicious":
             malicious.append(entry)
@@ -281,12 +306,19 @@ def _build_context_summary(state: dict[str, Any]) -> str:
         for f in findings[:3]:
             severity = f.get("severity", "unknown")
             desc = f.get("description", "No description")[:60]
-            lines.append(f"- [{severity}] {desc}")
+            prefix = "[SYNTHETIC DEMO DATA] " if f.get("synthetic") else ""
+            lines.append(f"- {prefix}[{severity}] {desc}")
 
     # MISP Threat Intelligence Context
     if misp_context:
         lines.append("")
         lines.append("### MISP Threat Intelligence")
+        if misp_context.get("synthetic"):
+            lines.append(
+                "**[SYNTHETIC DEMO DATA]** This threat intelligence was generated for "
+                "demonstration. It is not the result of any external lookup. Do not treat "
+                "it as verified evidence of malice."
+            )
 
         misp_matches = misp_context.get("matches", [])
         threat_actors = misp_context.get("threat_actors", [])
@@ -312,12 +344,20 @@ def _build_context_summary(state: dict[str, Any]) -> str:
         if warninglist_hits:
             lines.append(f"**⚠️ Warninglist hits (potential FPs):** {len(warninglist_hits)}")
     else:
-        # MISP not yet checked
-        total_obs = len(investigation.get("observables", []))
-        if total_obs > 0:
+        # MISP not yet checked. Surface a hint so the router can see CONTEXTUALIZE
+        # is a still-undone step, but tailor the wording to the enrichment state so
+        # it never contradicts a pending-enrichment case:
+        #   - enrichment DONE (>=1 enriched, 0 pending) -> CONTEXTUALIZE is next
+        #   - enrichment still PENDING -> neutral note (ENRICH comes first)
+        # Only show it when there is observable activity to attribute at all.
+        if enriched_count > 0 and pending_count == 0:
             lines.append("")
             lines.append("### MISP Threat Intelligence")
-            lines.append("**Not yet checked** - consider CONTEXTUALIZE action for threat attribution")
+            lines.append("**Not yet checked** - enrichment is done; CONTEXTUALIZE for threat attribution is the next gathering step")
+        elif enriched_count > 0 or total_obs > 0:
+            lines.append("")
+            lines.append("### MISP Threat Intelligence")
+            lines.append("**Not yet checked** - retrieve after enrichment completes (CONTEXTUALIZE)")
 
     # Authorization context (epic M1): stable within a run, so it stays ahead of the
     # volatile tail; renders nothing when the investigation carries no authorization key.
@@ -335,7 +375,7 @@ def _build_context_summary(state: dict[str, Any]) -> str:
     last_error = state.get("last_error")
     if last_error:
         lines.append("")
-        lines.append(f"### ⚠️ Last Error")
+        lines.append("### ⚠️ Last Error")
         lines.append(last_error[:200])
 
     # Volatile tail (see note at top of this function).

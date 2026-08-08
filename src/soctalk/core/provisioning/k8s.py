@@ -88,6 +88,24 @@ class K8sClient:
             if e.status != 404:
                 raise
 
+    async def namespace_exists(self, name: str) -> bool:
+        """Definitively report whether a namespace is present.
+
+        ``read_pods`` cannot answer this: a 404 (namespace gone) and a
+        transient API error both surface as exceptions, so drift detection
+        needs a call that maps *only* the 404 to a boolean and re-raises
+        everything else (so a blip is never mistaken for a deleted tenant).
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            await self._run(self._core.read_namespace, name)
+            return True
+        except ApiException as e:
+            if e.status == 404:
+                return False
+            raise
+
     async def put_secret(
         self,
         namespace: str,
@@ -167,16 +185,24 @@ class K8sClient:
         return [sc.metadata.name for sc in result.items]
 
     async def read_pods(self, namespace: str) -> list[dict[str, Any]]:
-        """Return a lightweight summary of pods in a namespace."""
+        """Return a lightweight summary of pods in a namespace.
+
+        A pod with no container statuses yet (freshly scheduled / Pending) is
+        NOT ready: ``all([])`` is ``True`` and would otherwise report an
+        un-started pod as ready, so require at least one status.
+        """
         result = await self._run(self._core.list_namespaced_pod, namespace)
-        return [
-            {
-                "name": p.metadata.name,
-                "phase": p.status.phase,
-                "ready": all(c.ready for c in (p.status.container_statuses or [])),
-            }
-            for p in result.items
-        ]
+        pods = []
+        for p in result.items:
+            statuses = p.status.container_statuses or []
+            pods.append(
+                {
+                    "name": p.metadata.name,
+                    "phase": p.status.phase,
+                    "ready": bool(statuses) and all(c.ready for c in statuses),
+                }
+            )
+        return pods
 
     async def rollout_restart_deployment(
         self, namespace: str, name: str

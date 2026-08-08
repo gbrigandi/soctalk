@@ -7,9 +7,11 @@
 		type Tenant,
 		type LifecycleEvent
 	} from '$lib/api/tenants';
-	import { addToast, authSession, isMsspScope } from '$lib/stores';
+	import { addToast, authSession, canEditSettings, isMsspScope } from '$lib/stores';
 	import ExternalSiemPanel from '$lib/components/tenants/ExternalSiemPanel.svelte';
 	import LlmConfigPanel from '$lib/components/tenants/LlmConfigPanel.svelte';
+	import RunBudgetPanel from '$lib/components/tenants/RunBudgetPanel.svelte';
+	import ModelPricesPanel from '$lib/components/tenants/ModelPricesPanel.svelte';
 	import { m } from '$lib/paraglide/messages';
 
 	let tenant: Tenant | null = null;
@@ -167,6 +169,12 @@
 			<!-- Per-tenant LLM config (masked key). Shown for ANY profile; same
 			     keyed block so switching tenant remounts (fresh fetch). -->
 			<LlmConfigPanel tenantId={id} />
+			<!-- Per-tenant Agent Run token budget (#103): DB-resolved override,
+			     capped at the install max, no worker rollout. -->
+			<RunBudgetPanel tenantId={id} canEdit={$canEditSettings} />
+			<!-- What this tenant is billed per token (#121 overlay over the #125
+			     catalog), and the rates a new run would be stamped with. -->
+			<ModelPricesPanel tenantId={id} canEdit={$canEditSettings} />
 		{/key}
 
 		<div class="card p-4">

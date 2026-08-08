@@ -529,19 +529,22 @@ async def test_patch_external_siem(
     assert new_api_pw not in serialized
     assert new_token not in serialized
 
-    # --- adapter Deployment annotation changed (rolling restart) ---
+    # --- BOTH consumers of the Secret rolled (rolling restart): the adapter
+    # (alert ingest) and the runs-worker (Wazuh MCP enrichment, issue #109),
+    # whose secretKeyRef env would otherwise keep stale credentials. ---
     ns = f"tenant-{slug}"
-    adapter_patches = [
-        p
-        for (pns, name, p) in fake.deployment_patches
-        if pns == ns and name == "soctalk-adapter"
-    ]
-    assert adapter_patches, "expected a soctalk-adapter deployment patch"
-    annotations = adapter_patches[-1]["spec"]["template"]["metadata"][
-        "annotations"
-    ]
-    assert "soctalk.io/restartedAt" in annotations
-    assert annotations["soctalk.io/restartedAt"].isdigit()
+    for deploy in ("soctalk-adapter", "soctalk-runs-worker"):
+        patches = [
+            p
+            for (pns, name, p) in fake.deployment_patches
+            if pns == ns and name == deploy
+        ]
+        assert patches, f"expected a {deploy} deployment patch"
+        annotations = patches[-1]["spec"]["template"]["metadata"][
+            "annotations"
+        ]
+        assert "soctalk.io/restartedAt" in annotations
+        assert annotations["soctalk.io/restartedAt"].isdigit()
 
     # --- Secret rewritten with BOTH pairs + token, UPPERCASE keys ---
     secret = fake.secrets[(ns, "tenant-external-siem-creds")]

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type TenantLlmConfig } from '$lib/api/client';
+	import RunBudgetPanel from '$lib/components/tenants/RunBudgetPanel.svelte';
 	import { addToast, authSession, isMsspUser } from '$lib/stores';
 	import { goto } from '$app/navigation';
 	import { m } from '$lib/paraglide/messages';
@@ -197,6 +198,10 @@
 					</div>
 				</form>
 			</div>
+		</div>
+		<!-- Read-only effective run budget (#103): tenants see it, can't raise it. -->
+		<div class="mt-4">
+			<RunBudgetPanel />
 		</div>
 	{/if}
 </div>

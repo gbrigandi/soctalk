@@ -48,8 +48,6 @@
 		temperature: string;
 		max_tokens: string;
 		// Per-tenant case-run budget caps — '' = clear to the worker default.
-		dollar_budget: string;
-		token_budget: string;
 		api_key: string;
 	}
 
@@ -61,8 +59,6 @@
 		reasoning_model: '',
 		temperature: '',
 		max_tokens: '',
-		dollar_budget: '',
-		token_budget: '',
 		api_key: ''
 	};
 	let formError: string | null = null;
@@ -234,8 +230,6 @@
 			temperature: read != null ? String(read.temperature) : '',
 			max_tokens: read != null ? String(read.max_tokens) : '',
 			// null (worker default) seeds blank; a set cap seeds its value.
-			dollar_budget: read?.dollar_budget_per_run != null ? String(read.dollar_budget_per_run) : '',
-			token_budget: read?.token_budget_per_run != null ? String(read.token_budget_per_run) : '',
 			api_key: ''
 		};
 		// Seed the per-tier chain editor from the sanitized read.tiers map.
@@ -284,23 +278,8 @@
 			formError = m.ten_llm_err_max_tokens_range();
 			return;
 		}
-		// Per-tenant run budget caps (blank = clear to the worker default).
-		const dollarStr = formData.dollar_budget.trim();
-		if (dollarStr !== '') {
-			const d = Number(dollarStr);
-			if (!Number.isFinite(d) || d < 0.1 || d > 10000) {
-				formError = m.ten_llm_err_dollar_budget();
-				return;
-			}
-		}
-		const tokBudgetStr = formData.token_budget.trim();
-		if (tokBudgetStr !== '') {
-			const tb = Number(tokBudgetStr);
-			if (!Number.isInteger(tb) || tb < 1000 || tb > 100000000) {
-				formError = m.ten_llm_err_token_budget();
-				return;
-			}
-		}
+		// Per-run TOKEN budget moved to the Agent Run Budget panel (#103); it is
+		// no longer edited here (writes to it via this endpoint are rejected).
 		// Validate each enabled tier before building the payload — surface the
 		// error inline rather than round-tripping to a backend 422 toast.
 		for (const k of TIER_KEYS) {
@@ -372,22 +351,6 @@
 			}
 			if (read && maxTokStr !== '' && Number(maxTokStr) !== read.max_tokens) {
 				payload.max_tokens = Number(maxTokStr);
-			}
-			// Budget caps are tri-state: blank over a set value = clear (send null);
-			// a changed number = set; blank over null (default) = unchanged (omit).
-			if (read) {
-				const readDollar = read.dollar_budget_per_run;
-				if (dollarStr === '') {
-					if (readDollar !== null) payload.dollar_budget_per_run = null;
-				} else if (Number(dollarStr) !== readDollar) {
-					payload.dollar_budget_per_run = Number(dollarStr);
-				}
-				const readToken = read.token_budget_per_run;
-				if (tokBudgetStr === '') {
-					if (readToken !== null) payload.token_budget_per_run = null;
-				} else if (Number(tokBudgetStr) !== readToken) {
-					payload.token_budget_per_run = Number(tokBudgetStr);
-				}
 			}
 			if (formData.api_key) payload.api_key = formData.api_key;
 
@@ -543,32 +506,6 @@
 							placeholder="4096"
 						/>
 						<span class="text-xs opacity-60">{m.ten_llm_max_tokens_hint()}</span>
-					</label>
-				</div>
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="llm-budget">
-					<label class="label">
-						<span class="text-sm">{m.ten_llm_dollar_budget_label()}</span>
-						<input
-							name="dollar_budget"
-							class="input"
-							type="text"
-							inputmode="decimal"
-							bind:value={formData.dollar_budget}
-							placeholder={m.ten_llm_dollar_placeholder()}
-						/>
-						<span class="text-xs opacity-60">{m.ten_llm_blank_worker_default()}</span>
-					</label>
-					<label class="label">
-						<span class="text-sm">{m.ten_llm_token_budget_label()}</span>
-						<input
-							name="token_budget"
-							class="input"
-							type="text"
-							inputmode="numeric"
-							bind:value={formData.token_budget}
-							placeholder={m.ten_llm_token_placeholder()}
-						/>
-						<span class="text-xs opacity-60">{m.ten_llm_blank_worker_default()}</span>
 					</label>
 				</div>
 				<label class="label">
@@ -778,16 +715,6 @@
 				<div class="flex justify-between gap-3">
 					<dt class="opacity-60">{m.ten_llm_max_tokens()}</dt>
 					<dd class="font-mono text-xs" data-testid="llm-max-tokens">{read.max_tokens}</dd>
-				</div>
-				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">{m.ten_llm_budget_per_run()}</dt>
-					<dd class="font-mono text-xs" data-testid="llm-dollar-budget">
-						{read.dollar_budget_per_run != null ? `$${read.dollar_budget_per_run}` : m.ten_llm_default()}
-					</dd>
-				</div>
-				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">{m.ten_llm_token_budget_label()}</dt>
-					<dd class="font-mono text-xs" data-testid="llm-token-budget">{read.token_budget_per_run ?? m.ten_llm_default()}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
 					<dt class="opacity-60">{m.ten_llm_api_key()}</dt>

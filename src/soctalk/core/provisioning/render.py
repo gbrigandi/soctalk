@@ -268,6 +268,7 @@ def render_tenant_values(
     profile: Profile = "poc",
     network_policies_enabled: bool = True,
     include_llm_api_key: bool = True,
+    bundled_siem: bool = True,
     authored_triage_policies: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Produce a values dict for the tenant chart.
@@ -330,11 +331,36 @@ def render_tenant_values(
     if is_provided:
         indexer_url = integration.wazuh_indexer_url
         indexer_creds_secret = "tenant-external-siem-creds"
+        # The tenant's own Wazuh manager REST API — the worker's MCP
+        # enrichment target (issue #109).
+        wazuh_api_url = integration.wazuh_api_url
     else:
         # In-cluster Wazuh provisioned by the wazuh subchart: derive the
         # indexer Service DNS + the chart-minted ``*-wazuh-creds`` Secret.
         indexer_url = f"https://wazuh-{tenant.slug}-wazuh-indexer:9200"
         indexer_creds_secret = f"wazuh-{tenant.slug}-wazuh-creds"
+        wazuh_api_url = f"https://wazuh-{tenant.slug}-wazuh-manager:55000"
+
+    # Worker Wazuh MCP wiring (issue #109): the runs-worker's enrichment used
+    # to bind ZERO Wazuh tools on every profile — the chart emitted no WAZUH_*
+    # env at all, so a provided tenant (whose external Wazuh holds the richest
+    # history) triaged on the alert payload alone. Both creds Secrets share the
+    # same four key names, so one block serves in-cluster and external alike.
+    from urllib.parse import urlparse as _urlparse
+
+    _idx = _urlparse(indexer_url) if indexer_url else None
+    runs_worker_wazuh = {
+        "enabled": bool(
+            integration.wazuh_enabled and wazuh_api_url and indexer_url
+        ),
+        "apiUrl": wazuh_api_url or "",
+        "indexerHost": (_idx.hostname if _idx else "") or "",
+        "indexerPort": (_idx.port if _idx and _idx.port else 9200),
+        "credsSecret": indexer_creds_secret,
+        # Same TLS rule as the adapter: in-cluster wazuh always presents the
+        # chart's self-signed cert, so only 'provided' honours the DB row.
+        "verifySsl": bool(integration.wazuh_verify_ssl) if is_provided else False,
+    }
 
     # For 'provided', the Cilium FQDN egress allow-list must include every
     # external SIEM host the adapter talks to (indexer :9200 + API :55000).
@@ -403,7 +429,25 @@ def render_tenant_values(
             # talks to the tenant's external Wazuh. Force these OFF regardless
             # of the integration flags so a stale ``wazuh_enabled=true`` row
             # can't accidentally re-deploy the in-cluster bundle.
-            "wazuh": {"enabled": False if is_provided else integration.wazuh_enabled},
+            #
+            # ``bundled_siem`` gates the tenant chart's own Wazuh subchart. It
+            # must be False on the L1 in-cluster controller path: there the
+            # controller installs Wazuh as a SEPARATE ``wazuh-<slug>`` release
+            # (``_step_helm_apply_wazuh``) that the adapter/runs-worker/linux-ep
+            # already target (``wazuh-<slug>-wazuh-*``). Leaving the subchart on
+            # too deploys a SECOND, orphaned Wazuh stack in the same namespace
+            # (``tenant-<slug>-wazuh-*``) — double the manager/indexer/dashboard
+            # footprint, which on a right-sized poc node exhausts RAM/quota and
+            # can block the tenant from ever reaching ``active``. True (default)
+            # is the cross-cluster L2 install-spec path, where the cloud-agent
+            # runs a single helm release and the bundled subchart IS the SIEM.
+            "wazuh": {
+                "enabled": (
+                    False
+                    if is_provided
+                    else bool(integration.wazuh_enabled and bundled_siem)
+                )
+            },
             # linux-ep simulator subchart — only the 'poc' profile installs it.
             # ``persistent`` runs real customer endpoints, so a simulator would
             # contaminate the alert pipeline. ``provided`` has no in-cluster
@@ -527,6 +571,9 @@ def render_tenant_values(
                 "name": "runs-worker-token",
                 "key": "token",
             },
+            # Wazuh MCP enrichment target (issue #109) — computed above,
+            # profile-aware (in-cluster service DNS vs external SIEM URLs).
+            "wazuh": runs_worker_wazuh,
             # Per-tenant model overrides (integration_configs.llm_fast_model /
             # llm_reasoning_model). NULL *or* empty string falls back to
             # llm_model — a cleared override may be stored either way — so
@@ -587,8 +634,12 @@ def render_tenant_values(
     # directly (over_budget → supervisor CLOSE).
     if integration.llm_dollar_budget_per_run is not None:
         values["llm"]["dollarBudgetPerRun"] = integration.llm_dollar_budget_per_run
-    if integration.llm_token_budget_per_run is not None:
-        values["llm"]["tokenBudgetPerRun"] = integration.llm_token_budget_per_run
+    # NOTE (#103): the per-run TOKEN budget is no longer rendered to worker env.
+    # It is now DB-resolved at run creation (policies.resolve_run_token_budget)
+    # and stamped on the run row, so per-tenant token-budget changes take effect
+    # with no worker rollout. The legacy SOCTALK_CASE_RUN_TOKEN_BUDGET env
+    # remains an install-global operator fallback only. Dollar budget is
+    # unchanged (still env-rendered).
 
     # The linux-ep subchart is enabled on the 'poc' profile
     # (components.linuxep.enabled above), but its statefulset template HARD-FAILS

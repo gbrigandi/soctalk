@@ -25,6 +25,7 @@ import re
 from typing import Any
 
 import structlog
+from soctalk.core.pricing.usage import canonical_usage
 
 logger = structlog.get_logger()
 
@@ -74,50 +75,31 @@ _UNKNOWN_MODEL_FALLBACK = {"input": 15.0, "output": 75.0}
 _ZERO_COST = {"input": 0.0, "output": 0.0}
 
 
-def _parse_price_map(raw: str | None) -> dict[str, dict[str, float]]:
-    """Parse a ``{"model-prefix": {"input": x, "output": y}}`` JSON map.
-
-    Keys are normalized model-family prefixes (same shape as the built-in
-    table); malformed entries are skipped, not fatal.
-    """
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except (ValueError, TypeError):
-        logger.warning("budget_price_override_parse_failed")
-        return {}
-    out: dict[str, dict[str, float]] = {}
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if isinstance(v, dict) and "input" in v and "output" in v:
-                try:
-                    out[str(k)] = {"input": float(v["input"]), "output": float(v["output"])}
-                except (ValueError, TypeError):
-                    continue
-    return out
-
-
-# Cache the parsed overlay keyed on the raw env string so ``track`` doesn't
-# re-parse JSON every call, while still reflecting env changes (tests, reloads).
+# Retained so tests and any in-process caller can reset the module cleanly;
+# the env overlay it used to hold is retired (#125).
 _price_cache: tuple[str | None, dict[str, dict[str, float]]] | None = None
 
 
 def _effective_prices() -> dict[str, dict[str, float]]:
-    """The built-in price table overlaid with ``SOCTALK_MODEL_PRICES``.
+    """The built-in table of shipped defaults.
 
-    An overlay entry adds a self-hosted / newly-released model (or a
-    ``{"input": 0, "output": 0}`` zero-cost entry for local inference) or
-    corrects a stale built-in rate — without editing code.
+    ``SOCTALK_MODEL_PRICES`` is retired (#125). It was the only way to price a
+    model the built-in table had never heard of, and it was the wrong shape for
+    the job: keyed by model string alone, when the same model costs different
+    amounts at different providers; delivered by rendering into worker env, so
+    correcting a price meant a helm upgrade and a pod restart; and invisible,
+    so nobody could tell which rate a run had actually been billed at.
+
+    Prices now resolve from the install catalog (and the tenant's own override)
+    when a run is created, and ride on the run row, which fixes all three: the
+    key carries the provider, a correction takes effect on the next run with no
+    rollout, and the run says what it was priced at and where that came from.
+
+    What remains here is the shipped default for the frontier models, used when
+    a call carries no resolved price — an unstamped legacy run, or a code path
+    with no tenant to resolve against.
     """
-    global _price_cache
-    raw = os.getenv("SOCTALK_MODEL_PRICES")
-    if _price_cache is not None and _price_cache[0] == raw:
-        return _price_cache[1]
-    overrides = _parse_price_map(raw)
-    merged = _MODEL_PRICES_PER_MTOK if not overrides else {**_MODEL_PRICES_PER_MTOK, **overrides}
-    _price_cache = (raw, merged)
-    return merged
+    return _MODEL_PRICES_PER_MTOK
 
 
 def _unknown_model_cost() -> tuple[dict[str, float], bool]:
@@ -159,7 +141,8 @@ def _warn_unpriced_once(model: str | None, price: dict[str, float]) -> None:
         model=model,
         input_price_per_mtok=price["input"],
         output_price_per_mtok=price["output"],
-        hint="add it to SOCTALK_MODEL_PRICES, or set SOCTALK_UNKNOWN_MODEL_COST=zero for local inference",
+        hint="add it to the price catalog (soctalk-prices import), set a tenant "
+             "override, or SOCTALK_UNKNOWN_MODEL_COST=zero for local inference",
     )
 
 
@@ -287,6 +270,128 @@ def _model_name(response: Any) -> str | None:
     return None
 
 
+
+# Returned when a run was resolved and the answer was "nobody knows this
+# model's price". Distinct from ``None``, which means no snapshot applied at
+# all — a legacy run, or a caller with no tenant — and which still falls back
+# to the shipped defaults.
+_UNKNOWN_SENTINEL: dict[str, float] = {}
+
+
+
+def _snapshot_source(state: dict[str, Any], model: str | None) -> str | None:
+    """Which entry priced this call, for the log line. Never raises."""
+    snapshot = state.get("price_snapshot")
+    if not isinstance(snapshot, dict) or not model:
+        return None
+    stripped = _VERSION_SUFFIX_RE.sub("", model, count=1)
+    for entry in (snapshot.get("models") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        candidate = str(entry.get("model") or "")
+        if candidate == model or _VERSION_SUFFIX_RE.sub("", candidate, count=1) == stripped:
+            return entry.get("source")
+    return None
+
+
+def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float] | None:
+    """Rates for ``model`` from the run's price snapshot, if it carries them.
+
+    The snapshot is stamped when the run is created (#125) and keyed by ROLE,
+    because a tenant can point the fast and reasoning roles at the same model
+    string through different providers at different prices. Matching is by the
+    model actually called, across roles; when both roles resolved to the same
+    model the rates agree and the first match is correct either way.
+
+    Returns None when there is no snapshot, no entry for this model, or the
+    entry resolved ``unknown`` — all of which mean "fall through to the table",
+    so a run created before this existed prices exactly as it did before.
+    """
+    snapshot = state.get("price_snapshot")
+    if not isinstance(snapshot, dict) or not model:
+        return None
+
+    # Providers answer with versioned ids (``-20250514``, ``-latest``) that the
+    # configured model string does not carry, so compare on the same stripped
+    # form the built-in table uses. Without this a snapshot for
+    # ``deepseek-v4-flash`` is ignored the moment the API reports
+    # ``deepseek-v4-flash-20260731``, and the call silently falls back to the
+    # fail-expensive rate this feature exists to remove (Codex review, #3).
+    # Strip unconditionally, unlike ``_normalize_model``, which only strips when
+    # the result happens to be a key in the built-in table — that guard is right
+    # for a table lookup and wrong here, where both sides are stripped and
+    # compared to each other.
+    wanted = _VERSION_SUFFIX_RE.sub("", model, count=1)
+    matches: list[dict[str, Any]] = []
+    for entry in (snapshot.get("models") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        candidate = entry.get("model")
+        if not candidate:
+            continue
+        if candidate != model and _VERSION_SUFFIX_RE.sub(
+            "", str(candidate), count=1
+        ) != wanted:
+            continue
+        matches.append(entry)
+
+    if not matches:
+        return None
+
+    # A stamp that says "unknown" must not be quietly rescued by the shipped
+    # defaults. If it were, the run would record one story and be billed by
+    # another, and "why was this run priced this way" would have a wrong
+    # answer even when the number happened to be right (Codex).
+    if all(e.get("source") == "unknown" for e in matches):
+        return _UNKNOWN_SENTINEL
+
+    rated = [_rates_from_entry(e) for e in matches]
+    rated = [r for r in rated if r is not None]
+    if not rated:
+        # Matched, but the entry was ``unknown`` or unreadable. Fall through to
+        # the table rather than pricing at zero, which would hide the gap.
+        return None
+    first = rated[0]
+    if any(other != first for other in rated[1:]):
+        # Two roles resolved the same model string to different rates, which
+        # happens when a hybrid tenant runs one model through two providers.
+        # The call site does not tell us which role is spending, so guessing
+        # would bill half the calls at the wrong provider's rate. Fall through
+        # and say so (Codex review, #2).
+        logger.warning(
+            "price_snapshot_ambiguous",
+            model=model,
+            hint="model appears under multiple roles at different rates; "
+                 "priced from the table instead",
+        )
+        return None
+    return first
+
+
+def _rates_from_entry(entry: dict[str, Any]) -> dict[str, float] | None:
+    """One snapshot entry as rates, or None if it cannot price anything."""
+    if entry.get("source") == "unknown":
+        return None
+    try:
+        rates = {
+            "input": float(entry["input_per_mtok"]),
+            "output": float(entry["output_per_mtok"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+    for key, out in (
+        ("cache_read_per_mtok", "cache_read"),
+        ("cache_write_per_mtok", "cache_write"),
+        ("reasoning_per_mtok", "reasoning"),
+    ):
+        if entry.get(key) is not None:
+            try:
+                rates[out] = float(entry[key])
+            except (TypeError, ValueError):
+                pass
+    return rates
+
+
 def _cost_dollars(
     input_tokens: int,
     output_tokens: int,
@@ -294,15 +399,29 @@ def _cost_dollars(
     *,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    rates: dict[str, float] | None = None,
 ) -> float:
     """Price a call. Cache tokens are a subset of input_tokens: reads bill
     at ~10% of the input rate, cache writes at 125% (Anthropic pricing
     model) — without this split, cached runs would be overcharged ~10x on
     exactly the tokens caching exists to make cheap."""
-    prices = _effective_prices()
-    normalized = _normalize_model(model, prices)
-    price = prices.get(normalized)
-    if price is None:
+    # Rates carried on the run win: they were resolved from the catalog or the
+    # tenant's own override when the run was created, and they are what this
+    # run is accountable to no matter what the table says now.
+    price = rates
+    if price is _UNKNOWN_SENTINEL:
+        # Resolved, and the answer was unknown. Go straight to the configured
+        # unknown-model policy rather than the shipped defaults, so the run is
+        # billed by the story it recorded.
+        price = None
+        rates = None
+        prices = None
+    elif price is None:
+        prices = _effective_prices()
+        normalized = _normalize_model(model, prices)
+        price = prices.get(normalized)
+    if not price:
         # Unpriced model: apply the configured fallback and, when that's the
         # fail-expensive default (not an explicit deployment choice), surface
         # it once so mispricing is visible rather than a silent early halt.
@@ -314,11 +433,24 @@ def _cost_dollars(
         max(cache_creation_tokens, 0), input_tokens - cache_read_tokens
     )
     uncached_input = input_tokens - cache_read_tokens - cache_creation_tokens
+    # Cache dimensions default to the Anthropic-shaped derivation (reads at 10%
+    # of input, writes at 125%) unless the price carries explicit rates, which
+    # a catalog entry may.
+    cache_read_rate = price.get("cache_read", price["input"] * 0.1)
+    cache_write_rate = price.get("cache_write", price["input"] * 1.25)
+    # Reasoning tokens are a SUBSET of output. OpenAI, Anthropic, Gemini and
+    # DeepSeek all bill them at the output rate today, so by default the split
+    # costs exactly what it did before. A price naming a separate reasoning
+    # rate (OpenRouter exposes one) applies it to that subset only.
+    reasoning_tokens = min(max(reasoning_tokens, 0), output_tokens)
+    reasoning_rate = price.get("reasoning", price["output"])
+    plain_output = output_tokens - reasoning_tokens
     return (
         (uncached_input / 1_000_000.0) * price["input"]
-        + (cache_read_tokens / 1_000_000.0) * price["input"] * 0.1
-        + (cache_creation_tokens / 1_000_000.0) * price["input"] * 1.25
-        + (output_tokens / 1_000_000.0) * price["output"]
+        + (cache_read_tokens / 1_000_000.0) * cache_read_rate
+        + (cache_creation_tokens / 1_000_000.0) * cache_write_rate
+        + (plain_output / 1_000_000.0) * price["output"]
+        + (reasoning_tokens / 1_000_000.0) * reasoning_rate
     )
 
 
@@ -330,17 +462,34 @@ def track(state: dict[str, Any], response: Any) -> int:
     ``state["dollars_used"]`` directly.
     """
     ensure(state)
+    usage = canonical_usage(response)
+    # The legacy extractors stay authoritative for the totals, so a provider
+    # shape the normaliser has not learned cannot regress token accounting.
     input_tokens, output_tokens = extract_usage(response)
-    cache_read, cache_creation = extract_cache_details(response)
+    if not input_tokens and not output_tokens:
+        input_tokens, output_tokens = usage.input_tokens, usage.output_tokens
+    legacy_read, legacy_write = extract_cache_details(response)
+    cache_read = usage.cache_read_tokens or legacy_read
+    cache_creation = usage.cache_write_tokens or legacy_write
     delta_tokens = input_tokens + output_tokens
     model = _model_name(response)
-    delta_dollars = _cost_dollars(
-        input_tokens,
-        output_tokens,
-        model,
-        cache_read_tokens=cache_read,
-        cache_creation_tokens=cache_creation,
-    )
+    if usage.actual_cost_usd is not None:
+        # The provider said what it charged. No estimate beats that, and
+        # recording it is what turns drift detection into a real comparison
+        # rather than our arithmetic against our own rate card.
+        delta_dollars = usage.actual_cost_usd
+        state["cost_basis"] = "provider_reported"
+    else:
+        delta_dollars = _cost_dollars(
+            input_tokens,
+            output_tokens,
+            model,
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
+            reasoning_tokens=usage.reasoning_tokens,
+            rates=_snapshot_rates(state, model),
+        )
+        state.setdefault("cost_basis", "estimated")
 
     state["tokens_used"] = int(state["tokens_used"]) + delta_tokens
     state["dollars_used"] = float(state["dollars_used"]) + delta_dollars
@@ -357,6 +506,12 @@ def track(state: dict[str, Any], response: Any) -> int:
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
             cache_creation_tokens=cache_creation,
+            reasoning_tokens=usage.reasoning_tokens,
+            # Which of the two produced this number, and where the rate came
+            # from. Recording the basis is the point of the whole exercise: a
+            # figure nobody can attribute is the state we started in.
+            cost_basis=state.get("cost_basis"),
+            price_source=_snapshot_source(state, model),
             delta_dollars=round(delta_dollars, 6),
             tokens_used=state["tokens_used"],
             tokens_budget=state["tokens_budget"],
@@ -381,6 +536,55 @@ def over_budget(state: dict[str, Any]) -> bool:
     return False
 
 
+def soft_warn_ratio() -> float:
+    """Fraction of the per-run budget at which a SOFT warning fires (no halt).
+
+    Default 0.75 (issue #103). ``SOCTALK_BUDGET_WARN_RATIO`` overrides it; a
+    value outside (0, 1) is ignored (a warn at 0 or >=100% is meaningless — the
+    latter is just the hard halt).
+    """
+    raw = os.getenv("SOCTALK_BUDGET_WARN_RATIO", "")
+    if raw.strip():
+        try:
+            r = float(raw)
+            if 0.0 < r < 1.0:
+                return r
+        except ValueError:
+            pass
+    return 0.75
+
+
+def crossed_soft_warn(state: dict[str, Any]) -> bool:
+    """True when spend crossed the soft-warn ratio but is NOT yet over budget.
+
+    A run approaching its cap should be surfaced (panel / flight recorder)
+    before it hard-halts at 100%. Either cap crossing the ratio warns.
+    """
+    ensure(state)
+    if over_budget(state):
+        return False  # the hard halt supersedes a soft warning
+    r = soft_warn_ratio()
+    if int(state["tokens_used"]) >= r * int(state["tokens_budget"]):
+        return True
+    if float(state["dollars_used"]) >= r * float(state["dollars_budget"]):
+        return True
+    return False
+
+
+def _fmt_dollars(value: float) -> str:
+    """Format a dollar amount without rounding a real number away to $0.00.
+
+    Two decimals is right for a $5 budget and useless for a $0.0005 one: a run
+    that halted on a sub-cent cap logged ``dollars=$0.00/$0.00``, which tells an
+    operator nothing about why it stopped. Precision follows magnitude so the
+    figure stays legible at both ends.
+    """
+    v = abs(value)
+    if v and v < 0.01:
+        return f"${value:.6f}"
+    return f"${value:.2f}"
+
+
 def reason(state: dict[str, Any]) -> str:
     """Human-readable explanation of which cap fired."""
     ensure(state)
@@ -389,6 +593,7 @@ def reason(state: dict[str, Any]) -> str:
         parts.append(f"tokens={state['tokens_used']}/{state['tokens_budget']}")
     if float(state["dollars_used"]) >= float(state["dollars_budget"]):
         parts.append(
-            f"dollars=${state['dollars_used']:.2f}/${state['dollars_budget']:.2f}"
+            f"dollars={_fmt_dollars(float(state['dollars_used']))}"
+            f"/{_fmt_dollars(float(state['dollars_budget']))}"
         )
     return "; ".join(parts) if parts else "within budget"

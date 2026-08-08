@@ -111,6 +111,38 @@ def supervisor_decision(
     )
 
 
+def budget_warning(
+    *,
+    tokens_used: int,
+    tokens_budget: int,
+    dollars_used: float,
+    dollars_budget: float,
+    ratio: float,
+) -> ReplayEvent:
+    """Soft budget warning (#103): spend crossed ``ratio`` of the per-run cap.
+
+    Analyst-facing (mssp_only). Fired once per run, before the hard halt at
+    100%; the run keeps going.
+    """
+    def _round(value: Any, digits: int) -> float:
+        f = _f(value)
+        return round(f, digits) if f is not None else 0.0
+
+    return ReplayEvent(
+        kind=EventKind.BUDGET_WARNING,
+        visibility=Visibility.MSSP_ONLY.value,
+        payload=_base(
+            {
+                "tokens_used": int(_f(tokens_used) or 0),
+                "tokens_budget": int(_f(tokens_budget) or 0),
+                "dollars_used": _round(dollars_used, 4),
+                "dollars_budget": _round(dollars_budget, 4),
+                "ratio": _round(ratio, 2),
+            }
+        ),
+    )
+
+
 def worker_started(worker: str, *, action: str | None = None) -> ReplayEvent:
     return ReplayEvent(
         kind=EventKind.WORKER_STARTED,
@@ -268,6 +300,7 @@ def case_closed(
 __all__ = [
     "PAYLOAD_VERSION",
     "ReplayEvent",
+    "budget_warning",
     "case_closed",
     "guard_evaluated",
     "human_decision",

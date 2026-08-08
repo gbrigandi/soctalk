@@ -92,6 +92,49 @@ export interface TenantLlmConfig {
 	api_key_preview: string;
 }
 
+export interface RunBudget {
+	install_default: number;
+	install_max: number;
+	tenant_override: number | null;
+	effective: number;
+	spend_24h_tokens: number;
+	// Per-run dollar ceiling (#128), same shape as the token one.
+	dollar_install_default: number;
+	dollar_install_max: number;
+	dollar_tenant_override: number | null;
+	dollar_effective: number;
+	// Daily ceilings and remaining headroom (#129). The window is a CALENDAR
+	// day in daily_timezone, not a rolling 24 hours; the spend_24h_* names are
+	// kept only for API compatibility.
+	spend_24h_dollars: number;
+	daily_token_cap: number;
+	daily_dollar_cap: number;
+	daily_tokens_remaining: number;
+	daily_dollars_remaining: number;
+	daily_cap_hit: boolean;
+	daily_cap_reason: string | null;
+	/** When the daily ceilings next reset (ISO), and the zone that decides it. */
+	daily_resets_at: string | null;
+	daily_timezone: string;
+	daily_token_install_default: number;
+	daily_dollar_install_default: number;
+	daily_token_max: number;
+	daily_dollar_max: number;
+	daily_token_override: number | null;
+	daily_dollar_override: number | null;
+}
+
+/** Result of resuming a budget-halted run (#127). */
+export interface RunUnlockResult {
+	run_id: string;
+	status: string;
+	tokens_used: number;
+	tokens_budget: number;
+	dollars_used: number;
+	dollars_budget: number;
+	warning: string | null;
+}
+
 async function request<T>(
 	endpoint: string,
 	options: RequestInit = {}
@@ -172,6 +215,10 @@ export interface Investigation extends InvestigationSummary {
 	tokens_used: number | null;
 	tokens_budget: number | null;
 	disposition: string | null;
+	// Present for MSSP scope only; needed to unlock a budget-halted run (#127).
+	run_id?: string | null;
+	dollars_used?: number | null;
+	dollars_budget?: number | null;
 }
 
 export interface InvestigationList {
@@ -837,6 +884,43 @@ export const api = {
 	// MSSP-funded default — the L1 controller re-mirrors the
 	// install-shared key into the tenant ns so the runs-worker
 	// keeps running uninterrupted.
+	// Per-tenant run token budget (#103). DB-resolved at run creation, capped
+	// at the install max; changes take effect with no worker rollout. MSSP
+	// admins set/clear the override; the tenant view is read-only.
+	runBudget: {
+		get: (tenantId: string) =>
+			request<RunBudget>(`/mssp/tenants/${tenantId}/run-budget`),
+		// Each dimension is independently tri-state: omit to leave unchanged,
+		// null to clear the override, a number to set it.
+		update: (
+			tenantId: string,
+			patch: {
+				token_override?: number | null;
+				dollar_override?: number | null;
+				daily_token_override?: number | null;
+				daily_dollar_override?: number | null;
+			}
+		) =>
+			request<RunBudget>(`/mssp/tenants/${tenantId}/run-budget`, {
+				method: 'PATCH',
+				body: JSON.stringify(patch)
+			}),
+		// Resume a run that hit its per-run ceiling. The new ceiling must exceed
+		// what the run already spent, since spend is not reset on resume.
+		unlockRun: (
+			tenantId: string,
+			runId: string,
+			budgets: { dollar_budget?: number; token_budget?: number }
+		) =>
+			request<RunUnlockResult>(
+				`/mssp/tenants/${tenantId}/runs/${runId}/unlock`,
+				{ method: 'POST', body: JSON.stringify(budgets) }
+			)
+	},
+	tenantRunBudget: {
+		get: () => request<RunBudget>('/tenant/run-budget')
+	},
+
 	tenantLlm: {
 		get: () => request<TenantLlmConfig>('/tenant/llm'),
 		setKey: (apiKey: string) =>

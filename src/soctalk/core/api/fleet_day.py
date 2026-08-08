@@ -229,6 +229,10 @@ def stage_for_latest_event(kind: str, payload: dict[str, Any] | None) -> str:
         return _WORKER_STAGE.get(str(p.get("worker") or ""), "sup")
     if kind == "worker_result":
         return "sup"
+    if kind == "budget_warning":
+        # A soft budget warning fires between supervisor cycles; the run keeps
+        # going through the supervisor. Park it there, not in "unknown" (#103).
+        return "sup"
     if kind == "verdict_rendered":
         return "verdict"
     if kind == "guard_evaluated":

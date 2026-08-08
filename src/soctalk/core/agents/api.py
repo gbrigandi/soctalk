@@ -387,6 +387,16 @@ async def _build_install_helm_release_spec(
         values["adapter"]["wazuhIndexer"]["credsSecret"] = (
             f"{release_name}-wazuh-creds"
         )
+        # Same rewrite for the runs-worker's Wazuh MCP enrichment wiring
+        # (issue #109): render_tenant_values points it at the standalone
+        # ``wazuh-<slug>-wazuh-*`` release, but on the L2 subchart path those
+        # resources are ``<release>-wazuh-*``. Without this the worker binds
+        # against non-existent Services/Secrets and enrichment silently no-ops.
+        rw_wazuh = values.get("runsWorker", {}).get("wazuh")
+        if isinstance(rw_wazuh, dict) and rw_wazuh.get("enabled"):
+            rw_wazuh["apiUrl"] = f"https://{release_name}-wazuh-manager:55000"
+            rw_wazuh["indexerHost"] = f"{release_name}-wazuh-indexer"
+            rw_wazuh["credsSecret"] = f"{release_name}-wazuh-creds"
 
     if values["components"]["linuxep"]["enabled"]:
         from soctalk.core.provisioning.render import render_linux_ep_values

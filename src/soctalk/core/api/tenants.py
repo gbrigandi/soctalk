@@ -16,7 +16,7 @@ from uuid import UUID
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +48,13 @@ router = APIRouter(prefix="/api/mssp/tenants", tags=["mssp-tenants"])
 
 
 class TenantCreate(BaseModel):
+    # Reject unknown fields instead of silently dropping them (issue #110):
+    # sending the WIZARD payload (profile, external_siem, llm_api_key) here
+    # used to 201 a default-poc tenant with none of that material applied,
+    # burning the slug. A 422 naming the stray fields steers the caller to
+    # POST /api/mssp/tenants/onboard.
+    model_config = ConfigDict(extra="forbid")
+
     slug: str = Field(..., pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", max_length=63)
     display_name: str = Field(..., min_length=1, max_length=255)
     # LLM
@@ -1123,32 +1130,35 @@ async def _apply_external_siem_k8s(
             )
 
     # ``secretKeyRef`` env vars don't refresh on a Secret update, so roll the
-    # long-lived adapter pod. Patch a pod-template annotation (what ``kubectl
-    # rollout restart`` does under the hood) — no rollout subresource perm
-    # required. The chat resolver reads creds live per request and needs no
-    # restart.
-    try:
-        await k8s.patch_deployment(
-            namespace=namespace,
-            name="soctalk-adapter",
-            patch={
-                "spec": {
-                    "template": {
-                        "metadata": {
-                            "annotations": {
-                                "soctalk.io/restartedAt": str(time.time_ns())
+    # long-lived pods that consume this Secret: the adapter (alert ingest) AND
+    # the runs-worker (Wazuh MCP enrichment, issue #109). Patch a pod-template
+    # annotation (what ``kubectl rollout restart`` does under the hood) — no
+    # rollout subresource perm required. The chat resolver reads creds live
+    # per request and needs no restart.
+    for _deploy in ("soctalk-adapter", "soctalk-runs-worker"):
+        try:
+            await k8s.patch_deployment(
+                namespace=namespace,
+                name=_deploy,
+                patch={
+                    "spec": {
+                        "template": {
+                            "metadata": {
+                                "annotations": {
+                                    "soctalk.io/restartedAt": str(time.time_ns())
+                                }
                             }
                         }
                     }
-                }
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "external_siem_adapter_restart_failed",
-            tenant_id=str(tenant_id),
-            error=str(exc),
-        )
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "external_siem_restart_failed",
+                tenant_id=str(tenant_id),
+                deployment=_deploy,
+                error=str(exc),
+            )
 
 
 # ---------------------------------------------------------------------------

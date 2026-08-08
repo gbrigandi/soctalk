@@ -63,6 +63,7 @@ class EventKind(str, Enum):
     AUTO_CLOSED = "auto_closed"
     BUDGET_WARNING = "budget_warning"
     BUDGET_HALT = "budget_halt"
+    BUDGET_UNLOCK = "budget_unlock"
 
     # Pipeline replay beats (issue #72). Emitted by the triage pipeline —
     # graph nodes via the worker event sink, plus the L1 close paths — and
@@ -182,6 +183,28 @@ def worker_event_idempotency_key(
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
+# Beats that must appear AT MOST ONCE per run, no matter which lease emits
+# them. A reclaimed run rebuilds graph state from the claim and re-runs the
+# graph, so it can legitimately re-cross the same threshold — but the record
+# is a per-run fact, not a per-lease one. These dedupe on (run_id, kind), so
+# the second crossing collapses onto the first row instead of the per-lease
+# key minting a duplicate (#103 soft warning).
+RUN_SCOPED_WORKER_EVENTS: frozenset[EventKind] = frozenset({EventKind.BUDGET_WARNING})
+
+
+def run_scoped_event_idempotency_key(*, run_id: UUID, kind: EventKind) -> str:
+    """At-most-once-per-run idempotency for a lease-independent beat."""
+
+    basis = canonical_json(
+        {
+            "kind": "worker-replay-run",
+            "run_id": str(run_id),
+            "event_kind": kind.value,
+        }
+    )
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+
 def proposal_idempotency_key(
     investigation_id: UUID, action_type: str, params: dict[str, Any]
 ) -> str:
@@ -279,11 +302,13 @@ async def append_event(
 __all__ = [
     "EventKind",
     "REDUCER_APPLIES",
+    "RUN_SCOPED_WORKER_EVENTS",
     "alert_signature",
     "append_event",
     "canonical_json",
     "event_idempotency_key",
     "ioc_fingerprint",
     "proposal_idempotency_key",
+    "run_scoped_event_idempotency_key",
     "worker_event_idempotency_key",
 ]

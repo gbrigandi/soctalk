@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -190,6 +191,32 @@ async def ainvoke_structured(
 _NO_TEMPERATURE_MODELS = re.compile(r"opus-4-[789]|sonnet-5|fable|mythos")
 
 
+def _usage_accounting_kwargs(base_url: str | None) -> dict[str, Any]:
+    """Ask the backend to report what the call actually cost, where it can.
+
+    OpenRouter returns ``usage.cost`` — what it really billed, from the upstream
+    it really routed to — but only when the request opts in. Without this the
+    provider-reported branch of cost tracking is unreachable and every call
+    falls back to our own estimate, which is the thing an actual is meant to
+    replace.
+
+    Gated on the host rather than sent everywhere: ``usage`` is not a parameter
+    in the OpenAI spec, and api.openai.com rejects request bodies carrying
+    arguments it does not recognise. A fidelity improvement that breaks calls
+    against the reference implementation is not one.
+
+    It rides ``extra_body`` because that is the only channel that reaches the
+    wire: langchain-openai spreads ``model_kwargs`` as NAMED arguments to the
+    SDK's ``create()``, which raises TypeError on anything outside the OpenAI
+    signature — ``extra_body`` is the SDK's own escape hatch for body fields it
+    does not model, and is what #46 already uses for grammars.
+    """
+    host = (urlparse(base_url or "").hostname or "").lower()
+    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
+        return {"extra_body": {"usage": {"include": True}}}
+    return {}
+
+
 def _sampling_kwargs(model: str, temperature: float) -> dict[str, Any]:
     if _NO_TEMPERATURE_MODELS.search(model):
         return {}
@@ -291,6 +318,18 @@ def create_chat_model(
             openai_kwargs["base_url"] = llm_config.openai_base_url
         if llm_config.openai_organization:
             openai_kwargs["organization"] = llm_config.openai_organization
+
+        # Merged into extra_body rather than assigned. A caller passing its own
+        # structured-output extra_body (#46 grammars) shares that dict with us:
+        # assigning would drop the caller's grammar, and setdefault on the whole
+        # dict would silently drop the cost accounting whenever a grammar was
+        # present — which is most of the calls whose cost matters.
+        accounting = _usage_accounting_kwargs(llm_config.openai_base_url)
+        if accounting:
+            extra = dict(openai_kwargs.get("extra_body") or {})
+            for key, value in accounting["extra_body"].items():
+                extra.setdefault(key, value)
+            openai_kwargs["extra_body"] = extra
 
         try:
             return ChatOpenAI(**openai_kwargs)

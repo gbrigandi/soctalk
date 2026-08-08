@@ -91,7 +91,30 @@ case "$cmd" in
 
   logs)
     comp="${1:-api}"
-    kube -n "$NAMESPACE" logs -l "app.kubernetes.io/name=soctalk-${comp}" --tail=200 -f
+    # The chart labels every workload app.kubernetes.io/name=soctalk-system
+    # (the chart name) and distinguishes them with app.kubernetes.io/component.
+    # Selecting on name=soctalk-<comp> matched nothing, and `kubectl logs -l`
+    # with zero matches is not an error — so this silently printed "No resources
+    # found" and exited 0 for every component. Scope by component + instance,
+    # and say so when the component isn't there instead of exiting clean.
+    sel="app.kubernetes.io/component=${comp},app.kubernetes.io/instance=${RELEASE}"
+    # Keep "the query failed" and "the query returned nothing" apart: with the
+    # cluster down, get-pods exits non-zero, and reporting that as "no such
+    # component" would send the operator hunting the wrong problem.
+    if ! found="$(kube -n "$NAMESPACE" get pods -l "$sel" -o name 2>&1)"; then
+      echo "soctalk logs: could not query ${NAMESPACE} (is the cluster up?):" >&2
+      echo "  ${found}" >&2
+      exit 1
+    fi
+    if [ -z "$found" ]; then
+      echo "soctalk logs: no '${comp}' pod in namespace ${NAMESPACE}." >&2
+      echo "  components here: $(kube -n "$NAMESPACE" get pods \
+        -o 'jsonpath={range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{end}' \
+        2>/dev/null)" >&2
+      echo "  per-tenant workloads (adapter, runs-worker) live in tenant-<slug>, not ${NAMESPACE}." >&2
+      exit 1
+    fi
+    kube -n "$NAMESPACE" logs -l "$sel" --tail=200 -f
     ;;
 
   uninstall)

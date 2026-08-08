@@ -12,6 +12,7 @@ scope claims.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -33,8 +34,27 @@ LEASE_TTL_SECONDS = 60
 # How long a transient-failed run waits before it becomes claimable again.
 # Long enough to let a cold serverless endpoint finish warming; short enough
 # that the alert is not stuck for minutes. Multiplied by the attempt count for
-# a gentle backoff.
-RETRY_BACKOFF_SECONDS = 15
+# a gentle backoff. Env-tunable so operators can widen the window to cover a
+# cold start that includes a model download (no network volume).
+def _env_positive_int(name: str, default: int, minimum: int = 1) -> int:
+    """Parse an int env var, tolerating garbage and clamping to >= minimum.
+
+    A raw int() here would (a) crash the router import on a non-int value like
+    "15s"/"" and (b) accept 0/-5, which pushes not_before to now-or-past and
+    makes a transient-released run instantly re-claimable — hammering a cold
+    backend and burning the attempt cap with no warm-up window.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(minimum, int(raw.strip()))
+    except (ValueError, AttributeError):
+        logger.warning("bad_env_int name=%s value=%r -> default=%d", name, raw, default)
+        return default
+
+
+RETRY_BACKOFF_SECONDS = _env_positive_int("SOCTALK_RUN_RETRY_BACKOFF_SECONDS", 15)
 
 
 async def _record_verdict_memo(
@@ -191,6 +211,11 @@ class ClaimedRun(BaseModel):
     dollars_budget: float = 0.0
     lease_id: UUID
     lease_expires_at: datetime
+    # Rates this run is priced at, resolved and frozen at run creation (#125).
+    # Optional so a worker built against this model keeps working against an
+    # API that predates it, and so a run created before the column existed
+    # claims cleanly and prices the legacy way.
+    price_snapshot: dict[str, Any] | None = None
     # ``alert`` is the primary (highest-severity) alert — kept for backward
     # compat. ``alerts`` is the full correlated set (issue #26): one run
     # reasons over every alert #27 grouped onto the investigation.
@@ -266,7 +291,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
 
     async with tenant_context(db, tenant_id):
         # Circuit breaker: refuse to claim new runs once the tenant has
-        # blown through its rolling 24h spend ceiling. Shared with the
+        # blown through its daily spend ceiling. Shared with the
         # chat path via ``soctalk.core.cost.assert_tenant_daily_cap_ok``
         # so a busy chat session can't dodge the worker's cap and a
         # flood of runs can't dodge the chat handler's cap.
@@ -280,7 +305,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 text(
                     """
                     SELECT r.id, r.investigation_id, r.tokens_used, r.tokens_budget,
-                           r.dollars_used, r.dollars_budget
+                           r.dollars_used, r.dollars_budget, r.price_snapshot
                     FROM investigation_runs r
                     JOIN investigations i ON i.id = r.investigation_id
                                          AND i.tenant_id = r.tenant_id
@@ -365,6 +390,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 dollars_budget=float(row["dollars_budget"] or 0.0),
                 lease_id=lease_id,
                 lease_expires_at=lease_expires,
+                price_snapshot=row["price_snapshot"],
                 alert={
                     "id": str(row["id"]),
                     "rule": {"id": "n/a", "level": 0},
@@ -374,6 +400,10 @@ async def claim_run(request: Request) -> ClaimedRun | None:
         alert_payloads = [
             {
                 "id": str(a["id"]),
+                # Which adapter produced this alert. Rule semantics are
+                # source-specific (a Wazuh level 13 is not an identity-feed 13),
+                # so anything downstream that reads severity must know the source.
+                "adapter_source": a["source"] or "wazuh",
                 "rule": {"id": a["rule_id"] or "?", "level": int(a["severity"] or 0)},
                 "signature": a["signature"],
                 # #17 fix 3: prefer the dedicated description column; fall back
@@ -416,10 +446,58 @@ async def claim_run(request: Request) -> ClaimedRun | None:
         dollars_budget=float(row["dollars_budget"] or 0.0),
         lease_id=lease_id,
         lease_expires_at=lease_expires,
+        price_snapshot=row["price_snapshot"],
         alert=alert_payloads[0],
         alerts=alert_payloads,
         authorization_context=authz_ctx,
     )
+
+
+async def _record_spend_delta(
+    db: AsyncSession, tenant_id: UUID, run_id: UUID, tokens: int | None, dollars: float | None
+) -> None:
+    """Ledger the spend reported since this run last reported (#129).
+
+    The worker sends CUMULATIVE totals, so the delta against the stored row is
+    what was actually spent between the two reports, and stamping it with now()
+    is what makes a calendar-day ceiling mean the day the money was spent.
+    Bucketing off the run's lifecycle timestamps instead let a run that spent
+    before midnight charge the whole amount to the next day, and let an unlock
+    after midnight drag yesterday's spend forward.
+
+    Must run BEFORE the row is updated, while the previous totals are still
+    readable. Never raises: a ledger problem must not fail the heartbeat that
+    is keeping a live run's lease alive.
+    """
+    if tokens is None and dollars is None:
+        return
+    try:
+        prev = (
+            await db.execute(
+                text(
+                    "SELECT tokens_used, dollars_used FROM investigation_runs "
+                    "WHERE id = :id AND tenant_id = :t"
+                ),
+                {"id": str(run_id), "t": str(tenant_id)},
+            )
+        ).mappings().first()
+        if prev is None:
+            return
+        d_tokens = max(0, int(tokens or 0) - int(prev["tokens_used"] or 0))
+        d_dollars = max(0.0, float(dollars or 0.0) - float(prev["dollars_used"] or 0.0))
+        # A report that adds nothing (a heartbeat between LLM calls) needs no row.
+        if d_tokens == 0 and d_dollars == 0.0:
+            return
+        await db.execute(
+            text(
+                "INSERT INTO llm_spend_ledger "
+                "  (tenant_id, run_id, occurred_at, tokens_delta, dollars_delta) "
+                "VALUES (:t, :r, now(), :dt, :dd)"
+            ),
+            {"t": str(tenant_id), "r": str(run_id), "dt": d_tokens, "dd": d_dollars},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("spend_ledger_write_failed", run_id=str(run_id), error=str(exc))
 
 
 @router.post("/runs/{run_id}/heartbeat")
@@ -440,6 +518,9 @@ async def heartbeat_run(
         seconds=LEASE_TTL_SECONDS
     )
     async with tenant_context(db, tenant_id):
+        await _record_spend_delta(
+            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+        )
         result = await db.execute(
             text(
                 """
@@ -482,8 +563,10 @@ async def append_run_events(
     bad item must not poison the batch.
     """
     from soctalk.core.ir.events import (
+        RUN_SCOPED_WORKER_EVENTS,
         EventKind,
         append_event,
+        run_scoped_event_idempotency_key,
         worker_event_idempotency_key,
     )
     from soctalk.core.ir.models import Visibility
@@ -524,9 +607,15 @@ async def append_run_events(
                 if item.visibility in valid_visibilities
                 else Visibility.MSSP_ONLY.value
             )
-            key = worker_event_idempotency_key(
-                run_id=run_id, lease_id=payload.lease_id, client_ord=item.client_ord
-            )
+            if kind in RUN_SCOPED_WORKER_EVENTS:
+                # At-most-once per run: a reclaimed run re-runs the graph and
+                # can re-cross the same threshold, but the beat is a per-run
+                # fact — dedupe it independently of the (new) lease. (#103)
+                key = run_scoped_event_idempotency_key(run_id=run_id, kind=kind)
+            else:
+                key = worker_event_idempotency_key(
+                    run_id=run_id, lease_id=payload.lease_id, client_ord=item.client_ord
+                )
             await append_event(
                 db,
                 tenant_id=tenant_id,
@@ -563,6 +652,9 @@ async def release_run(
     tenant_id = _verify_worker_jwt(request)
     db = _db(request)
     async with tenant_context(db, tenant_id):
+        await _record_spend_delta(
+            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+        )
         row = (
             await db.execute(
                 text(
@@ -646,6 +738,9 @@ async def complete_run(
     investigation_id: UUID | None = None
     case_changed = False
     async with tenant_context(db, tenant_id):
+        await _record_spend_delta(
+            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+        )
         row = (
             await db.execute(
                 text(

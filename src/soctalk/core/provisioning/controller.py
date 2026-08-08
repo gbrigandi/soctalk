@@ -117,6 +117,21 @@ class TenantLifecycleError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp stored in ``tenant.runtime``; None on garbage.
+
+    Tolerates a trailing ``Z`` and strips tz to a naive UTC datetime so it
+    compares cleanly against ``datetime.utcnow()`` (the convention used
+    throughout the controller's transition timestamps)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt.replace(tzinfo=None)
+
+
 # State transition table: valid next states from each state.
 # ---------------------------------------------------------------------------
 
@@ -187,6 +202,12 @@ class ControllerSettings:
     # connection-refused between soctalk-system and tenant-* pods).
     # Env: ``SOCTALK_TENANT_NETWORK_POLICIES_ENABLED=0|false``.
     tenant_network_policies_enabled: bool = True
+    # Grace before ``sync_state`` treats a continuously-missing namespace as a
+    # real disposal and ARCHIVES the tenant (irreversible). The first sustained
+    # absence only degrades; archival waits this long, so a transient 404 or an
+    # in-flight re-provision recovers first (issue #104). Env:
+    # ``SOCTALK_NAMESPACE_MISSING_GRACE_SECONDS``.
+    namespace_missing_grace_seconds: float = 900.0
 
     @classmethod
     def from_env(cls) -> ControllerSettings:
@@ -224,6 +245,9 @@ class ControllerSettings:
             tenant_network_policies_enabled=(
                 os.getenv("SOCTALK_TENANT_NETWORK_POLICIES_ENABLED", "1")
                 not in {"0", "false", "False", "no", "NO"}
+            ),
+            namespace_missing_grace_seconds=float(
+                os.getenv("SOCTALK_NAMESPACE_MISSING_GRACE_SECONDS", "900")
             ),
         )
 
@@ -635,34 +659,210 @@ class TenantController:
         await self.session.commit()
         return tenant
 
-    async def sync_state(self, tenant_id: UUID) -> Tenant:
-        """Reconcile SocTalk DB state against K8s actual state.
+    async def sync_state(
+        self, tenant_id: UUID, *, actor_id: str | None = None
+    ) -> Tenant:
+        """Reconcile SocTalk DB state against actual Kubernetes workloads.
 
-        V1 probe: if active tenant's pods aren't Ready and the runtime
-        heartbeat has never landed, mark ``degraded``. V1.5 does
-        bidirectional repair.
+        Drift repair for a tenant that should have a running data plane —
+        ``active``/``degraded``, plus a ``decommissioning`` finalizer. Never
+        touches ``suspended`` (operator-owned) or transitional/terminal states.
+
+        Safety rails, because ``archived`` is irreversible (issue #104):
+
+        1. **Defer to the job queue.** A tenant with a pending/in-flight
+           provisioning job is owned by that job — skip it entirely, so a
+           re-provision or decommission in flight is never raced.
+        2. **Probe errors never mutate.** Only a *definitive* namespace-404
+           (not a 403/5xx/connection blip) counts as "gone".
+        3. **Two-phase, grace-gated archive.** The FIRST sustained absence
+           only DEGRADES (reversible) and stamps ``namespace_missing_since``.
+           Archival waits until the namespace has been continuously absent for
+           ``namespace_missing_grace_seconds``, so a transient 404 or an
+           in-flight re-provision recovers without an irreversible archive.
+        4. **Locked writes.** Every mutation re-reads the row ``FOR UPDATE``
+           and re-verifies (state + no active job) before committing, so a
+           concurrent suspend/decommission on another replica is never
+           clobbered by this drift-time write.
+
+        A committed ``decommissioning`` whose namespace is already gone is
+        finalized straight to ``archived`` (the operator already asked for
+        teardown — no grace needed).
         """
         tenant = await self._load_tenant(tenant_id)
-        if tenant.state != TenantState.ACTIVE.value:
+        if tenant.state not in (
+            TenantState.ACTIVE.value,
+            TenantState.DEGRADED.value,
+            TenantState.DECOMMISSIONING.value,
+        ):
+            return tenant
+        # A queued/in-flight lifecycle job owns this tenant; defer to it.
+        if await self._has_active_provisioning_job(tenant.id):
             return tenant
         ns = f"tenant-{tenant.slug}"
+
+        # --- Probe actual cluster state (slow, unlocked) ---
+        try:
+            present = await self.k8s.namespace_exists(ns)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "sync_state_probe_failed",
+                tenant=str(tenant.id), step="namespace", error=str(e),
+            )
+            return tenant
+
+        if not present:
+            return await self._reconcile_missing_namespace(
+                tenant_id, ns, actor_id=actor_id
+            )
+
         try:
             pods = await self.k8s.read_pods(ns)
         except Exception as e:  # noqa: BLE001
-            logger.warning("sync_state_probe_failed", tenant=str(tenant.id), error=str(e))
+            logger.warning(
+                "sync_state_probe_failed",
+                tenant=str(tenant.id), step="pods", error=str(e),
+            )
             return tenant
-        if not pods:
-            return tenant
-        all_ready = all(p["ready"] for p in pods)
-        if not all_ready:
-            last_heartbeat = tenant.runtime.get("last_heartbeat")
-            if last_heartbeat is None:
+        # Namespace is back / present: an empty namespace counts as "no
+        # workloads" (not ready); a Pending pod with no container statuses is
+        # NOT ready (``all([])`` would wrongly be True).
+        all_ready = bool(pods) and all(p["ready"] for p in pods)
+        return await self._reconcile_present_namespace(
+            tenant_id, all_ready, actor_id=actor_id
+        )
+
+    async def _has_active_provisioning_job(self, tenant_id: UUID) -> bool:
+        from soctalk.core.tenancy.models import ProvisioningJob
+
+        row = (
+            await self.session.execute(
+                select(ProvisioningJob.id)
+                .where(ProvisioningJob.tenant_id == tenant_id)
+                .where(ProvisioningJob.status.in_(("pending", "in_flight")))
+                .limit(1)
+            )
+        ).first()
+        return row is not None
+
+    async def _reconcile_missing_namespace(
+        self, tenant_id: UUID, ns: str, *, actor_id: str | None
+    ) -> Tenant:
+        """Namespace is definitively gone. Degrade-then-archive under grace."""
+        tenant = await self._load_tenant(tenant_id, for_update=True)
+        # Re-verify under the lock: state may have moved, or a job may have
+        # been enqueued, between the probe and this write.
+        if tenant.state not in (
+            TenantState.ACTIVE.value,
+            TenantState.DEGRADED.value,
+            TenantState.DECOMMISSIONING.value,
+        ) or await self._has_active_provisioning_job(tenant.id):
+            await self.session.rollback()
+            return await self._load_tenant(tenant_id)
+
+        now = datetime.utcnow()
+
+        # A decommission that already committed but left the namespace behind:
+        # finalize immediately — teardown was the intent.
+        if tenant.state == TenantState.DECOMMISSIONING.value:
+            return await self._finalize_archive(
+                tenant, actor_id=actor_id, ns=ns,
+                reason="decommission_namespace_gone",
+            )
+
+        missing_since = _parse_iso(
+            (tenant.runtime or {}).get("namespace_missing_since")
+        )
+        grace = self.settings.namespace_missing_grace_seconds
+        if missing_since is not None and (
+            (now - missing_since).total_seconds() >= grace
+        ):
+            # Sustained absence past the grace window → real disposal.
+            return await self._finalize_archive(
+                tenant, actor_id=actor_id, ns=ns,
+                reason="workloads_missing_drift",
+            )
+
+        # First observation (or still within grace): DEGRADE (reversible) and
+        # stamp the marker. If already degraded, just refresh the marker.
+        if missing_since is None:
+            tenant.runtime = {
+                **(tenant.runtime or {}),
+                "namespace_missing_since": now.isoformat(),
+            }
+            logger.warning(
+                "sync_state_namespace_missing",
+                tenant=str(tenant.id), namespace=ns, from_state=tenant.state,
+            )
+            if tenant.state == TenantState.ACTIVE.value:
                 await self._transition(
-                    tenant,
-                    TenantState.DEGRADED.value,
+                    tenant, TenantState.DEGRADED.value, actor_id=actor_id,
+                    event_type="degraded_namespace_missing",
+                    details={"namespace": ns},
+                )
+        await self.session.commit()
+        return tenant
+
+    async def _reconcile_present_namespace(
+        self, tenant_id: UUID, all_ready: bool, *, actor_id: str | None
+    ) -> Tenant:
+        tenant = await self._load_tenant(tenant_id, for_update=True)
+        if tenant.state not in (
+            TenantState.ACTIVE.value, TenantState.DEGRADED.value
+        ) or await self._has_active_provisioning_job(tenant.id):
+            await self.session.rollback()
+            return await self._load_tenant(tenant_id)
+
+        # The namespace is back — a prior missing-marker is stale.
+        marker_cleared = False
+        if (tenant.runtime or {}).get("namespace_missing_since") is not None:
+            rt = {**(tenant.runtime or {})}
+            rt.pop("namespace_missing_since", None)
+            tenant.runtime = rt
+            marker_cleared = True
+
+        if tenant.state == TenantState.ACTIVE.value and not all_ready:
+            if (tenant.runtime or {}).get("last_heartbeat") is None:
+                await self._transition(
+                    tenant, TenantState.DEGRADED.value, actor_id=actor_id,
                     event_type="degraded_pods_not_ready",
                 )
-                await self.session.commit()
+        elif tenant.state == TenantState.DEGRADED.value and all_ready:
+            await self._transition(
+                tenant, TenantState.ACTIVE.value, actor_id=actor_id,
+                event_type="recovered", details={"reason": "pods_ready"},
+            )
+        elif not marker_cleared:
+            await self.session.rollback()
+            return await self._load_tenant(tenant_id)
+        await self.session.commit()
+        return tenant
+
+    async def _finalize_archive(
+        self, tenant: Tenant, *, actor_id: str | None, ns: str, reason: str
+    ) -> Tenant:
+        """Drive a tenant with a vanished data plane to the terminal
+        ``archived`` state atomically (single commit). Caller holds the row
+        lock and has re-verified state + no active job."""
+        logger.warning(
+            "sync_state_archiving_missing_workloads",
+            tenant=str(tenant.id), namespace=ns, from_state=tenant.state,
+            reason=reason,
+        )
+        if tenant.state != TenantState.DECOMMISSIONING.value:
+            await self._transition(
+                tenant, TenantState.DECOMMISSIONING.value, actor_id=actor_id,
+                event_type="decommission_detected",
+                details={"reason": reason, "namespace": ns},
+            )
+        if tenant.deleted_at is None:
+            tenant.deleted_at = datetime.utcnow()
+        await self._transition(
+            tenant, TenantState.ARCHIVED.value, actor_id=actor_id,
+            event_type="archived",
+            details={"reason": reason, "namespace": ns},
+        )
+        await self.session.commit()
         return tenant
 
     # ------------------------------------------------------------------
@@ -1062,6 +1262,13 @@ class TenantController:
             # cross-cluster L2 install-spec (agents/api.py), where no
             # controller pre-writes Secrets on the remote cluster.
             include_llm_api_key=False,
+            # Disable the tenant chart's bundled Wazuh subchart: this L1 path
+            # installs Wazuh as a separate ``wazuh-<slug>`` release below
+            # (``_step_helm_apply_wazuh``). Leaving the subchart on would stand
+            # up a second, orphaned Wazuh stack (``tenant-<slug>-wazuh-*``) that
+            # nothing points at — double the SIEM footprint. The bundled path
+            # is the cross-cluster L2 install-spec only.
+            bundled_siem=False,
         )
         if self.settings.tenant_values_overlay:
             values = _deep_merge(values, self.settings.tenant_values_overlay)
@@ -1248,8 +1455,13 @@ class TenantController:
     # Internals
     # ------------------------------------------------------------------
 
-    async def _load_tenant(self, tenant_id: UUID) -> Tenant:
-        result = await self.session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    async def _load_tenant(
+        self, tenant_id: UUID, *, for_update: bool = False
+    ) -> Tenant:
+        stmt = select(Tenant).where(Tenant.id == tenant_id)
+        if for_update:
+            stmt = stmt.with_for_update()
+        result = await self.session.execute(stmt)
         tenant = result.scalar_one_or_none()
         if tenant is None:
             raise ProvisionError(f"tenant {tenant_id} not found")

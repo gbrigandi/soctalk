@@ -262,6 +262,27 @@ spec:
               value: /run/secrets/soctalk/jwt-key
             - name: ADAPTER_SIGNING_KEY_PATH
               value: /run/secrets/adapter/signing_key
+            {{- /* Install hard cap for the per-tenant run token budget
+                   override (#103). Unset -> the API default; set a real
+                   ceiling here to enforce a cap fleet-wide. */}}
+            {{- if and .Values.defaults.runTokenBudget .Values.defaults.runTokenBudget.max }}
+            - name: SOCTALK_RUN_TOKEN_BUDGET_MAX
+              value: {{ .Values.defaults.runTokenBudget.max | quote }}
+            {{- end }}
+            {{- /* Install hard cap for the per-tenant run DOLLAR budget
+                   override (#128). Same shape as the token cap above. */}}
+            {{- if and .Values.defaults.runDollarBudget .Values.defaults.runDollarBudget.max }}
+            - name: SOCTALK_RUN_DOLLAR_BUDGET_MAX
+              value: {{ .Values.defaults.runDollarBudget.max | quote }}
+            {{- end }}
+            {{- /* Zone whose midnight resets the daily ceilings (#129).
+                   Unset -> UTC. Per-tenant override lives in policy; this is
+                   the install default, and without it a charted install is
+                   stuck on UTC. */}}
+            {{- if .Values.defaults.budgetDayTimezone }}
+            - name: SOCTALK_BUDGET_DAY_TIMEZONE
+              value: {{ .Values.defaults.budgetDayTimezone | quote }}
+            {{- end }}
             - name: SOCTALK_LLM_PROVIDER_DEFAULT
               value: {{ .Values.defaults.llm.provider | quote }}
             - name: SOCTALK_LLM_BASE_URL_DEFAULT
