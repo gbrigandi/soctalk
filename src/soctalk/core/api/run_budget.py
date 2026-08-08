@@ -23,7 +23,7 @@ from pydantic import BaseModel, StrictInt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from soctalk.core.cost import get_tenant_daily_spend, get_tenant_daily_status
+from soctalk.core.cost import get_tenant_daily_status
 from soctalk.core.ir.events import EventKind, append_event
 from soctalk.core.ir.policies import (
     RUN_DOLLAR_BUDGET_KEY,
@@ -466,13 +466,16 @@ async def unlock_run(
             },
         )
 
-        # The per-run cap is not the only thing that can stop this run.
-        spend = await get_tenant_daily_spend(db, tenant_id)
+        # The per-run cap is not the only thing that can stop this run. Resolve
+        # the ceilings rather than reading TenantDailySpend.cap_hit, which only
+        # knows the install env values and would miss a per-tenant override
+        # (#129) — the exact case where the operator most needs telling.
+        status = await get_tenant_daily_status(db, tenant_id)
         warning = None
-        if spend.cap_hit:
+        if status.cap_hit:
             warning = (
-                "tenant is over its rolling 24h cap, so the worker will not claim "
-                "this run until the window clears"
+                f"tenant is over its rolling 24h ceiling ({status.reason}), so the "
+                "worker will not claim this run until the window clears"
             )
 
     return RunUnlockResult(

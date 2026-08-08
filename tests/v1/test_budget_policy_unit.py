@@ -149,3 +149,22 @@ async def test_daily_cap_override_is_clamped_and_junk_is_ignored(monkeypatch):
     assert caps.dollars == 100.0
     # An unreadable token cap leaves the install default in place.
     assert caps.tokens == cost.tenant_daily_token_cap()
+
+
+def test_daily_status_is_what_reports_a_cap_hit_not_the_spend_object():
+    """TenantDailySpend.cap_hit only knows the install env values.
+
+    Caught live: the unlock endpoint used it, so a tenant whose 24h ceiling was
+    lowered by policy to $0.01 while env said $50 was reported as having no cap
+    problem — the exact case where an operator most needs telling, because the
+    run they just unlocked will not be claimed.
+    """
+    from soctalk.core.cost import DailyCaps, DailyCapStatus, TenantDailySpend
+
+    spend = TenantDailySpend(tokens=100, dollars=0.05265)
+    # Env-shaped view: nothing looks wrong.
+    assert not spend.dollar_cap_hit
+    # Resolved per-tenant view: the ceiling is blown.
+    status = DailyCapStatus(spend, DailyCaps(tokens=10_000_000, dollars=0.01))
+    assert status.cap_hit and status.dollar_cap_hit
+    assert "0.01" in (status.reason or "")
