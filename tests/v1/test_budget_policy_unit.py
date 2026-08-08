@@ -431,3 +431,55 @@ def test_run_unlock_request_rejects_the_plausible_misspelling():
     assert "dollars_budget" in str(exc.value)
 
     assert RunUnlockRequest(dollar_budget=5.0).dollar_budget == 5.0
+
+
+# --- the price gate: a model must be priced to be used ---------------------
+#
+# The rule: a model needs a catalog entry before it can be used, unless cost
+# tracking is disabled. Enforced at CONFIGURATION time (the LLM PATCH), not at
+# run time — refusing to start a run over pricing would stop triage silently,
+# which is the failure the pricing feature exists to prevent.
+
+
+def test_cost_tracking_is_on_unless_explicitly_disabled(monkeypatch):
+    from soctalk.core.ir.policies import cost_tracking_install_default
+
+    monkeypatch.delenv("SOCTALK_COST_TRACKING", raising=False)
+    monkeypatch.delenv("SOCTALK_UNKNOWN_MODEL_COST", raising=False)
+    assert cost_tracking_install_default() is True
+
+    for off in ("off", "0", "false", "no", "disabled", "OFF"):
+        monkeypatch.setenv("SOCTALK_COST_TRACKING", off)
+        assert cost_tracking_install_default() is False, off
+
+
+def test_zero_unknown_cost_already_means_tracking_off(monkeypatch):
+    """An operator who set unpriced models to cost nothing has answered this.
+
+    Making them set a second variable to express the same intent would be a
+    papercut, so the existing local-inference knob is honoured.
+    """
+    from soctalk.core.ir.policies import cost_tracking_install_default
+
+    monkeypatch.delenv("SOCTALK_COST_TRACKING", raising=False)
+    for zero in ("zero", "free", "0"):
+        monkeypatch.setenv("SOCTALK_UNKNOWN_MODEL_COST", zero)
+        assert cost_tracking_install_default() is False, zero
+
+
+def test_turning_accounting_off_is_scoped_like_a_budget_ceiling():
+    """It disables every ceiling at once, so lower policy layers must not set it."""
+    from soctalk.core.ir.policies import BUDGET_KEYS, COST_TRACKING_KEY
+
+    assert COST_TRACKING_KEY in BUDGET_KEYS
+
+
+def test_unpriced_message_names_every_way_out():
+    """A refusal the operator cannot act on is just an outage."""
+    from soctalk.core.pricing.gate import unpriced_message
+
+    msg = unpriced_message(["model: claude-x-9"])
+    assert "claude-x-9" in msg
+    assert "soctalk-prices import" in msg   # seed the catalog
+    assert "override" in msg                # or state the rate yourself
+    assert "off" in msg.lower()             # or stop counting dollars

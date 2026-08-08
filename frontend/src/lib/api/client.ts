@@ -121,6 +121,11 @@ export interface RunBudget {
 	daily_dollar_max: number;
 	daily_token_override: number | null;
 	daily_dollar_override: number | null;
+	/** Cost accounting master switch. Off => dollar ceilings inert, unpriced
+	 *  models allowed. */
+	cost_tracking_enabled: boolean;
+	cost_tracking_install_default: boolean;
+	cost_tracking_override: boolean | null;
 }
 
 /** Result of resuming a budget-halted run (#127). */
@@ -898,6 +903,7 @@ export const api = {
 				dollar_override?: number | null;
 				daily_token_override?: number | null;
 				daily_dollar_override?: number | null;
+				cost_tracking_override?: boolean | null;
 			}
 		) =>
 			request<RunBudget>(`/mssp/tenants/${tenantId}/run-budget`, {

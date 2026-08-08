@@ -19,7 +19,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictFloat, StrictInt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,9 +34,12 @@ from soctalk.core.cost import (
 )
 from soctalk.core.ir.events import EventKind, append_event
 from soctalk.core.ir.policies import (
+    COST_TRACKING_KEY,
     RUN_DOLLAR_BUDGET_KEY,
     RUN_TOKEN_BUDGET_KEY,
+    cost_tracking_install_default,
     delete_tenant_policy,
+    resolve_cost_tracking,
     resolve_run_dollar_budget,
     resolve_run_token_budget,
     run_dollar_budget_default,
@@ -105,6 +108,12 @@ class RunBudgetView(BaseModel):
     daily_dollar_max: float = 0.0
     daily_token_override: int | None = None
     daily_dollar_override: float | None = None
+    # Cost accounting master switch. When off, every dollar ceiling above is
+    # inert and an unpriced model may be used — the deliberate posture for
+    # local inference, where the dollars would be fiction anyway.
+    cost_tracking_enabled: bool = True
+    cost_tracking_install_default: bool = True
+    cost_tracking_override: bool | None = None
 
 
 class RunBudgetUpdate(BaseModel):
@@ -130,6 +139,10 @@ class RunBudgetUpdate(BaseModel):
     # Rolling 24h ceilings (#129). Same tri-state, same clamping.
     daily_token_override: StrictInt | None = None
     daily_dollar_override: StrictFloat | StrictInt | None = None
+    # StrictBool: this one really is a boolean, and accepting "false" or 0
+    # would let a string typo read as "accounting on" and silently enforce
+    # ceilings the operator meant to disable.
+    cost_tracking_override: StrictBool | None = None
 
 
 async def _assert_tenant_exists(db: AsyncSession, tenant_id: UUID) -> None:
@@ -164,6 +177,19 @@ async def _daily_overrides(
     return tok_v, dol_v
 
 
+async def _cost_tracking_override(db: AsyncSession, tenant_id: UUID) -> bool | None:
+    """The tenant's own on/off choice, or None when it defers to the install."""
+    pol = await tenant_policies(db, tenant_id)
+    v = pol.get(COST_TRACKING_KEY)
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() not in {"0", "off", "false", "no", "disabled"}
+    return bool(v)
+
+
 async def _dollar_override(db: AsyncSession, tenant_id: UUID) -> float | None:
     pol = await tenant_policies(db, tenant_id)
     v = pol.get(RUN_DOLLAR_BUDGET_KEY)
@@ -178,6 +204,8 @@ async def _dollar_override(db: AsyncSession, tenant_id: UUID) -> float | None:
 async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
     status = await get_tenant_daily_status(db, tenant_id)
     daily_tok, daily_dol = await _daily_overrides(db, tenant_id)
+    cost_tracking = await resolve_cost_tracking(db, tenant_id)
+    cost_track_override = await _cost_tracking_override(db, tenant_id)
     return RunBudgetView(
         install_default=run_token_budget_default(),
         install_max=run_token_budget_max(),
@@ -203,6 +231,9 @@ async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
         daily_dollar_max=tenant_daily_dollar_cap_max(),
         daily_token_override=daily_tok,
         daily_dollar_override=daily_dol,
+        cost_tracking_enabled=cost_tracking,
+        cost_tracking_install_default=cost_tracking_install_default(),
+        cost_tracking_override=cost_track_override,
     )
 
 
@@ -234,14 +265,21 @@ async def update_run_budget(
     dollar_present = "dollar_override" in setf
     daily_token_present = "daily_token_override" in setf
     daily_dollar_present = "daily_dollar_override" in setf
+    cost_track_present = "cost_tracking_override" in setf
     if not any(
-        (token_present, dollar_present, daily_token_present, daily_dollar_present)
+        (
+            token_present,
+            dollar_present,
+            daily_token_present,
+            daily_dollar_present,
+            cost_track_present,
+        )
     ):
         raise HTTPException(
             422,
             "body must include at least one of 'token_override', 'dollar_override', "
-            "'daily_token_override' or 'daily_dollar_override' (a value to set, or "
-            "null to clear)",
+            "'daily_token_override', 'daily_dollar_override' or "
+            "'cost_tracking_override' (a value to set, or null to clear)",
         )
 
     token_value = payload.token_override
@@ -317,6 +355,13 @@ async def update_run_budget(
             else:
                 await set_tenant_policy(
                     db, tenant_id, RUN_DOLLAR_BUDGET_KEY, dollar_value
+                )
+        if cost_track_present:
+            if payload.cost_tracking_override is None:
+                await delete_tenant_policy(db, tenant_id, COST_TRACKING_KEY)
+            else:
+                await set_tenant_policy(
+                    db, tenant_id, COST_TRACKING_KEY, payload.cost_tracking_override
                 )
         if daily_token_present:
             if daily_token_value is None:

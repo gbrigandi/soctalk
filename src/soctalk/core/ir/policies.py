@@ -263,6 +263,72 @@ def run_dollar_budget_max() -> float:
     return 1_000.0
 
 
+COST_TRACKING_KEY = "cost_tracking_enabled"
+
+_COST_TRACKING_OFF = {"0", "off", "false", "no", "disabled"}
+
+
+def cost_tracking_install_default() -> bool:
+    """Install-wide default for dollar accounting. On unless told otherwise.
+
+    ``SOCTALK_UNKNOWN_MODEL_COST=zero`` also reads as off: it already means
+    "unpriced models cost nothing", which is the same deployment posture
+    (local inference), and an operator who set it has answered this question.
+    """
+    import os
+
+    raw = (os.getenv("SOCTALK_COST_TRACKING") or "").strip().lower()
+    if raw in _COST_TRACKING_OFF:
+        return False
+    if (os.getenv("SOCTALK_UNKNOWN_MODEL_COST") or "").strip().lower() in {
+        "0",
+        "zero",
+        "free",
+    }:
+        return False
+    return True
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _COST_TRACKING_OFF:
+            return False
+        if v in {"1", "on", "true", "yes", "enabled"}:
+            return True
+    return default
+
+
+async def resolve_cost_tracking(db: AsyncSession, tenant_id: UUID) -> bool:
+    """Whether dollar accounting is enforced for this tenant.
+
+    When off, a model with no catalog entry may still be used: the operator has
+    said dollars are not being counted here, so there is nothing to enforce and
+    nothing to get wrong. When on (the default), an unpriced model is refused at
+    configuration time rather than billed at the fail-expensive fallback (#124,
+    #139).
+
+    Never raises, for the same reason as the budget resolvers: a policy read
+    that fails must not take triage down with it. An unreadable policy yields
+    the install default.
+    """
+    default = cost_tracking_install_default()
+    try:
+        eff = await effective_policy(db, tenant_id)
+    except Exception:  # noqa: BLE001 - policy failure must not break triage
+        import structlog
+
+        structlog.get_logger().warning(
+            "cost_tracking_unresolved", tenant_id=str(tenant_id)
+        )
+        return default
+    return _as_bool(eff.get(COST_TRACKING_KEY, default), default)
+
+
 async def resolve_run_dollar_budget(db: AsyncSession, tenant_id: UUID) -> float:
     """Effective per-run dollar budget for a tenant at run-creation time.
 
@@ -331,6 +397,9 @@ BUDGET_KEYS: frozenset[str] = frozenset(
         # Moving the day boundary moves when a ceiling resets, so it is a
         # budget control and belongs to the same scope rule.
         "budget_day_timezone",
+        # Turning accounting off disables every ceiling at once, so it is the
+        # most powerful budget control of all and belongs here too.
+        "cost_tracking_enabled",
     }
 )
 
@@ -383,7 +452,10 @@ async def effective_policy(
 
 __all__ = [
     "BUDGET_KEYS",
+    "COST_TRACKING_KEY",
     "RUN_DOLLAR_BUDGET_KEY",
+    "cost_tracking_install_default",
+    "resolve_cost_tracking",
     "RUN_TOKEN_BUDGET_KEY",
     "delete_tenant_policy",
     "effective_policy",

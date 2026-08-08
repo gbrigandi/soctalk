@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.llm_provider import normalize_provider
+from soctalk.core.pricing import gate
 from soctalk.core.pricing.resolve import resolve_run_prices
 from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.auth import current_identity
@@ -425,6 +426,29 @@ async def update_tenant_llm(
                 cfg.llm_model_prices = validate_llm_model_prices(payload.model_prices)
             except ValueError as e:
                 raise HTTPException(422, f"invalid model_prices: {e}") from e
+        # A model must be priced before it can be used, unless this tenant has
+        # cost accounting turned off. Checked HERE — after the merge, before any
+        # side effect — so a rejection leaves nothing half-applied: no Secret
+        # written, no provisioning job queued, no chart re-render.
+        #
+        # Configuration time is the right gate. Refusing at run time would stop
+        # triage silently, which is what the pricing feature exists to prevent;
+        # refusing here puts the model name in front of the person choosing it.
+        unpriced = await gate.unpriced_models(
+            session,
+            tenant_id,
+            provider=cfg.llm_provider,
+            base_url=cfg.llm_base_url,
+            models={
+                "model": cfg.llm_model,
+                "fast_model": cfg.llm_fast_model,
+                "reasoning_model": cfg.llm_reasoning_model,
+            },
+            overrides=cfg.llm_model_prices,
+        )
+        if unpriced:
+            raise HTTPException(422, gate.unpriced_message(unpriced))
+
         # Per-tier backends (issue #12): None = unchanged; {} = clear to
         # single-provider (NULL); a map = validate + replace. Replacement
         # assignment (not in-place) so the JSONB column is marked dirty.

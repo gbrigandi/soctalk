@@ -33,6 +33,9 @@
 	let dollarInput = '';
 	let dailyTokenInput = '';
 	let dailyDollarInput = '';
+	// Mirrors the effective value, not the override: the switch shows what is
+	// in force, and matching the install default clears the override on save.
+	let costTracking = true;
 
 	$: editable = tenantId != null && canEdit;
 
@@ -69,6 +72,7 @@
 		dollarInput = b.dollar_tenant_override != null ? String(b.dollar_tenant_override) : '';
 		dailyTokenInput = b.daily_token_override != null ? String(b.daily_token_override) : '';
 		dailyDollarInput = b.daily_dollar_override != null ? String(b.daily_dollar_override) : '';
+		costTracking = b.cost_tracking_enabled !== false;
 	}
 
 	async function load() {
@@ -156,6 +160,7 @@
 			dollar_override?: number | null;
 			daily_token_override?: number | null;
 			daily_dollar_override?: number | null;
+			cost_tracking_override?: boolean | null;
 		} = {};
 		try {
 			if (overrideInput.trim() !== was.token) patch.token_override = tokenPatch();
@@ -173,6 +178,12 @@
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 			return;
+		}
+		// Tri-state, like the ceilings: matching the install default clears the
+		// tenant override rather than pinning today's default forever.
+		if (costTracking !== budget.cost_tracking_enabled) {
+			patch.cost_tracking_override =
+				costTracking === budget.cost_tracking_install_default ? null : costTracking;
 		}
 		if (Object.keys(patch).length === 0) {
 			error = 'Nothing changed.';
@@ -201,7 +212,8 @@
 				token_override: null,
 				dollar_override: null,
 				daily_token_override: null,
-				daily_dollar_override: null
+				daily_dollar_override: null,
+				cost_tracking_override: null
 			});
 			syncInputs(budget);
 		} catch (e) {
@@ -364,6 +376,38 @@
 						data-testid="run-budget-daily-dollar-input"
 						disabled={saving}
 					/>
+				</label>
+			</div>
+			<div class="mt-4 pt-3 border-t border-surface-500/20">
+				<label class="flex items-start gap-3 cursor-pointer">
+					<input
+						type="checkbox"
+						class="checkbox mt-1"
+						bind:checked={costTracking}
+						data-testid="run-budget-cost-tracking"
+						disabled={saving || !editable}
+					/>
+					<span class="text-sm">
+						<span class="font-medium">Track cost in dollars</span>
+						<span
+							class="opacity-70 block"
+							data-testid="run-budget-cost-tracking-help"
+						>
+							{#if costTracking}
+								Every model must have a price before it can be selected, so the
+								ceilings above are enforced on real cost.
+							{:else}
+								Dollar ceilings are not enforced and unpriced models may be used.
+								Token ceilings still apply.
+							{/if}
+						</span>
+						{#if budget.cost_tracking_override != null}
+							<span class="opacity-60 block text-xs mt-1">
+								Set for this tenant. The install default is
+								{budget.cost_tracking_install_default ? 'on' : 'off'}.
+							</span>
+						{/if}
+					</span>
 				</label>
 			</div>
 			{#if error}
