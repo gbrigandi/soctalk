@@ -128,6 +128,16 @@ spec:
               PY
               echo "running alembic upgrade head"
               alembic upgrade head
+              # v1_0042 creates model_prices empty, and an unpriced model bills
+              # at the fail-expensive fallback (15/75 per Mtok) rather than the
+              # tenant's real rate — two orders of magnitude out, which halts
+              # long investigations on budget with nothing in the UI saying why
+              # (#137). The seed ships in the wheel and the import is
+              # idempotent, so this is safe on every restart, not just install.
+              # Deliberately inside `set -e`: an image whose seed is missing is
+              # broken, and failing to start is louder than billing 300x.
+              echo "seeding the model price catalog"
+              soctalk-prices import --apply
               echo "binding role passwords"
               python - <<'PY'
               import os, psycopg2
