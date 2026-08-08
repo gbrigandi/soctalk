@@ -109,16 +109,6 @@ jobs:
           # CI uses a temporary alembic.ini override pointed at the test Postgres.
           alembic -x database_url="postgresql://soctalk_admin:soctalk_admin@localhost:5432/soctalk" upgrade head
 
-      - name: Seed the model price catalog
-        env:
-          DATABASE_URL_MSSP: postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk
-        run: |
-          # Mirrors what db-init does on a real install: a model must be priced
-          # before it can be used, so an unseeded catalog means every LLM config
-          # change is refused. Without this the suite tests a state no install
-          # is ever in.
-          soctalk-prices import --apply
-
       - name: Run integration tests (RLS isolation)
         env:
           # In-process alembic reversibility tests (test_migration_v1_00*.py)
@@ -129,6 +119,15 @@ jobs:
           DATABASE_URL_ADMIN: postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk
           DATABASE_URL_APP: postgresql+asyncpg://soctalk_app:soctalk_app@localhost:5432/soctalk
           DATABASE_URL_MSSP: postgresql+asyncpg://soctalk_mssp:soctalk_mssp@localhost:5432/soctalk
+          # This suite exercises LLM-config plumbing — does the PATCH write the
+          # column, enqueue the right job — with tenants pointed at gateway
+          # endpoints whose (provider_kind, model) pairs are deliberately not in
+          # the catalog, because a gateway's price for a model is not the
+          # vendor's price for it. With accounting on, the price gate correctly
+          # refuses those PATCHes and the plumbing never gets tested. The gate
+          # itself is covered by its own unit tests, and turning it off here
+          # exercises the "unless cost tracking is disabled" branch.
+          SOCTALK_COST_TRACKING: "off"
         run: |
           # Roles + passwords were set in the Bootstrap step above.
           #
