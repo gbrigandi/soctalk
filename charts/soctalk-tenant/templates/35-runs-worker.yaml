@@ -95,6 +95,50 @@ spec:
               value: /etc/soctalk/triage-policies
             {{- end }}
             {{- /*
+              Wazuh MCP enrichment (issue #109). settings_provider reads
+              WAZUH_ENABLED + WAZUH_URL (manager REST) + WAZUH_VERIFY_SSL and
+              the API creds; the MCP's indexer client reads the
+              WAZUH_INDEXER_* overrides. Both the in-cluster
+              wazuh-<slug>-wazuh-creds Secret and the provided-profile
+              tenant-external-siem-creds Secret carry the same four keys, so
+              one wiring serves every profile. Emitted only when enabled so
+              pre-change renders stay byte-identical.
+            */}}
+            {{- with .Values.runsWorker.wazuh }}
+            {{- if .enabled }}
+            - name: WAZUH_ENABLED
+              value: "true"
+            - name: WAZUH_URL
+              value: {{ .apiUrl | quote }}
+            - name: WAZUH_VERIFY_SSL
+              value: {{ .verifySsl | default false | quote }}
+            - name: WAZUH_API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credsSecret | quote }}
+                  key: WAZUH_API_USERNAME
+            - name: WAZUH_API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credsSecret | quote }}
+                  key: WAZUH_API_PASSWORD
+            - name: WAZUH_INDEXER_HOST
+              value: {{ .indexerHost | quote }}
+            - name: WAZUH_INDEXER_PORT
+              value: {{ .indexerPort | default 9200 | quote }}
+            - name: WAZUH_INDEXER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credsSecret | quote }}
+                  key: INDEXER_USERNAME
+            - name: WAZUH_INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credsSecret | quote }}
+                  key: INDEXER_PASSWORD
+            {{- end }}
+            {{- end }}
+            {{- /*
                 ``llm.provider`` accepts ``openai-compatible`` (the
                 install-side enum), but the runs-worker's
                 ``load_config()`` only knows ``openai`` and
@@ -131,6 +175,12 @@ spec:
             - name: SOCTALK_CASE_RUN_DOLLAR_BUDGET
               value: {{ .Values.llm.dollarBudgetPerRun | quote }}
             {{- end }}
+            {{- /*
+              Per-tenant price overlay (issue #121). graph/budget.py overlays this
+              onto the built-in table, so a model the table has never heard of is
+              billed at what the tenant actually pays instead of the $15/$75
+              fail-expensive fallback. Emitted only when the tenant sets one.
+            */}}
             {{- /* Per-run TOKEN budget is DB-resolved at run creation (#103),
                    no longer rendered per-tenant to worker env. The
                    SOCTALK_CASE_RUN_TOKEN_BUDGET env stays an install-global

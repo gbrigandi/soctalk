@@ -19,6 +19,24 @@ from soctalk.config import MCPServerConfig
 logger = structlog.get_logger()
 
 
+def _tool_input_schema(tool: Any) -> dict[str, Any]:
+    """Read a tool's JSON input schema across MCP SDK versions.
+
+    The MCP Python SDK 1.x exposes ``Tool.inputSchema`` (camelCase); 2.x
+    renamed the attribute to ``input_schema``. The orchestrator image installs
+    ``mcp`` unpinned (``pip install .``), so which one is present depends on
+    what the build resolved. Hard-coding ``tool.inputSchema`` raised
+    ``'Tool' object has no attribute 'inputSchema'`` on every image that
+    resolved 2.x, which silently disabled ALL Wazuh MCP enrichment (the graph
+    node bound zero tools and no-op'd). Read either, mirroring the defensive
+    chat path in ``chat/mcp_tools.py`` (issue #111).
+    """
+    schema = getattr(tool, "inputSchema", None)
+    if schema is None:
+        schema = getattr(tool, "input_schema", None)
+    return schema or {}
+
+
 class MCPError(Exception):
     """Base exception for MCP errors."""
     pass
@@ -170,7 +188,7 @@ class MCPClient:
             self._tools[tool.name] = {
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": tool.inputSchema,
+                "inputSchema": _tool_input_schema(tool),
             }
             logger.debug("mcp_tool_discovered", server=self.name, tool=tool.name)
 

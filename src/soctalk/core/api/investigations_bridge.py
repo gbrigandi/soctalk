@@ -71,6 +71,12 @@ class Investigation(InvestigationSummary):
     tokens_used: int | None
     tokens_budget: int | None
     disposition: str | None
+    # Enough to act on a budget halt from the investigation view (#127): which
+    # run to unlock, and what it spent against its ceiling. MSSP-only, like the
+    # token figures above — a customer sees neither cost nor run internals.
+    run_id: str | None = None
+    dollars_used: float | None = None
+    dollars_budget: float | None = None
 
 
 class InvestigationList(BaseModel):
@@ -78,6 +84,10 @@ class InvestigationList(BaseModel):
     total: int
     page: int
     page_size: int
+    # The UI's Next button keys off this. It was never returned, so it read as
+    # undefined and Next stayed disabled however many pages existed
+    # (Codex review round 3, finding 1).
+    has_more: bool = False
 
 
 def _db(request: Request) -> AsyncSession:
@@ -222,7 +232,13 @@ async def list_investigations(
         )
         for r in rows
     ]
-    return InvestigationList(items=items, total=int(total), page=page, page_size=page_size)
+    return InvestigationList(
+        items=items,
+        total=int(total),
+        page=page,
+        page_size=page_size,
+        has_more=(page * page_size) < int(total),
+    )
 
 
 @router.get("/{investigation_id}", response_model=Investigation)
@@ -238,7 +254,7 @@ async def get_investigation(investigation_id: UUID, request: Request) -> Investi
                 """
                 SELECT c.id, c.short_id, c.title, c.status, c.severity,
                        c.opened_at, c.updated_at, c.closed_at, c.summary,
-                       c.close_reason
+                       c.close_reason, c.tenant_id
                 FROM investigations c WHERE c.id = :id
                 """
             ),
@@ -253,6 +269,7 @@ async def get_investigation(investigation_id: UUID, request: Request) -> Investi
             text(
                 """
                 SELECT id, status, tokens_used, tokens_budget,
+                       dollars_used, dollars_budget,
                        started_at, ended_at, last_error
                 FROM investigation_runs WHERE investigation_id = :c
                 ORDER BY started_at DESC LIMIT 1
@@ -330,6 +347,17 @@ async def get_investigation(investigation_id: UUID, request: Request) -> Investi
         tokens_used=None if is_customer else (int(run["tokens_used"]) if run else None),
         tokens_budget=None if is_customer else (int(run["tokens_budget"]) if run else None),
         disposition=disposition,
+        # The list has always carried this; the detail did not, which left the
+        # UI unable to address any tenant-scoped action on an investigation --
+        # the budget unlock (#127) needs it in the path.
+        tenant_id=str(row["tenant_id"]) if row["tenant_id"] else None,
+        run_id=None if is_customer else (str(run["id"]) if run else None),
+        dollars_used=(
+            None if is_customer else (float(run["dollars_used"] or 0.0) if run else None)
+        ),
+        dollars_budget=(
+            None if is_customer else (float(run["dollars_budget"] or 0.0) if run else None)
+        ),
     )
 
 

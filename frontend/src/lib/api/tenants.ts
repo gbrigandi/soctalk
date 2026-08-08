@@ -189,6 +189,26 @@ export interface TenantLlmTierWrite {
 	api_key_plain?: string;
 }
 
+export interface EffectivePriceRole {
+	model: string;
+	provider_kind: string;
+	provider_id: string | null;
+	input_per_mtok?: number;
+	output_per_mtok?: number;
+	cache_read_per_mtok?: number;
+	cache_write_per_mtok?: number;
+	/** tenant_override | catalog | unknown — where the rate came from. */
+	source: string;
+	as_of?: string | null;
+}
+
+export interface EffectivePrices {
+	version: number;
+	currency: string;
+	resolved_at: string;
+	models: Record<string, EffectivePriceRole>;
+}
+
 export interface TenantLlmRead {
 	provider: string;
 	base_url: string;
@@ -200,9 +220,18 @@ export interface TenantLlmRead {
 	// Tenant-global default sampling for the router/supervisor tier.
 	temperature: number;
 	max_tokens: number;
-	// Per-tenant case-run budget caps — null = the worker default ($5 / 15k).
+	// Per-tenant case-run budget caps. dollar_budget_per_run is vestigial:
+	// the API rejects writes to it and the ceiling lives on the run-budget
+	// resource (#128). Kept on the read only so older servers still parse.
 	dollar_budget_per_run: number | null;
 	token_budget_per_run: number | null;
+	// Per-tenant price overlay (#121), USD per MILLION tokens, keyed by model.
+	// null when the tenant sets no override and catalog rates apply.
+	model_prices: Record<string, { input: number; output: number }> | null;
+	// The RESOLVED rates a new run would be stamped with: the snapshot shape
+	// {version, currency, resolved_at, models: {fast, reasoning}} where each
+	// role carries its rates, provider and source. Read-only.
+	effective_prices: EffectivePrices | null;
 	has_api_key: boolean;
 	api_key_preview: string;
 	// Per-tier backends for a hybrid tenant (the model "chain"). ``null`` for a
@@ -228,10 +257,13 @@ export interface TenantLlmUpdate {
 	// max_tokens 1–8192 (router output cap; bounds enforced server-side).
 	temperature?: number;
 	max_tokens?: number;
-	// Per-tenant case-run budget caps. Tri-state: omitted = unchanged, null =
-	// clear to the worker default, a number = set. dollars > 0, tokens ≥ 1000.
-	dollar_budget_per_run?: number | null;
+	// Per-tenant case-run budget caps. token_budget_per_run and
+	// dollar_budget_per_run are both rejected by the API now (#103, #128);
+	// use the run-budget resource.
 	token_budget_per_run?: number | null;
+	// Price overlay: omitted = unchanged, {} = clear back to catalog rates,
+	// a map = replace wholesale. USD per million tokens.
+	model_prices?: Record<string, { input: number; output: number }>;
 	// Per-tier backends (the model "chain"): omitted = leave unchanged, {} =
 	// clear back to single-provider, a map = replace. Per-tier key semantics
 	// are keep/replace/clear (see ``TenantLlmTierWrite``).
