@@ -504,24 +504,45 @@ def _dollars_budget_kv(claim_dollars_budget: Any) -> dict[str, float]:
     """Resolve the dollar-budget seed for graph state.
 
     Returns ``{"dollars_budget": value}`` or ``{}`` (let
-    ``token_budget.ensure`` pick the default). Centralised so the
-    precedence rules + non-positive override guard live in one place.
+    ``token_budget.ensure`` pick the default).
+
+    The CLAIM WINS (#128). It used to be the other way round, and that made the
+    run row a lie: the row kept its 5.0 column default while the worker enforced
+    whatever env said, so a run capped at $0.0005 displayed $5 to the API, the
+    UI and the flight recorder. The claim value is resolved from policy and
+    stamped on the row at run creation, so preferring it makes the row the
+    single source of truth and removes the rollout needed to change a budget.
+
+    Env stays as the fallback for installs that carry no per-run value yet, and
+    a disagreement is logged rather than silently resolved: migration v1_0043
+    copies the rendered column into policy so the two normally agree, but an
+    operator who set the env directly is about to see different behaviour and
+    should be told (Codex review, finding 1).
     """
+    try:
+        claim_v = float(claim_dollars_budget) if claim_dollars_budget is not None else 0.0
+    except (TypeError, ValueError):
+        claim_v = 0.0
+
+    env_v = 0.0
     env_raw = os.environ.get("SOCTALK_CASE_RUN_DOLLAR_BUDGET")
     if env_raw:
         try:
             env_v = float(env_raw)
         except ValueError:
             env_v = 0.0
-        if env_v > 0:
-            return {"dollars_budget": env_v}
-        # Fall through to claim/default — see comment above.
-    try:
-        claim_v = float(claim_dollars_budget) if claim_dollars_budget is not None else 0.0
-    except (TypeError, ValueError):
-        claim_v = 0.0
+
     if claim_v > 0:
+        if env_v > 0 and env_v != claim_v:
+            logger.warning(
+                "dollar_budget_env_ignored env=%s claim=%s "
+                "(the run's own budget wins since #128; drop the env var)",
+                env_v,
+                claim_v,
+            )
         return {"dollars_budget": claim_v}
+    if env_v > 0:
+        return {"dollars_budget": env_v}
     return {}
 
 

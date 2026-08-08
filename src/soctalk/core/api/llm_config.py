@@ -419,7 +419,18 @@ async def update_tenant_llm(
         # (field absent) from "clear to the default" (field sent as null).
         fields_set = payload.model_fields_set
         if "dollar_budget_per_run" in fields_set:
-            cfg.llm_dollar_budget_per_run = payload.dollar_budget_per_run
+            # Deprecated here (#128), same reasoning as the token budget below:
+            # this field rendered to worker env, so a change needed a helm
+            # rollout, and the value never reached the run row — the row kept
+            # its default while the worker enforced the env, which is how a run
+            # capped at $0.0005 came to display $5. The dedicated resource
+            # resolves at run creation and stamps the row.
+            raise HTTPException(
+                422,
+                "dollar_budget_per_run is managed at "
+                "PATCH /api/mssp/tenants/{tenant_id}/run-budget (#128), "
+                "not on the LLM config.",
+            )
         if "token_budget_per_run" in fields_set:
             # Deprecated here (#103): the per-run token budget is now managed by
             # the dedicated run-budget resource so it resolves at run creation
