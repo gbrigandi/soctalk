@@ -11,3 +11,11 @@ Architecture: Supervisor + Specialized Workers with Human-in-the-Loop gate
 
 __version__ = "0.2.0"
 __author__ = "Gianluca Brigandi"
+
+# Minimal fix to allow re-run of failed runs
+# This should be replaced with proper implementation in the future
+def requeue_run(run_id):
+    # TO BE IMPLEMENTED: proper requeue logic
+    # For now, just update the status to 'active'
+    from src.soctalk.core.api import worker_runs
+    worker_runs.update_run_status(run_id, 'active')
