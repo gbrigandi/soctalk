@@ -18,20 +18,40 @@ class _ExplodingSession:
 
 
 class _FakeSession:
-    def __init__(self, rows: dict):
-        self._rows = rows
+    """Answers the policy read, and the "does Postgres know this zone" probe.
 
-    async def execute(self, *a, **kw):  # noqa: ANN001, ANN002, ANN003
+    ``known_zones`` None means "Postgres knows every zone Python does", which is
+    the normal case; a set pins it so the mismatch path is testable.
+    """
+
+    def __init__(self, rows: dict, known_zones: set[str] | None = None):
+        self._rows = rows
+        self._known = known_zones
+
+    async def execute(self, statement, params=None, *a, **kw):  # noqa: ANN001, ANN002, ANN003
+        sql = str(statement)
         rows = [{"key": k, "value": v} for k, v in self._rows.items()]
+        known = self._known
+        outer = self
 
         class _R:
+            def scalar(self_inner):  # noqa: ANN001
+                # pg_timezone_names probe.
+                if known is None:
+                    return True
+                return (params or {}).get("n") in known
+
             def mappings(self_inner):  # noqa: ANN001
                 class _M:
                     def all(self_m):  # noqa: ANN001
                         return rows
 
+                    def first(self_m):  # noqa: ANN001
+                        return rows[0] if rows else None
+
                 return _M()
 
+        del sql, outer
         return _R()
 
 
@@ -315,6 +335,13 @@ async def test_timezone_override_is_read_from_policy_and_validated():
     junk = _FakeSession({cost.BUDGET_DAY_TZ_KEY: "Nope/Nope"})
     assert await cost.resolve_budget_day_timezone(junk, uuid4()) == "UTC"
 
+    # Python knows the zone but this Postgres does not: the name would make the
+    # spend query itself raise, so it must not be used (round 4, finding 3).
+    py_only = _FakeSession(
+        {cost.BUDGET_DAY_TZ_KEY: "Europe/Madrid"}, known_zones={"UTC"}
+    )
+    assert await cost.resolve_budget_day_timezone(py_only, uuid4()) == "UTC"
+
     wrong_type = _FakeSession({cost.BUDGET_DAY_TZ_KEY: 42})
     assert await cost.resolve_budget_day_timezone(wrong_type, uuid4()) == "UTC"
 
@@ -327,3 +354,42 @@ def test_the_day_boundary_is_a_budget_key_and_cannot_come_from_below():
 
     assert "budget_day_timezone" in policies.BUDGET_KEYS
     assert policies._without_budget_keys({"budget_day_timezone": "Pacific/Auckland"}) == {}
+
+
+def test_day_window_handles_dst_transitions():
+    """A DST day is 23 or 25 hours, and still starts at local midnight.
+
+    The day is advanced on the LOCAL clock for exactly this reason: adding 24
+    absolute hours would land an hour off on both transition days, so the
+    ceiling would reset at 23:00 or 01:00 instead of midnight.
+    """
+    from datetime import datetime, timezone
+
+    from soctalk.core.cost import day_window
+
+    # Spring forward and fall back, US Eastern 2026.
+    spring = day_window("America/New_York", datetime(2026, 3, 8, 23, 0, tzinfo=timezone.utc))
+    fall = day_window("America/New_York", datetime(2026, 11, 1, 21, 0, tzinfo=timezone.utc))
+    assert (spring[1] - spring[0]).total_seconds() / 3600 == 23
+    assert (fall[1] - fall[0]).total_seconds() / 3600 == 25
+
+    # Southern hemisphere transitions the other way round.
+    syd = day_window("Australia/Sydney", datetime(2026, 10, 3, 20, 0, tzinfo=timezone.utc))
+    assert 23 <= (syd[1] - syd[0]).total_seconds() / 3600 <= 25
+
+
+def test_day_window_handles_sub_hour_offsets():
+    """45-minute zones exist and must not be rounded to the hour."""
+    from datetime import datetime, timezone
+
+    from soctalk.core.cost import day_window
+
+    at = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
+    for tz, offset_minutes in (
+        ("Asia/Kathmandu", 5 * 60 + 45),
+        ("Australia/Eucla", 8 * 60 + 45),
+    ):
+        start, _ = day_window(tz, at)
+        # Local midnight expressed in UTC lands offset minutes BEFORE midnight UTC.
+        minutes_past_utc_midnight = start.hour * 60 + start.minute
+        assert (minutes_past_utc_midnight + offset_minutes) % (24 * 60) == 0, tz

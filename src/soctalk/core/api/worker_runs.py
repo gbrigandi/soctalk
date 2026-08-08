@@ -291,7 +291,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
 
     async with tenant_context(db, tenant_id):
         # Circuit breaker: refuse to claim new runs once the tenant has
-        # blown through its rolling 24h spend ceiling. Shared with the
+        # blown through its daily spend ceiling. Shared with the
         # chat path via ``soctalk.core.cost.assert_tenant_daily_cap_ok``
         # so a busy chat session can't dodge the worker's cap and a
         # flood of runs can't dodge the chat handler's cap.
@@ -453,6 +453,53 @@ async def claim_run(request: Request) -> ClaimedRun | None:
     )
 
 
+async def _record_spend_delta(
+    db: AsyncSession, tenant_id: UUID, run_id: UUID, tokens: int | None, dollars: float | None
+) -> None:
+    """Ledger the spend reported since this run last reported (#129).
+
+    The worker sends CUMULATIVE totals, so the delta against the stored row is
+    what was actually spent between the two reports, and stamping it with now()
+    is what makes a calendar-day ceiling mean the day the money was spent.
+    Bucketing off the run's lifecycle timestamps instead let a run that spent
+    before midnight charge the whole amount to the next day, and let an unlock
+    after midnight drag yesterday's spend forward.
+
+    Must run BEFORE the row is updated, while the previous totals are still
+    readable. Never raises: a ledger problem must not fail the heartbeat that
+    is keeping a live run's lease alive.
+    """
+    if tokens is None and dollars is None:
+        return
+    try:
+        prev = (
+            await db.execute(
+                text(
+                    "SELECT tokens_used, dollars_used FROM investigation_runs "
+                    "WHERE id = :id AND tenant_id = :t"
+                ),
+                {"id": str(run_id), "t": str(tenant_id)},
+            )
+        ).mappings().first()
+        if prev is None:
+            return
+        d_tokens = max(0, int(tokens or 0) - int(prev["tokens_used"] or 0))
+        d_dollars = max(0.0, float(dollars or 0.0) - float(prev["dollars_used"] or 0.0))
+        # A report that adds nothing (a heartbeat between LLM calls) needs no row.
+        if d_tokens == 0 and d_dollars == 0.0:
+            return
+        await db.execute(
+            text(
+                "INSERT INTO llm_spend_ledger "
+                "  (tenant_id, run_id, occurred_at, tokens_delta, dollars_delta) "
+                "VALUES (:t, :r, now(), :dt, :dd)"
+            ),
+            {"t": str(tenant_id), "r": str(run_id), "dt": d_tokens, "dd": d_dollars},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("spend_ledger_write_failed", run_id=str(run_id), error=str(exc))
+
+
 @router.post("/runs/{run_id}/heartbeat")
 async def heartbeat_run(
     run_id: UUID, payload: WorkerHeartbeatPayload, request: Request
@@ -471,6 +518,9 @@ async def heartbeat_run(
         seconds=LEASE_TTL_SECONDS
     )
     async with tenant_context(db, tenant_id):
+        await _record_spend_delta(
+            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+        )
         result = await db.execute(
             text(
                 """
@@ -602,6 +652,9 @@ async def release_run(
     tenant_id = _verify_worker_jwt(request)
     db = _db(request)
     async with tenant_context(db, tenant_id):
+        await _record_spend_delta(
+            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+        )
         row = (
             await db.execute(
                 text(
@@ -685,6 +738,9 @@ async def complete_run(
     investigation_id: UUID | None = None
     case_changed = False
     async with tenant_context(db, tenant_id):
+        await _record_spend_delta(
+            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+        )
         row = (
             await db.execute(
                 text(

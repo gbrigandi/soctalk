@@ -71,7 +71,7 @@ class RunBudgetView(BaseModel):
     """The MSSP and tenant read shape. ``effective`` is what a new run gets.
 
     Token fields keep their original names so existing clients keep working;
-    dollars and the 24h ceilings are additive (#128, #129).
+    dollars and the daily ceilings are additive (#128, #129).
     """
 
     install_default: int
@@ -86,8 +86,9 @@ class RunBudgetView(BaseModel):
     dollar_tenant_override: float | None = None
     dollar_effective: float = 5.0
 
-    # Rolling 24h ceilings and what is left of them. Without these a tripped
-    # cap is indistinguishable from an idle queue.
+    # Daily (calendar-day, tenant zone) ceilings and what is left of them.
+    # The spend_24h_* names are kept for API compatibility; the WINDOW is a
+    # calendar day since #129, not a rolling 24 hours.
     spend_24h_dollars: float = 0.0
     daily_token_cap: int = 0
     daily_dollar_cap: float = 0.0
@@ -596,8 +597,9 @@ async def unlock_run(
         warning = None
         if status.cap_hit:
             warning = (
-                f"tenant is over its rolling 24h ceiling ({status.reason}), so the "
-                "worker will not claim this run until the window clears"
+                f"tenant is over its daily ceiling ({status.reason}), so the worker "
+                "will not claim this run until it resets at midnight "
+                f"{status.timezone}"
             )
 
     return RunUnlockResult(

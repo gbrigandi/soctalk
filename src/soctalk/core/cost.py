@@ -2,7 +2,7 @@
 
 Both the worker-claim path (``worker_runs.claim_run``) and the chat
 turn handler (``core/api/chat.messages_post``) need to refuse new work
-once the tenant has blown through its rolling 24h spend ceiling. The
+once the tenant has blown through its DAILY spend ceiling. The
 query unions two cost sources:
 
 * ``investigation_runs`` — LLM spend incurred by the worker on the
@@ -76,6 +76,47 @@ def _is_valid_timezone(name: str) -> bool:
     return True
 
 
+_DAY_WINDOW_SQL = """
+    SELECT (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)               AS day_start,
+           ((date_trunc('day', now() AT TIME ZONE :tz) + interval '1 day')
+             AT TIME ZONE :tz)                                                        AS day_end
+"""
+
+
+async def postgres_knows_timezone(db: AsyncSession, name: str) -> bool:
+    """Whether POSTGRES recognises this zone name.
+
+    Python's tzdata and the database's can differ between images, and the zone
+    is used inside the spend query: a name Python accepts but Postgres does not
+    makes that query raise, and a cap that errors is a cap that stops all
+    triage (Codex review round 4, finding 3).
+    """
+    row = (
+        await db.execute(
+            text("SELECT EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = :n)"),
+            {"n": name},
+        )
+    ).scalar()
+    return bool(row)
+
+
+async def db_day_window(db: AsyncSession, tz_name: str) -> tuple[datetime, datetime]:
+    """(start, end) of the current day, computed by the SAME engine and clock
+    that scopes the spend.
+
+    Deriving the displayed reset time from Postgres rather than from the app
+    process removes the skew: otherwise the API could report old-day spend with
+    a next-day reset, or refuse one more claim after the time it just told the
+    operator it would clear (Codex review round 4, finding 2).
+    """
+    row = (
+        await db.execute(text(_DAY_WINDOW_SQL), {"tz": tz_name})
+    ).mappings().first()
+    if row is None:  # pragma: no cover - defensive
+        return day_window(tz_name)
+    return row["day_start"], row["day_end"]
+
+
 async def resolve_budget_day_timezone(db: AsyncSession, tenant_id: UUID) -> str:
     """The zone whose midnight resets this tenant's daily ceilings."""
     default = install_budget_day_timezone()
@@ -93,17 +134,31 @@ async def resolve_budget_day_timezone(db: AsyncSession, tenant_id: UUID) -> str:
             "budget_day_timezone_invalid", tenant_id=str(tenant_id), value=str(raw)[:40]
         )
         return default
-    return raw.strip()
+    name = raw.strip()
+    try:
+        if not await postgres_knows_timezone(db, name):
+            logger.warning(
+                "budget_day_timezone_unknown_to_postgres",
+                tenant_id=str(tenant_id),
+                value=name[:40],
+            )
+            return default
+    except Exception:  # noqa: BLE001 - never let the check itself break the cap
+        return default
+    return name
 
 
-def day_window(tz_name: str) -> tuple[datetime, datetime]:
-    """(start, end) of the current calendar day in ``tz_name``, as UTC instants.
+def day_window(tz_name: str, at: datetime | None = None) -> tuple[datetime, datetime]:
+    """(start, end) of the calendar day containing ``at`` in ``tz_name``, in UTC.
 
     ``end`` is when the ceiling next resets, which is the thing an operator
     staring at a blocked queue actually wants to know.
+
+    ``at`` exists so the DST behaviour is testable at a chosen instant rather
+    than only at whatever "now" happens to be; production passes nothing.
     """
     zone = ZoneInfo(tz_name) if _is_valid_timezone(tz_name) else ZoneInfo("UTC")
-    local_now = datetime.now(zone)
+    local_now = at.astimezone(zone) if at is not None else datetime.now(zone)
     start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     # Add a day on the LOCAL clock, so a DST transition shortens or lengthens
     # the day rather than landing an hour off.
@@ -114,7 +169,7 @@ def day_window(tz_name: str) -> tuple[datetime, datetime]:
 
 
 def tenant_daily_token_cap() -> int:
-    """Per-tenant rolling 24h token ceiling. Default 10M."""
+    """Per-tenant daily token ceiling. Default 10M."""
     raw = os.getenv("SOCTALK_TENANT_DAILY_TOKEN_CAP", "")
     try:
         v = int(raw) if raw else 10_000_000
@@ -124,7 +179,7 @@ def tenant_daily_token_cap() -> int:
 
 
 def tenant_daily_dollar_cap() -> float:
-    """Per-tenant rolling 24h dollar ceiling. Default $50."""
+    """Per-tenant daily dollar ceiling. Default $50."""
     raw = os.getenv("SOCTALK_TENANT_DAILY_DOLLAR_CAP", "")
     try:
         v = float(raw) if raw else 50.0
@@ -155,11 +210,17 @@ _DAILY_SPEND_SQL = """
     SELECT COALESCE(SUM(s.tokens), 0)::bigint AS tokens,
            COALESCE(SUM(s.dollars), 0)::float AS dollars
     FROM (
-        SELECT tokens_used::bigint AS tokens,
-               dollars_used        AS dollars
-          FROM investigation_runs
+        -- Worker spend comes from the LEDGER, not from investigation_runs.
+        -- The runs table only has lifecycle timestamps, so bucketing on them
+        -- charged a run that spent before midnight to the new day, and let an
+        -- unlock after midnight drag yesterday's spend forward. Ledger rows are
+        -- stamped when the spend was reported and nothing moves them after
+        -- (#129, Codex review round 4, finding 1).
+        SELECT tokens_delta::bigint AS tokens,
+               dollars_delta        AS dollars
+          FROM llm_spend_ledger
          WHERE tenant_id = :t
-           AND COALESCE(ended_at, lease_expires_at, claimed_at, started_at)
+           AND occurred_at
                >= (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)
         UNION ALL
         SELECT (COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0))::bigint AS tokens,
@@ -317,7 +378,7 @@ async def assert_mssp_user_daily_cap_ok(
 
 
 # ---------------------------------------------------------------------------
-# Per-tenant 24h ceilings (#129)
+# Per-tenant daily ceilings (#129)
 # ---------------------------------------------------------------------------
 #
 # The env values above stay meaningful as the INSTALL default. What they were
@@ -354,7 +415,7 @@ class DailyCaps:
 
 
 async def resolve_tenant_daily_caps(db: AsyncSession, tenant_id: UUID) -> DailyCaps:
-    """Effective 24h ceilings: env install default -> tenant override -> clamp.
+    """Effective daily ceilings: env install default -> tenant override -> clamp.
 
     Never raises. A cap that cannot be resolved falls back to the install
     default rather than leaving the tenant uncapped, because failing open on a
@@ -445,5 +506,5 @@ async def get_tenant_daily_status(
         spend=await get_tenant_daily_spend(db, tenant_id),
         caps=await resolve_tenant_daily_caps(db, tenant_id),
         timezone=tz,
-        resets_at=day_window(tz)[1],
+        resets_at=(await db_day_window(db, tz))[1],
     )

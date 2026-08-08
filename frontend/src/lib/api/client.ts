@@ -103,8 +103,9 @@ export interface RunBudget {
 	dollar_install_max: number;
 	dollar_tenant_override: number | null;
 	dollar_effective: number;
-	// Rolling 24h ceilings and remaining headroom (#129). Without these a
-	// tripped cap looks exactly like an idle queue.
+	// Daily ceilings and remaining headroom (#129). The window is a CALENDAR
+	// day in daily_timezone, not a rolling 24 hours; the spend_24h_* names are
+	// kept only for API compatibility.
 	spend_24h_dollars: number;
 	daily_token_cap: number;
 	daily_dollar_cap: number;
