@@ -25,6 +25,12 @@ _wazuh_client: Optional[MCPClient] = None
 _cortex_client: Optional[MCPClient] = None
 _thehive_client: Optional[MCPClient] = None
 _misp_client: Optional[MCPClient] = None
+# Whether MISP was CONFIGURED for this tenant, which is a different question
+# from whether the client is currently bound. A tenant with no MISP server is a
+# normal configuration and its verdicts are unaffected; a tenant that HAS one
+# and cannot reach it is missing evidence it expected to have, and #122 is about
+# never confusing the two.
+_misp_configured: bool = False
 
 
 async def bind_clients(mcp_configs: Optional[EnabledMCPServers] = None) -> None:
@@ -79,6 +85,7 @@ async def _bind_from_db_settings(mcp_configs: EnabledMCPServers) -> None:
         mcp_configs: MCP server configurations from database settings.
     """
     global _wazuh_client, _cortex_client, _thehive_client, _misp_client
+    global _misp_configured
 
     # Connect to Wazuh MCP server (if enabled)
     if mcp_configs.wazuh:
@@ -115,6 +122,7 @@ async def _bind_from_db_settings(mcp_configs: EnabledMCPServers) -> None:
 
     # Connect to MISP MCP server (if enabled)
     if mcp_configs.misp:
+        _misp_configured = True
         logger.info("connecting_to_misp", config="database_settings")
         try:
             _misp_client = await _manager.add_client(mcp_configs.misp)
@@ -131,6 +139,7 @@ async def _bind_from_env_config() -> None:
     This is the legacy fallback when database is not available.
     """
     global _wazuh_client, _cortex_client, _thehive_client, _misp_client
+    global _misp_configured
 
     explicit_flags = any(
         os.getenv(name) is not None
@@ -157,6 +166,7 @@ async def _bind_from_env_config() -> None:
     _thehive_client = await _manager.add_client(config.thehive_mcp_server)
 
     logger.info("connecting_to_misp", config="environment")
+    _misp_configured = bool(config.misp_mcp_server)
     _misp_client = await _manager.add_client(config.misp_mcp_server)
 
     logger.info(
@@ -185,6 +195,7 @@ async def cleanup_clients() -> None:
     _cortex_client = None
     _thehive_client = None
     _misp_client = None
+    _misp_configured = False
 
     logger.info("mcp_clients_cleaned_up")
 
@@ -252,6 +263,16 @@ def is_thehive_enabled() -> bool:
 def is_misp_enabled() -> bool:
     """Check if MISP integration is enabled and connected."""
     return _misp_client is not None
+
+
+def is_misp_configured() -> bool:
+    """Whether MISP was configured for this tenant, bound or not.
+
+    ``is_misp_enabled`` answers "can I call it right now", which conflates a
+    tenant that never had MISP with one whose MISP is down. Only the second is a
+    missing-evidence problem (#122).
+    """
+    return _misp_configured
 
 
 def get_enabled_integrations() -> list[str]:

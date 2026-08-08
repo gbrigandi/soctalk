@@ -245,6 +245,14 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
         active_incident=bool(
             isinstance(correlation, dict) and correlation.get("active_incident")
         ),
+        # Only when intel was EXPECTED and did not answer. A tenant with no MISP
+        # configured is a normal setup whose closes are unaffected; "degraded"
+        # counts because the specific indicator in question may be one of the
+        # lookups that failed (#122).
+        intel_unavailable=(
+            (investigation.get("misp_context") or {}).get("status")
+            in ("unavailable", "degraded")
+        ),
     )
     state["authz_class"] = result.authz_class
 

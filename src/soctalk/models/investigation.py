@@ -254,10 +254,45 @@ class InvestigationRunState(BaseModel):
             campaigns = self.misp_context.get("campaigns", [])
             warninglist_hits = self.misp_context.get("warninglist_hits", [])
             checked_iocs = self.misp_context.get("checked_iocs", [])
+            status = self.misp_context.get("status")
 
-            description_parts.append(f"**IOCs checked:** {len(checked_iocs)}")
-            description_parts.append(f"**IOC matches:** {len(matches)}")
-            description_parts.append("")
+            # An unreachable lookup must never render as "0 matches" (#122).
+            # That reads as evidence the indicator is unknown to threat intel,
+            # and the supervisor cited exactly that phrasing to close a
+            # brute-force-then-success as a false positive while MISP was down.
+            # Absence of evidence and evidence of absence get different words.
+            if status in ("unavailable", "degraded"):
+                reason = self.misp_context.get("unavailable_reason") or ""
+                failed = self.misp_context.get("failed_checks") or []
+                if status == "unavailable":
+                    description_parts.append(
+                        "**THREAT INTELLIGENCE UNAVAILABLE — no lookup was performed.**"
+                    )
+                    description_parts.append(
+                        "Treat this as MISSING evidence, not as an absence of matches. "
+                        "Do not conclude an indicator is unknown to threat intelligence."
+                    )
+                else:
+                    description_parts.append(
+                        f"**THREAT INTELLIGENCE PARTIALLY UNAVAILABLE — "
+                        f"{len(failed)} of {len(failed) + len(checked_iocs)} lookups failed.**"
+                    )
+                    description_parts.append(
+                        "Matches below cover only the indicators that were reachable."
+                    )
+                if reason:
+                    description_parts.append(f"Reason: {reason}")
+                description_parts.append("")
+            elif status == "not_configured":
+                description_parts.append(
+                    "No MISP server is configured for this tenant, so threat "
+                    "intelligence was not part of this investigation."
+                )
+                description_parts.append("")
+            else:
+                description_parts.append(f"**IOCs checked:** {len(checked_iocs)}")
+                description_parts.append(f"**IOC matches:** {len(matches)}")
+                description_parts.append("")
 
             if threat_actors:
                 description_parts.append("### Threat Actors")

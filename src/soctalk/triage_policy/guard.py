@@ -38,6 +38,10 @@ from soctalk.models.authorization import (
 
 GUARDRAIL_AUTHZ_CONTRADICTED = "authorization_contradicted_close"
 GUARDRAIL_IOC_OVER_CLOSE = "ioc_over_close"
+# Closing on evidence that was never gathered (#122). Distinct from the IOC edge:
+# there the evidence exists and is damning; here it is simply absent, so the
+# draft is INTERRUPTED for a human rather than escalated outright.
+GUARDRAIL_INTEL_UNAVAILABLE = "intel_unavailable_close"
 # Sign-off scope note (#45): this rule governs LLM-close COMMITS in the graph
 # plane, where asset data classification is knowable (authorization facts). The
 # ingest plane cannot apply it — no facts exist at ingest — so a memoized close
@@ -143,6 +147,7 @@ def evaluate_guard(
     guardrails: Sequence[dict[str, Any]] = (),
     verdict_confidence: float | None = None,
     active_incident: bool = False,
+    intel_unavailable: bool = False,
 ) -> GuardResult:
     """The guard's whole decision, as a pure function.
 
@@ -181,6 +186,15 @@ def evaluate_guard(
                 ),
             )
         )
+    # A close drafted while threat intelligence the tenant EXPECTS was
+    # unreachable is a close on absent evidence. It is not escalated -- nothing
+    # says the activity is malicious -- but it must not commit automatically
+    # either, because the model cannot distinguish "unknown to MISP" from "MISP
+    # never answered" and the failure mode gets MORE likely exactly when
+    # infrastructure is degraded (#122).
+    if verdict_decision == "close" and intel_unavailable and not overrides:
+        interrupted = True
+
     ctx = condition_context(
         verdict_decision=verdict_decision,
         verdict_confidence=verdict_confidence,

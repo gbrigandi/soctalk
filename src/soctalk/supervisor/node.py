@@ -325,8 +325,42 @@ def _build_context_summary(state: dict[str, Any]) -> str:
         campaigns = misp_context.get("campaigns", [])
         warninglist_hits = misp_context.get("warninglist_hits", [])
         checked_iocs = misp_context.get("checked_iocs", [])
+        misp_status = misp_context.get("status")
 
-        lines.append(f"**IOCs checked:** {len(checked_iocs)}, **Matches:** {len(misp_matches)}")
+        # An unreachable lookup must not be rendered as "Matches: 0" (#122).
+        # That line reads as "threat intelligence knows nothing about this
+        # indicator", and a supervisor quoted it back as
+        # "MISP context returned no matches" to close a brute-force-then-success
+        # as a false positive while MISP was in fact down. Absence of evidence
+        # and evidence of absence need different words, and the model can only
+        # tell them apart if we say which one this is.
+        if misp_status in ("unavailable", "degraded"):
+            failed = misp_context.get("failed_checks") or []
+            reason = misp_context.get("unavailable_reason") or ""
+            if misp_status == "unavailable":
+                lines.append(
+                    "**⚠️ THREAT INTELLIGENCE UNAVAILABLE — no lookup was performed.** "
+                    "This is MISSING evidence, not an absence of matches. Do NOT state "
+                    "or imply that the indicators are unknown to threat intelligence, "
+                    "and do not treat this as support for closing."
+                )
+            else:
+                lines.append(
+                    f"**⚠️ THREAT INTELLIGENCE PARTIALLY UNAVAILABLE — {len(failed)} "
+                    "lookup(s) failed.** Any matches below cover only the indicators "
+                    "that were reachable; the rest are unknown, not clean."
+                )
+            if reason:
+                lines.append(f"Reason: {reason}")
+        elif misp_status == "not_configured":
+            lines.append(
+                "No MISP server is configured for this tenant, so threat "
+                "intelligence is not part of this investigation's evidence."
+            )
+        else:
+            lines.append(
+                f"**IOCs checked:** {len(checked_iocs)}, **Matches:** {len(misp_matches)}"
+            )
 
         if misp_matches:
             lines.append(f"**🎯 MISP IOC Matches ({len(misp_matches)}):**")

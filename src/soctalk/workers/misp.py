@@ -11,7 +11,7 @@ import structlog
 
 from soctalk.core.ir import replay_events
 from soctalk.graph.event_sink import emit as emit_replay
-from soctalk.mcp.bindings import get_misp_client
+from soctalk.mcp.bindings import get_misp_client, is_misp_configured
 from soctalk.models.enums import ObservableType, Verdict, Phase, Severity
 from soctalk.models.observables import Observable
 
@@ -49,7 +49,45 @@ async def misp_worker_node(state: dict[str, Any]) -> dict[str, Any]:
     emit_replay(replay_events.worker_started("misp", action="CONTEXTUALIZE"))
 
     client = get_misp_client()
+    configured = is_misp_configured()
     investigation = state.get("investigation", {})
+
+    # Fail fast rather than iterating observables that cannot succeed (#122).
+    # The old loop raised once per observable, logged N identical warnings, and
+    # then wrote a misp_context indistinguishable from a successful lookup that
+    # found nothing -- so the supervisor could cite "MISP returned no matches"
+    # as evidence for closing when MISP had never been reached.
+    if client is None:
+        status = "unavailable" if configured else "not_configured"
+        investigation["misp_context"] = {
+            **(investigation.get("misp_context") or {}),
+            "status": status,
+            "available": False,
+            "checked_iocs": [],
+            "matches": [],
+            "events": {},
+            "threat_actors": [],
+            "campaigns": [],
+            "warninglist_hits": [],
+            "last_checked": datetime.now().isoformat(),
+            "unavailable_reason": (
+                "MISP is configured for this tenant but its client is not bound"
+                if configured
+                else "no MISP server is configured for this tenant"
+            ),
+        }
+        state["investigation"] = investigation
+        logger.warning("misp_unavailable", status=status)
+        emit_replay(
+            replay_events.worker_result(
+                "misp",
+                # Not an error when the tenant simply has no MISP: that is a
+                # normal configuration, not a degraded one.
+                ok=not configured,
+                summary=f"misp {status}",
+            )
+        )
+        return state
 
     # Get observables that haven't been checked with MISP yet
     observables = investigation.get("observables", [])
@@ -84,6 +122,7 @@ async def misp_worker_node(state: dict[str, Any]) -> dict[str, Any]:
     misp_campaigns = misp_context.get("campaigns", [])
     warninglist_hits = misp_context.get("warninglist_hits", [])
     findings = investigation.get("findings", [])
+    failed_checks: list[str] = []
 
     for observable in observables_to_check[:10]:
         logger.info(
@@ -121,6 +160,7 @@ async def misp_worker_node(state: dict[str, Any]) -> dict[str, Any]:
                 warninglist_hits.append(warninglist_result)
 
         except Exception as e:
+            failed_checks.append(observable.value[:50])
             logger.warning(
                 "misp_check_failed",
                 observable=observable.value[:50],
@@ -134,7 +174,21 @@ async def misp_worker_node(state: dict[str, Any]) -> dict[str, Any]:
     findings.extend(new_findings)
 
     # Update MISP context
+    # A lookup that answered for nothing is not the same as one that found
+    # nothing. "degraded" means some observables could not be checked, so an
+    # empty match set is not evidence of absence for those.
+    attempted = len(observables_to_check[:10])
+    if failed_checks and len(failed_checks) >= attempted:
+        status = "unavailable"
+    elif failed_checks:
+        status = "degraded"
+    else:
+        status = "ok"
+
     misp_context = {
+        "status": status,
+        "available": status == "ok",
+        "failed_checks": failed_checks,
         "checked_iocs": list(checked_values),
         "matches": misp_matches,
         "events": misp_events,
