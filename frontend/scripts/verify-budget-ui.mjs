@@ -122,15 +122,19 @@ try {
   );
 
   // --- 5. unlock affordance on a budget-halted run ------------------------
+  // /api/investigations is the BRIDGE, which is what the frontend calls and
+  // which returns the run flat. /api/mssp/investigations is a different router
+  // that nests it under active_run -- reading that one is what made an earlier
+  // version of this script report the run data as missing entirely (#130).
   const halted = await page.evaluate(async () => {
-    const r = await fetch('/api/mssp/investigations?page_size=50', { credentials: 'include' });
+    const r = await fetch('/api/investigations?page_size=50', { credentials: 'include' });
     const d = await r.json();
     return (d.items ?? []).map((i) => i.id);
   });
   let unlockChecked = false;
   for (const id of halted) {
     const detail = await page.evaluate(async (i) => {
-      const r = await fetch(`/api/mssp/investigations/${i}`, { credentials: 'include' });
+      const r = await fetch(`/api/investigations/${i}`, { credentials: 'include' });
       return r.json();
     }, id);
     if (detail.disposition !== 'halted_budget') continue;

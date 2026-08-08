@@ -244,7 +244,7 @@ async def get_investigation(investigation_id: UUID, request: Request) -> Investi
                 """
                 SELECT c.id, c.short_id, c.title, c.status, c.severity,
                        c.opened_at, c.updated_at, c.closed_at, c.summary,
-                       c.close_reason
+                       c.close_reason, c.tenant_id
                 FROM investigations c WHERE c.id = :id
                 """
             ),
@@ -337,6 +337,10 @@ async def get_investigation(investigation_id: UUID, request: Request) -> Investi
         tokens_used=None if is_customer else (int(run["tokens_used"]) if run else None),
         tokens_budget=None if is_customer else (int(run["tokens_budget"]) if run else None),
         disposition=disposition,
+        # The list has always carried this; the detail did not, which left the
+        # UI unable to address any tenant-scoped action on an investigation --
+        # the budget unlock (#127) needs it in the path.
+        tenant_id=str(row["tenant_id"]) if row["tenant_id"] else None,
         run_id=None if is_customer else (str(run["id"]) if run else None),
         dollars_used=(
             None if is_customer else (float(run["dollars_used"] or 0.0) if run else None)

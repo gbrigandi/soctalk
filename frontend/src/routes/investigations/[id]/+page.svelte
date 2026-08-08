@@ -37,7 +37,16 @@
 	}
 
 	async function unlockRun() {
-		if (!investigation?.run_id || !investigation.tenant_id) return;
+		// Say why rather than doing nothing. A control that silently no-ops
+		// looks broken and gives the operator nothing to act on.
+		if (!investigation?.run_id) {
+			unlockError = 'No run is attached to this investigation.';
+			return;
+		}
+		if (!investigation.tenant_id) {
+			unlockError = 'This view did not report a tenant, so the run cannot be addressed.';
+			return;
+		}
 		const n = Number(unlockDollars.trim());
 		if (!Number.isFinite(n) || n <= 0) {
 			unlockError = 'Enter a new ceiling greater than zero.';
