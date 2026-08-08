@@ -95,6 +95,11 @@ class RunBudgetView(BaseModel):
     daily_dollars_remaining: float = 0.0
     daily_cap_hit: bool = False
     daily_cap_reason: str | None = None
+    # When the daily ceilings next reset, and the zone that decides it. The
+    # thing an operator staring at a blocked queue needs is a time, not
+    # "eventually".
+    daily_resets_at: str | None = None
+    daily_timezone: str = "UTC"
     daily_token_install_default: int = 0
     daily_dollar_install_default: float = 0.0
     daily_token_max: int = 0
@@ -187,6 +192,8 @@ async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
         daily_dollars_remaining=round(status.dollars_remaining, 6),
         daily_cap_hit=status.cap_hit,
         daily_cap_reason=status.reason,
+        daily_resets_at=status.resets_at.isoformat() if status.resets_at else None,
+        daily_timezone=status.timezone,
         daily_token_install_default=tenant_daily_token_cap(),
         daily_dollar_install_default=tenant_daily_dollar_cap(),
         daily_token_max=tenant_daily_token_cap_max(),

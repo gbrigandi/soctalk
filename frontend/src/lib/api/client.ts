@@ -112,6 +112,9 @@ export interface RunBudget {
 	daily_dollars_remaining: number;
 	daily_cap_hit: boolean;
 	daily_cap_reason: string | null;
+	/** When the daily ceilings next reset (ISO), and the zone that decides it. */
+	daily_resets_at: string | null;
+	daily_timezone: string;
 	daily_token_install_default: number;
 	daily_dollar_install_default: number;
 	daily_token_max: number;

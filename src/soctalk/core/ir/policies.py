@@ -328,6 +328,9 @@ BUDGET_KEYS: frozenset[str] = frozenset(
         "max_tool_calls_per_investigation",
         "max_tokens_per_24h",
         "max_dollars_per_24h",
+        # Moving the day boundary moves when a ceiling resets, so it is a
+        # budget control and belongs to the same scope rule.
+        "budget_day_timezone",
     }
 )
 

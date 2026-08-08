@@ -265,3 +265,65 @@ def test_investigation_list_reports_whether_more_pages_exist():
     assert InvestigationList(items=[], total=0, page=1, page_size=25).has_more is False
     full = InvestigationList(items=[], total=60, page=1, page_size=25, has_more=True)
     assert full.has_more is True
+
+
+# --- Calendar-day reset for the daily ceilings ------------------------------
+
+
+def test_day_window_is_a_calendar_day_in_the_given_zone():
+    """The ceiling clears in one step at local midnight, not by trickling.
+
+    A rolling 24h sum never fully clears: each charge ages out on its own
+    anniversary, so a tenant that blew its ceiling at 14:00 is still partly
+    blocked at 13:00 the next day and there is no moment to point at.
+    """
+    from soctalk.core.cost import day_window
+
+    for tz in ("UTC", "America/New_York", "Europe/Madrid", "Asia/Tokyo"):
+        start, end = day_window(tz)
+        assert start < end
+        # Exactly one day apart on the local clock (23-25h absolute, because a
+        # DST transition legitimately shortens or lengthens the day).
+        hours = (end - start).total_seconds() / 3600
+        assert 23 <= hours <= 25, (tz, hours)
+
+
+def test_an_unknown_zone_falls_back_rather_than_breaking_the_cap():
+    """An invalid zone would make the spend query itself raise.
+
+    A cap that errors is a cap that stops all triage, so a bad value degrades
+    to the install default instead.
+    """
+    from soctalk.core.cost import _is_valid_timezone, day_window
+
+    assert _is_valid_timezone("Not/AZone") is False
+    assert _is_valid_timezone("") is False
+    utc_start, _ = day_window("UTC")
+    bad_start, _ = day_window("Not/AZone")
+    assert bad_start == utc_start
+
+
+@pytest.mark.asyncio
+async def test_timezone_override_is_read_from_policy_and_validated():
+    from uuid import uuid4
+
+    from soctalk.core import cost
+
+    good = _FakeSession({cost.BUDGET_DAY_TZ_KEY: "Europe/Madrid"})
+    assert await cost.resolve_budget_day_timezone(good, uuid4()) == "Europe/Madrid"
+
+    junk = _FakeSession({cost.BUDGET_DAY_TZ_KEY: "Nope/Nope"})
+    assert await cost.resolve_budget_day_timezone(junk, uuid4()) == "UTC"
+
+    wrong_type = _FakeSession({cost.BUDGET_DAY_TZ_KEY: 42})
+    assert await cost.resolve_budget_day_timezone(wrong_type, uuid4()) == "UTC"
+
+    assert await cost.resolve_budget_day_timezone(_ExplodingSession(), uuid4()) == "UTC"
+
+
+def test_the_day_boundary_is_a_budget_key_and_cannot_come_from_below():
+    """Moving midnight moves when a ceiling resets, so it is a budget control."""
+    from soctalk.core.ir import policies
+
+    assert "budget_day_timezone" in policies.BUDGET_KEYS
+    assert policies._without_budget_keys({"budget_day_timezone": "Pacific/Auckland"}) == {}

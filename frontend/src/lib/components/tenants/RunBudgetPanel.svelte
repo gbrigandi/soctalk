@@ -8,9 +8,11 @@
   Overrides are resolved at run creation and capped at the install max, so a
   change takes effect on the next run with no worker rollout.
 
-  The 24h block matters more than it looks: when that ceiling trips, the worker
-  simply stops claiming runs, which is indistinguishable from an idle queue
-  unless the spend, the cap and the reason are on screen.
+  The daily block matters more than it looks: when that ceiling trips, the
+  worker simply stops claiming runs, which is indistinguishable from an idle
+  queue unless the spend, the cap, the reason and the reset time are on screen.
+  Daily means a CALENDAR day in the tenant's zone, so it clears in one step at
+  midnight rather than trickling back as a rolling window would.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
@@ -40,6 +42,17 @@
 	 *  Tolerates a missing value on purpose: an API server predating the dollar
 	 *  and 24h fields returns a response without them, and a panel that throws
 	 *  on undefined takes the WHOLE tenant page down with it, not just itself. */
+	/** "at 00:00 Europe/Madrid (in 5h 12m)" — a time, not "eventually". */
+	function resetText(b: RunBudget): string {
+		if (!b.daily_resets_at) return '';
+		const at = new Date(b.daily_resets_at);
+		if (Number.isNaN(at.getTime())) return '';
+		const mins = Math.max(0, Math.round((at.getTime() - Date.now()) / 60000));
+		const h = Math.floor(mins / 60);
+		const rel = h > 0 ? `in ${h}h ${mins % 60}m` : `in ${mins}m`;
+		return `resets at midnight ${b.daily_timezone} (${rel})`;
+	}
+
 	function money(v: number | null | undefined): string {
 		if (v == null || !Number.isFinite(v)) return '—';
 		if (v === 0) return '$0.00';
@@ -228,8 +241,8 @@
 				<div>
 					<h4 class="font-semibold">Daily ceiling reached — new runs are not being claimed</h4>
 					<p class="text-sm">
-						{budget.daily_cap_reason}. Triage resumes automatically as the rolling
-						24-hour window clears, or raise the ceiling.
+						{budget.daily_cap_reason}. Triage resumes on its own when the day
+						rolls over — {resetText(budget)} — or raise the ceiling now.
 					</p>
 				</div>
 			</aside>
@@ -262,13 +275,13 @@
 				</dd>
 			</div>
 			<div>
-				<dt class="opacity-60">Daily ceiling</dt>
+				<dt class="opacity-60">Daily ceiling <span class="opacity-60 text-xs">({budget.daily_timezone})</span></dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-daily-cap">
 					{num(budget.daily_token_cap)} tokens · {money(budget.daily_dollar_cap)}
 				</dd>
 			</div>
 			<div>
-				<dt class="opacity-60">Remaining today</dt>
+				<dt class="opacity-60" title={resetText(budget)}>Remaining today</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-daily-remaining">
 					{num(budget.daily_tokens_remaining)} tokens ·
 					{money(budget.daily_dollars_remaining)}
@@ -326,7 +339,7 @@
 			<div class="flex items-end gap-2 flex-wrap mt-3">
 				<label class="label flex-1 min-w-40">
 					<span class="text-sm opacity-70">
-						Tokens/24h (blank = {num(budget.daily_token_install_default)})
+						Tokens/day (blank = {num(budget.daily_token_install_default)})
 					</span>
 					<input
 						class="input font-mono"
@@ -340,7 +353,7 @@
 				</label>
 				<label class="label flex-1 min-w-40">
 					<span class="text-sm opacity-70">
-						Dollars/24h (blank = {money(budget.daily_dollar_install_default)})
+						Dollars/day (blank = {money(budget.daily_dollar_install_default)})
 					</span>
 					<input
 						class="input font-mono"
