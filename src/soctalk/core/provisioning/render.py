@@ -628,18 +628,12 @@ def render_tenant_values(
     )
     values["llm"]["secretChecksum"] = hashlib.sha256(material.encode()).hexdigest()
 
-    # Per-tenant case-run budget caps (issue #5). Emitted only when set — a NULL
-    # column leaves the env unset so the worker keeps its default. Rendered to
-    # SOCTALK_CASE_RUN_DOLLAR_BUDGET / _TOKEN_BUDGET, which graph/budget.py reads
-    # directly (over_budget → supervisor CLOSE).
-    if integration.llm_dollar_budget_per_run is not None:
-        values["llm"]["dollarBudgetPerRun"] = integration.llm_dollar_budget_per_run
-    # NOTE (#103): the per-run TOKEN budget is no longer rendered to worker env.
-    # It is now DB-resolved at run creation (policies.resolve_run_token_budget)
-    # and stamped on the run row, so per-tenant token-budget changes take effect
-    # with no worker rollout. The legacy SOCTALK_CASE_RUN_TOKEN_BUDGET env
-    # remains an install-global operator fallback only. Dollar budget is
-    # unchanged (still env-rendered).
+    # Per-tenant case-run budget caps are NOT rendered to worker env any more.
+    # Both dimensions are DB-resolved at run creation (#103 tokens, #128
+    # dollars) and stamped on the run row, so a change takes effect on the next
+    # run with no worker rollout, and the row is what every reader sees. The
+    # install-global SOCTALK_CASE_RUN_*_BUDGET envs remain only as the default
+    # for work that has no run row at all (evals, bench, chat).
 
     # The linux-ep subchart is enabled on the 'poc' profile
     # (components.linuxep.enabled above), but its statefulset template HARD-FAILS

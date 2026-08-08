@@ -68,6 +68,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soctalk", "src/soctalk_wire", "src/soctalk_entities"]
+# The price catalog seed ships with the package: v1_0042 creates the table but
+# deliberately seeds no rows, so a fresh install has no rates until an operator
+# runs `soctalk-prices import`. Without the file in the wheel there is nothing
+# to import, and every model resolves `unknown` -> the fail-expensive fallback.
+[tool.hatch.build.targets.wheel.force-include]
+"data/pricing" = "soctalk/data/pricing"
 
 [tool.ruff]
 line-length = 100

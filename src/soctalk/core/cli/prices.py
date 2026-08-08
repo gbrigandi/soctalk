@@ -294,14 +294,22 @@ async def cmd_show(args: argparse.Namespace) -> int:
 
 async def cmd_import(args: argparse.Namespace) -> int:
     try:
-        raw = json.loads(Path(args.file).read_text())
+        source_path = Path(args.file) if args.file else bundled_seed_path()
+        if source_path is None:
+            print(
+                "no price file given and no bundled seed found; pass a path to "
+                "a price file",
+                file=sys.stderr,
+            )
+            return 2
+        raw = json.loads(source_path.read_text())
         entries = _parse_entries(raw)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"cannot import: {exc}", file=sys.stderr)
         return 2
     factory = _session_factory(_db_url())
     async with factory() as db:
-        print(f"{'applying' if args.apply else 'dry run'}: {len(entries)} entries from {args.file}")
+        print(f"{'applying' if args.apply else 'dry run'}: {len(entries)} entries from {source_path}")
         changed = await _apply(
             db,
             entries,
@@ -393,6 +401,22 @@ async def cmd_pull(args: argparse.Namespace) -> int:
     return 0
 
 
+def bundled_seed_path() -> Path | None:
+    """The seed shipped with SocTalk, in either layout.
+
+    Installed, it lands at ``soctalk/data/pricing`` (pyproject force-include).
+    In a source checkout it is still at the repo root, so both are checked --
+    otherwise this works for operators and silently returns None for anyone
+    developing against the tree, which is exactly backwards for testing.
+    """
+    here = Path(__file__).resolve()
+    for parent_index in (2, 4):  # installed package, then source checkout
+        candidate = here.parents[parent_index] / "data" / "pricing" / "seed-prices.json"
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="soctalk-prices", description="Install-level model price catalog."
@@ -404,7 +428,17 @@ def main(argv: list[str] | None = None) -> int:
     p_show.set_defaults(fn=cmd_show)
 
     p_imp = sub.add_parser("import", help="import a price set from a JSON file")
-    p_imp.add_argument("file")
+    # Optional: with no path, use the seed that ships in the package. A fresh
+    # install has an empty catalog (v1_0042 creates the table and seeds nothing),
+    # so every model resolves `unknown` and bills at the fail-expensive
+    # fallback until this is run. Requiring the operator to locate a file
+    # inside site-packages made the obvious first step needlessly hard.
+    p_imp.add_argument(
+        "file",
+        nargs="?",
+        default=None,
+        help="price file to import; omit to use the seed bundled with SocTalk",
+    )
     p_imp.add_argument("--provenance", default="imported", choices=sorted(catalog.PROVENANCES))
     p_imp.add_argument("--source", help="where these prices came from")
     p_imp.add_argument("--license-status")

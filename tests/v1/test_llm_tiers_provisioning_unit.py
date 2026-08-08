@@ -299,13 +299,18 @@ def test_resolve_tier_sampling_override_and_fallback():
     assert (n.temperature, n.max_tokens) == (0.5, 1024)
 
 
-def test_render_emits_run_budget_only_when_set():
-    # Dollar budget still env-renders (issue #5). The per-run TOKEN budget is
-    # DB-resolved at run creation now (#103) and is NOT rendered to worker env,
-    # even when the legacy column is set.
+def test_render_emits_no_run_budget_at_all():
+    """Neither per-run budget reaches worker env any more.
+
+    Both dimensions are DB-resolved at run creation and stamped on the run row
+    (#103 tokens, #128 dollars), so a change takes effect on the next run with
+    no worker rollout and the row is what every reader sees. Rendering the
+    dollar cap into env as well left a knob that looked enforced but was not:
+    the worker stopped consulting it, so the chart would have been lying.
+    """
     v = _render(_integration(uuid4(), llm_dollar_budget_per_run=2.5,
                              llm_token_budget_per_run=50000))
-    assert v["llm"]["dollarBudgetPerRun"] == 2.5
+    assert "dollarBudgetPerRun" not in v["llm"]
     assert "tokenBudgetPerRun" not in v["llm"]
     plain = _render(_integration(uuid4()))
     assert "dollarBudgetPerRun" not in plain["llm"]

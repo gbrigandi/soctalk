@@ -151,12 +151,6 @@
           "description": "sha256 of the LLM key material (primary + per-tier own keys), salted with the tenant id. Rendered as a runs-worker pod-template annotation (checksum/llm-secret) so a key-only rotation \u2014 which leaves the rest of the values byte-identical \u2014 still rolls the worker (env-from-secret does not hot-reload). Not a secret; a sha256 of a high-entropy key is not reversible.",
           "type": "string"
         },
-        "dollarBudgetPerRun": {
-          "description": "Per-tenant case-run dollar spend cap. Rendered to SOCTALK_CASE_RUN_DOLLAR_BUDGET; enforced in graph/budget.py (over_budget \u2192 supervisor CLOSE). Absent = the worker default. Floor $0.10 so a sub-cent cap can't halt the run after one call.",
-          "type": "number",
-          "minimum": 0.1,
-          "maximum": 10000
-        },
         "tokenBudgetPerRun": {
           "description": "Per-tenant case-run token cap. Rendered to SOCTALK_CASE_RUN_TOKEN_BUDGET. Absent = the worker default.",
           "type": "integer",

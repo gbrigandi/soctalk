@@ -28,7 +28,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -194,6 +194,11 @@ def _mask_key(api_key: str | None) -> str:
 class LlmConfigUpdate(BaseModel):
     """Changed-fields-only PATCH payload.
 
+    Unknown fields are REJECTED, not ignored. Removing the per-run budget
+    fields from this surface without this would have made an old client's
+    PATCH return 200 while doing nothing at all -- quieter than the 422 it
+    replaced, and the worst of both worlds. Breaking loudly is the point.
+
     ``fast_model`` / ``reasoning_model`` are tri-state:
 
     - ``None`` / omitted → leave the stored override unchanged;
@@ -205,6 +210,8 @@ class LlmConfigUpdate(BaseModel):
     must let an operator revert to "use the primary model" — ``None``
     can't express that in a changed-fields-only PATCH.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     # ``openai`` and ``anthropic`` are the values the runs-worker's
     # ``load_config()`` actually accepts (see soctalk/config.py). The

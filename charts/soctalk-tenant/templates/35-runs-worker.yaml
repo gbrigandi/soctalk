@@ -167,15 +167,6 @@ spec:
               value: {{ .Values.llm.maxTokens | quote }}
             {{- end }}
             {{- /*
-              Per-tenant case-run budget caps (issue #5). graph/budget.py reads
-              these directly; emitted only when the tenant sets an override so an
-              unset value keeps the worker default ($5 / 15k).
-            */}}
-            {{- if .Values.llm.dollarBudgetPerRun }}
-            - name: SOCTALK_CASE_RUN_DOLLAR_BUDGET
-              value: {{ .Values.llm.dollarBudgetPerRun | quote }}
-            {{- end }}
-            {{- /*
               Per-tenant price overlay (issue #121). graph/budget.py overlays this
               onto the built-in table, so a model the table has never heard of is
               billed at what the tenant actually pays instead of the $15/$75
