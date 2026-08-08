@@ -426,6 +426,26 @@ async def test_preflight_success_enqueues_install_with_correct_spec(
     assert values["soctalkSystem"]["adapterToken"]
     assert "apiKey" in values["llm"]
 
+    # L2 subchart path (issue #109): when wazuh is bundled into the tenant
+    # release its resources are ``<release>-wazuh-*``, so BOTH the adapter and
+    # the runs-worker MCP wiring must be rewritten off the standalone
+    # ``wazuh-<slug>-*`` naming render_tenant_values emits. A missed rewrite
+    # leaves the worker binding against non-existent Services/Secrets.
+    # The seeded tenant is poc with wazuh_enabled, so the bundle IS on and the
+    # worker MCP IS wired: assert that (fail-closed) rather than skipping, so a
+    # future fixture change can't silently make this vacuous.
+    rel = f"tenant-{seeded_tenant.slug}"
+    assert values["components"]["wazuh"]["enabled"] is True
+    assert values["adapter"]["wazuhIndexer"]["url"] == (
+        f"https://{rel}-wazuh-indexer:9200"
+    )
+    assert values["adapter"]["wazuhIndexer"]["credsSecret"] == f"{rel}-wazuh-creds"
+    rw = values["runsWorker"]["wazuh"]
+    assert rw["enabled"] is True
+    assert rw["indexerHost"] == f"{rel}-wazuh-indexer"
+    assert rw["apiUrl"] == f"https://{rel}-wazuh-manager:55000"
+    assert rw["credsSecret"] == f"{rel}-wazuh-creds"
+
 
 async def test_install_success_enqueues_wait_for_ready_with_correct_probe(
     mssp_session: AsyncSession, seeded_tenant: Tenant,

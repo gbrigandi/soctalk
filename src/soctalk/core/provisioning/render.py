@@ -268,6 +268,7 @@ def render_tenant_values(
     profile: Profile = "poc",
     network_policies_enabled: bool = True,
     include_llm_api_key: bool = True,
+    bundled_siem: bool = True,
     authored_triage_policies: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Produce a values dict for the tenant chart.
@@ -428,7 +429,25 @@ def render_tenant_values(
             # talks to the tenant's external Wazuh. Force these OFF regardless
             # of the integration flags so a stale ``wazuh_enabled=true`` row
             # can't accidentally re-deploy the in-cluster bundle.
-            "wazuh": {"enabled": False if is_provided else integration.wazuh_enabled},
+            #
+            # ``bundled_siem`` gates the tenant chart's own Wazuh subchart. It
+            # must be False on the L1 in-cluster controller path: there the
+            # controller installs Wazuh as a SEPARATE ``wazuh-<slug>`` release
+            # (``_step_helm_apply_wazuh``) that the adapter/runs-worker/linux-ep
+            # already target (``wazuh-<slug>-wazuh-*``). Leaving the subchart on
+            # too deploys a SECOND, orphaned Wazuh stack in the same namespace
+            # (``tenant-<slug>-wazuh-*``) — double the manager/indexer/dashboard
+            # footprint, which on a right-sized poc node exhausts RAM/quota and
+            # can block the tenant from ever reaching ``active``. True (default)
+            # is the cross-cluster L2 install-spec path, where the cloud-agent
+            # runs a single helm release and the bundled subchart IS the SIEM.
+            "wazuh": {
+                "enabled": (
+                    False
+                    if is_provided
+                    else bool(integration.wazuh_enabled and bundled_siem)
+                )
+            },
             # linux-ep simulator subchart — only the 'poc' profile installs it.
             # ``persistent`` runs real customer endpoints, so a simulator would
             # contaminate the alert pipeline. ``provided`` has no in-cluster

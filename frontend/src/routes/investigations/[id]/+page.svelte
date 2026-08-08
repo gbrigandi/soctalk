@@ -23,6 +23,64 @@
 	let error: string | null = null;
 	let actionLoading = false;
 	let showCancelModal = false;
+	// Budget unlock (#127). A run that hit its per-run ceiling ends
+	// `halted_budget`, which also blocks the investigation from ever getting
+	// another run, so this is the only way back without database access.
+	let unlockOpen = false;
+	let unlockDollars = '';
+	let unlockBusy = false;
+	let unlockError: string | null = null;
+
+	function money(v: number): string {
+		if (!v) return '$0.00';
+		return Math.abs(v) < 0.01 ? `$${v.toFixed(6)}` : `$${v.toFixed(2)}`;
+	}
+
+	async function unlockRun() {
+		// Say why rather than doing nothing. A control that silently no-ops
+		// looks broken and gives the operator nothing to act on.
+		if (!investigation?.run_id) {
+			unlockError = 'No run is attached to this investigation.';
+			return;
+		}
+		if (!investigation.tenant_id) {
+			unlockError = 'This view did not report a tenant, so the run cannot be addressed.';
+			return;
+		}
+		const n = Number(unlockDollars.trim());
+		if (!Number.isFinite(n) || n <= 0) {
+			unlockError = 'Enter a new ceiling greater than zero.';
+			return;
+		}
+		// Spend is not reset on resume, so a ceiling at or below what was
+		// already spent re-halts immediately. Say so here rather than making
+		// the operator discover it from a 422.
+		const spent = investigation.dollars_used ?? 0;
+		if (n <= spent) {
+			unlockError = `Must exceed the ${money(spent)} already spent.`;
+			return;
+		}
+		unlockBusy = true;
+		unlockError = null;
+		try {
+			const res = await api.runBudget.unlockRun(
+				investigation.tenant_id,
+				investigation.run_id,
+				{ dollar_budget: n }
+			);
+			addToast({
+				type: res.warning ? 'warning' : 'success',
+				message: res.warning ?? 'Run unlocked; it will be picked up on the next claim.'
+			});
+			unlockOpen = false;
+			await loadInvestigation();
+		} catch (e) {
+			unlockError = e instanceof Error ? e.message : String(e);
+		} finally {
+			unlockBusy = false;
+		}
+	}
+
 	let cancelReason = '';
 	let expandedEvents: Set<string> = new Set();
 
@@ -503,6 +561,76 @@
 									<span class="badge {investigation.disposition === 'escalate' ? 'variant-filled-error' : investigation.disposition === 'close_fp' ? 'variant-filled-success' : investigation.disposition === 'halted_budget' ? 'variant-filled-warning' : 'variant-filled-surface'}">
 										{investigation.disposition.replace('_', ' ')}
 									</span>
+								</div>
+							{/if}
+
+							{#if investigation.dollars_budget}
+								<div class="flex justify-between text-sm">
+									<span class="opacity-60">Cost</span>
+									<span class="font-mono tabular-nums" data-testid="run-dollar-spend">
+										{money(investigation.dollars_used ?? 0)} / {money(investigation.dollars_budget)}
+									</span>
+								</div>
+							{/if}
+
+							{#if investigation.disposition === 'halted_budget' && investigation.run_id}
+								<div class="border-t border-surface-500/20 pt-3" data-testid="budget-unlock">
+									<p class="text-sm opacity-70 mb-2">
+										This run stopped at its cost ceiling. Until it is unlocked, the
+										investigation cannot start another run.
+									</p>
+									{#if !unlockOpen}
+										<button
+											class="btn btn-sm variant-filled-warning"
+											on:click={() => {
+												unlockOpen = true;
+												unlockError = null;
+												unlockDollars = '';
+											}}
+											data-testid="budget-unlock-open"
+										>
+											Raise ceiling and resume
+										</button>
+									{:else}
+										<div class="flex items-end gap-2 flex-wrap">
+											<label class="label flex-1 min-w-40">
+												<span class="text-xs opacity-70">
+													New ceiling (must exceed {money(investigation.dollars_used ?? 0)} spent)
+												</span>
+												<input
+													class="input input-sm font-mono"
+													type="text"
+													inputmode="decimal"
+													bind:value={unlockDollars}
+													disabled={unlockBusy}
+													data-testid="budget-unlock-input"
+												/>
+											</label>
+											<button
+												class="btn btn-sm variant-filled-primary"
+												on:click={unlockRun}
+												disabled={unlockBusy}
+												data-testid="budget-unlock-confirm"
+											>
+												{unlockBusy ? 'Resuming…' : 'Resume'}
+											</button>
+											<button
+												class="btn btn-sm variant-soft"
+												on:click={() => (unlockOpen = false)}
+												disabled={unlockBusy}
+											>
+												Cancel
+											</button>
+										</div>
+										{#if unlockError}
+											<p class="text-error-500 text-xs mt-2" data-testid="budget-unlock-error">
+												{unlockError}
+											</p>
+										{/if}
+										<p class="text-xs opacity-50 mt-2">
+											The run resumes where it stopped; spend already recorded is kept.
+										</p>
+									{/if}
 								</div>
 							{/if}
 						</div>
