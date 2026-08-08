@@ -1,12 +1,16 @@
 <!--
-  Agent Run token budget (#103).
+  Agent Run budget (#103 tokens, #128 dollars, #129 rolling 24h ceilings).
 
-  MSSP mode (tenantId set): editable per-tenant override with Save/Clear, plus
-  read-only install default / cap / effective and 24h token spend.
+  MSSP mode (tenantId set): editable per-tenant overrides with Save/Clear, plus
+  read-only install default / cap / effective for both dimensions.
   Tenant mode (no tenantId): read-only effective view; a tenant cannot raise it.
 
-  The override is resolved at run creation and capped at the install max, so a
+  Overrides are resolved at run creation and capped at the install max, so a
   change takes effect on the next run with no worker rollout.
+
+  The 24h block matters more than it looks: when that ceiling trips, the worker
+  simply stops claiming runs, which is indistinguishable from an idle queue
+  unless the spend, the cap and the reason are on screen.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
@@ -24,8 +28,21 @@
 	let error: string | null = null;
 	let saving = false;
 	let overrideInput = '';
+	let dollarInput = '';
 
 	$: editable = tenantId != null && canEdit;
+
+	/** Sub-cent ceilings are real (a short run costs fractions of a cent), so
+	 *  two decimals would render them as $0.00. Precision follows magnitude. */
+	function money(v: number): string {
+		if (v === 0) return '$0.00';
+		return Math.abs(v) < 0.01 ? `$${v.toFixed(6)}` : `$${v.toFixed(2)}`;
+	}
+
+	function syncInputs(b: RunBudget) {
+		overrideInput = b.tenant_override != null ? String(b.tenant_override) : '';
+		dollarInput = b.dollar_tenant_override != null ? String(b.dollar_tenant_override) : '';
+	}
 
 	async function load() {
 		loading = true;
@@ -37,7 +54,7 @@
 				tenantId != null
 					? await api.runBudget.get(tenantId)
 					: await api.tenantRunBudget.get();
-			overrideInput = budget.tenant_override != null ? String(budget.tenant_override) : '';
+			syncInputs(budget);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -45,29 +62,51 @@
 		}
 	}
 
+	/** Build the patch for one dimension, or throw a message for the user. */
+	function tokenPatch(): number | null {
+		const raw = overrideInput.trim();
+		if (raw === '') return null; // clear the override
+		const n = Number(raw);
+		if (!Number.isInteger(n) || n < 1000) {
+			throw new Error('Token budget must be a whole number of at least 1,000.');
+		}
+		if (budget && n > budget.install_max) {
+			throw new Error(
+				`Token budget must not exceed the install cap of ${formatNumber(budget.install_max)}.`
+			);
+		}
+		return n;
+	}
+
+	function dollarPatch(): number | null {
+		const raw = dollarInput.trim();
+		if (raw === '') return null;
+		const n = Number(raw);
+		if (!Number.isFinite(n) || n <= 0) {
+			throw new Error('Dollar budget must be a number greater than zero.');
+		}
+		if (budget && n > budget.dollar_install_max) {
+			throw new Error(
+				`Dollar budget must not exceed the install cap of ${money(budget.dollar_install_max)}.`
+			);
+		}
+		return n;
+	}
+
 	async function save() {
 		if (!editable || !budget) return;
-		const raw = overrideInput.trim();
-		let override: number | null;
-		if (raw === '') {
-			override = null; // clear the override
-		} else {
-			const n = Number(raw);
-			if (!Number.isInteger(n) || n < 1000) {
-				error = 'Budget must be a whole number of at least 1,000 tokens.';
-				return;
-			}
-			if (n > budget.install_max) {
-				error = `Budget must not exceed the install cap of ${formatNumber(budget.install_max)} tokens.`;
-				return;
-			}
-			override = n;
+		let patch: { token_override: number | null; dollar_override: number | null };
+		try {
+			patch = { token_override: tokenPatch(), dollar_override: dollarPatch() };
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			return;
 		}
 		saving = true;
 		error = null;
 		try {
-			budget = await api.runBudget.update(tenantId as string, override);
-			overrideInput = budget.tenant_override != null ? String(budget.tenant_override) : '';
+			budget = await api.runBudget.update(tenantId as string, patch);
+			syncInputs(budget);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -75,8 +114,9 @@
 		}
 	}
 
-	function clearOverride() {
+	function clearOverrides() {
 		overrideInput = '';
+		dollarInput = '';
 		void save();
 	}
 
@@ -87,9 +127,14 @@
 	<header class="flex items-center justify-between mb-3">
 		<h3 class="h4">Agent Run Budget</h3>
 		{#if budget && !loading}
-			<span class="badge variant-soft" data-testid="run-budget-effective">
-				Effective: {formatNumber(budget.effective)} tokens/run
-			</span>
+			<div class="flex gap-2">
+				<span class="badge variant-soft" data-testid="run-budget-effective">
+					{formatNumber(budget.effective)} tokens/run
+				</span>
+				<span class="badge variant-soft" data-testid="run-budget-dollar-effective">
+					{money(budget.dollar_effective)}/run
+				</span>
+			</div>
 		{/if}
 	</header>
 
@@ -100,37 +145,63 @@
 	{:else if error && !budget}
 		<aside class="alert variant-soft-error"><p>{error}</p></aside>
 	{:else if budget}
+		{#if budget.daily_cap_hit}
+			<aside class="alert variant-filled-warning mb-3" data-testid="run-budget-cap-hit">
+				<div>
+					<h4 class="font-semibold">Daily ceiling reached — new runs are not being claimed</h4>
+					<p class="text-sm">
+						{budget.daily_cap_reason}. Triage resumes automatically as the rolling
+						24-hour window clears, or raise the ceiling.
+					</p>
+				</div>
+			</aside>
+		{/if}
+
 		<dl class="grid grid-cols-2 gap-3 text-sm mb-4">
 			<div>
 				<dt class="opacity-60">Install default</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-default">
-					{formatNumber(budget.install_default)}
+					{formatNumber(budget.install_default)} tokens · {money(budget.dollar_install_default)}
 				</dd>
 			</div>
 			<div>
 				<dt class="opacity-60">Install cap</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-cap">
-					{formatNumber(budget.install_max)}
+					{formatNumber(budget.install_max)} tokens · {money(budget.dollar_install_max)}
 				</dd>
 			</div>
 			<div>
 				<dt class="opacity-60">Tenant override</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-override">
-					{budget.tenant_override != null ? formatNumber(budget.tenant_override) : '—'}
+					{budget.tenant_override != null ? formatNumber(budget.tenant_override) : '—'} tokens ·
+					{budget.dollar_tenant_override != null ? money(budget.dollar_tenant_override) : '—'}
 				</dd>
 			</div>
 			<div>
-				<dt class="opacity-60">Tokens used (24h)</dt>
+				<dt class="opacity-60">Used (24h)</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-spend">
-					{formatNumber(budget.spend_24h_tokens)}
+					{formatNumber(budget.spend_24h_tokens)} tokens · {money(budget.spend_24h_dollars)}
+				</dd>
+			</div>
+			<div>
+				<dt class="opacity-60">Daily ceiling</dt>
+				<dd class="font-mono tabular-nums" data-testid="run-budget-daily-cap">
+					{formatNumber(budget.daily_token_cap)} tokens · {money(budget.daily_dollar_cap)}
+				</dd>
+			</div>
+			<div>
+				<dt class="opacity-60">Remaining today</dt>
+				<dd class="font-mono tabular-nums" data-testid="run-budget-daily-remaining">
+					{formatNumber(budget.daily_tokens_remaining)} tokens ·
+					{money(budget.daily_dollars_remaining)}
 				</dd>
 			</div>
 		</dl>
 
 		{#if editable}
-			<div class="flex items-end gap-2">
-				<label class="label flex-1">
-					<span class="text-sm opacity-70">Override (tokens/run, blank = install default)</span>
+			<div class="flex items-end gap-2 flex-wrap">
+				<label class="label flex-1 min-w-40">
+					<span class="text-sm opacity-70">Tokens/run (blank = install default)</span>
 					<input
 						class="input font-mono"
 						type="text"
@@ -138,6 +209,18 @@
 						placeholder={String(budget.install_default)}
 						bind:value={overrideInput}
 						data-testid="run-budget-input"
+						disabled={saving}
+					/>
+				</label>
+				<label class="label flex-1 min-w-40">
+					<span class="text-sm opacity-70">Dollars/run (blank = install default)</span>
+					<input
+						class="input font-mono"
+						type="text"
+						inputmode="decimal"
+						placeholder={String(budget.dollar_install_default)}
+						bind:value={dollarInput}
+						data-testid="run-budget-dollar-input"
 						disabled={saving}
 					/>
 				</label>
@@ -151,8 +234,9 @@
 				</button>
 				<button
 					class="btn variant-soft"
-					on:click={clearOverride}
-					disabled={saving || budget.tenant_override == null}
+					on:click={clearOverrides}
+					disabled={saving ||
+						(budget.tenant_override == null && budget.dollar_tenant_override == null)}
 					data-testid="run-budget-clear"
 				>
 					Clear
@@ -162,7 +246,8 @@
 				<p class="text-error-500 text-sm mt-2" data-testid="run-budget-error">{error}</p>
 			{/if}
 			<p class="text-xs opacity-50 mt-2">
-				Applies to the next run. In-flight runs keep their budget. Cannot exceed the install cap.
+				Applies to the next run. In-flight runs keep their budget. Neither value may
+				exceed the install cap.
 			</p>
 		{:else}
 			<p class="text-xs opacity-50">

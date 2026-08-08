@@ -23,12 +23,15 @@ from pydantic import BaseModel, StrictInt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from soctalk.core.cost import get_tenant_daily_spend
+from soctalk.core.cost import get_tenant_daily_spend, get_tenant_daily_status
 from soctalk.core.ir.events import EventKind, append_event
 from soctalk.core.ir.policies import (
+    RUN_DOLLAR_BUDGET_KEY,
     RUN_TOKEN_BUDGET_KEY,
     delete_tenant_policy,
+    resolve_run_dollar_budget,
     resolve_run_token_budget,
+    run_dollar_budget_default,
     run_dollar_budget_max,
     run_token_budget_default,
     run_token_budget_max,
@@ -57,7 +60,11 @@ def _db(request: Request) -> AsyncSession:
 
 
 class RunBudgetView(BaseModel):
-    """The MSSP and tenant read shape. ``effective`` is what a new run gets."""
+    """The MSSP and tenant read shape. ``effective`` is what a new run gets.
+
+    Token fields keep their original names so existing clients keep working;
+    dollars and the 24h ceilings are additive (#128, #129).
+    """
 
     install_default: int
     install_max: int
@@ -65,13 +72,36 @@ class RunBudgetView(BaseModel):
     effective: int
     spend_24h_tokens: int
 
+    # Per-run dollar ceiling, same shape as the token one.
+    dollar_install_default: float = 5.0
+    dollar_install_max: float = 1_000.0
+    dollar_tenant_override: float | None = None
+    dollar_effective: float = 5.0
+
+    # Rolling 24h ceilings and what is left of them. Without these a tripped
+    # cap is indistinguishable from an idle queue.
+    spend_24h_dollars: float = 0.0
+    daily_token_cap: int = 0
+    daily_dollar_cap: float = 0.0
+    daily_tokens_remaining: int = 0
+    daily_dollars_remaining: float = 0.0
+    daily_cap_hit: bool = False
+    daily_cap_reason: str | None = None
+
 
 class RunBudgetUpdate(BaseModel):
-    # Tri-state via ``model_fields_set`` (checked in the handler): ``override``
-    # present as int = set; present as null = clear; ABSENT = 422 (an empty {}
-    # body must not silently clear the override). StrictInt rejects bool/float/
-    # numeric-string so "non-int" really means non-int.
+    """Tri-state per field: present = set, present-as-null = clear, absent = unchanged.
+
+    ``override`` is the original token-only field, kept as an alias for one
+    release. With two dimensions, "absent means 422" per field stops working
+    (you must be able to change one without touching the other), so the
+    handler requires that AT LEAST ONE field be present instead — an empty
+    body still cannot silently clear anything (Codex review, finding 7).
+    """
+
     override: StrictInt | None = None
+    token_override: StrictInt | None = None
+    dollar_override: float | None = None
 
 
 async def _assert_tenant_exists(db: AsyncSession, tenant_id: UUID) -> None:
@@ -88,14 +118,36 @@ async def _override(db: AsyncSession, tenant_id: UUID) -> int | None:
     return int(v) if v is not None else None
 
 
+async def _dollar_override(db: AsyncSession, tenant_id: UUID) -> float | None:
+    pol = await tenant_policies(db, tenant_id)
+    v = pol.get(RUN_DOLLAR_BUDGET_KEY)
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
-    spend = await get_tenant_daily_spend(db, tenant_id)
+    status = await get_tenant_daily_status(db, tenant_id)
     return RunBudgetView(
         install_default=run_token_budget_default(),
         install_max=run_token_budget_max(),
         tenant_override=await _override(db, tenant_id),
         effective=await resolve_run_token_budget(db, tenant_id),
-        spend_24h_tokens=spend.tokens,
+        spend_24h_tokens=status.spend.tokens,
+        dollar_install_default=run_dollar_budget_default(),
+        dollar_install_max=run_dollar_budget_max(),
+        dollar_tenant_override=await _dollar_override(db, tenant_id),
+        dollar_effective=await resolve_run_dollar_budget(db, tenant_id),
+        spend_24h_dollars=round(status.spend.dollars, 6),
+        daily_token_cap=status.caps.tokens,
+        daily_dollar_cap=status.caps.dollars,
+        daily_tokens_remaining=status.tokens_remaining,
+        daily_dollars_remaining=round(status.dollars_remaining, 6),
+        daily_cap_hit=status.cap_hit,
+        daily_cap_reason=status.reason,
     )
 
 
@@ -121,25 +173,69 @@ async def update_run_budget(
 ) -> RunBudgetView:
     db = _db(request)
     identity = current_identity(request)
-    if "override" not in payload.model_fields_set:
+    setf = payload.model_fields_set
+
+    # ``override`` is the legacy token-only name; ``token_override`` is the
+    # explicit one. Both may not disagree in the same request.
+    if "override" in setf and "token_override" in setf:
         raise HTTPException(
-            422, "body must include 'override' (an int to set, or null to clear)"
+            422, "send either 'override' (legacy) or 'token_override', not both"
         )
+    token_present = "override" in setf or "token_override" in setf
+    dollar_present = "dollar_override" in setf
+    if not token_present and not dollar_present:
+        raise HTTPException(
+            422,
+            "body must include at least one of 'token_override' or "
+            "'dollar_override' (a value to set, or null to clear)",
+        )
+
+    token_value = payload.token_override if "token_override" in setf else payload.override
+    dollar_value = payload.dollar_override
+
     await _assert_tenant_exists(db, tenant_id)
-    cap = run_token_budget_max()
-    if payload.override is not None:
-        if payload.override < MIN_BUDGET:
-            raise HTTPException(422, f"override must be >= {MIN_BUDGET}")
-        if payload.override > cap:
+
+    token_cap = run_token_budget_max()
+    if token_present and token_value is not None:
+        if token_value < MIN_BUDGET:
+            raise HTTPException(422, f"token_override must be >= {MIN_BUDGET}")
+        if token_value > token_cap:
             raise HTTPException(
-                422, f"override {payload.override} must not exceed the install cap ({cap})"
+                422,
+                f"token_override {token_value} must not exceed the install cap "
+                f"({token_cap})",
             )
+    dollar_cap = run_dollar_budget_max()
+    if dollar_present and dollar_value is not None:
+        # NaN fails every comparison, so reject it explicitly rather than
+        # letting it through as a ceiling that can never be hit.
+        if dollar_value != dollar_value:
+            raise HTTPException(422, "dollar_override must be a number")
+        if dollar_value <= 0:
+            raise HTTPException(422, "dollar_override must be > 0")
+        if dollar_value > dollar_cap:
+            raise HTTPException(
+                422,
+                f"dollar_override {dollar_value} must not exceed the install cap "
+                f"({dollar_cap})",
+            )
+
     async with tenant_context(db, tenant_id):
         before = await _view(db, tenant_id)
-        if payload.override is None:
-            await delete_tenant_policy(db, tenant_id, RUN_TOKEN_BUDGET_KEY)
-        else:
-            await set_tenant_policy(db, tenant_id, RUN_TOKEN_BUDGET_KEY, payload.override)
+        if token_present:
+            if token_value is None:
+                await delete_tenant_policy(db, tenant_id, RUN_TOKEN_BUDGET_KEY)
+            else:
+                await set_tenant_policy(
+                    db, tenant_id, RUN_TOKEN_BUDGET_KEY, token_value
+                )
+        if dollar_present:
+            if dollar_value is None:
+                await delete_tenant_policy(db, tenant_id, RUN_DOLLAR_BUDGET_KEY)
+            else:
+                await set_tenant_policy(
+                    db, tenant_id, RUN_DOLLAR_BUDGET_KEY, dollar_value
+                )
         after = await _view(db, tenant_id)
         await log_audit(
             db,
@@ -149,8 +245,18 @@ async def update_run_budget(
             tenant_id=tenant_id,
             resource_type="run_budget",
             resource_id=str(tenant_id),
-            before={"override": before.tenant_override, "effective": before.effective},
-            after={"override": after.tenant_override, "effective": after.effective},
+            before={
+                "override": before.tenant_override,
+                "effective": before.effective,
+                "dollar_override": before.dollar_tenant_override,
+                "dollar_effective": before.dollar_effective,
+            },
+            after={
+                "override": after.tenant_override,
+                "effective": after.effective,
+                "dollar_override": after.dollar_tenant_override,
+                "dollar_effective": after.dollar_effective,
+            },
         )
     return after
 

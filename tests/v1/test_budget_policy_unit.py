@@ -99,3 +99,53 @@ def test_budget_keys_are_stripped_from_the_lower_policy_layers():
     kept = policies._without_budget_keys(layer)
     assert kept == {"auto_close_enabled": False}
     assert policies._without_budget_keys(None) == {}
+
+
+# --- 24h ceilings, per tenant (#129) ---------------------------------------
+
+
+def test_daily_cap_status_reports_headroom_and_which_dimension_tripped():
+    from soctalk.core.cost import DailyCaps, DailyCapStatus, TenantDailySpend
+
+    caps = DailyCaps(tokens=10_000_000, dollars=50.0)
+    under = DailyCapStatus(TenantDailySpend(tokens=9_000_000, dollars=12.0), caps)
+    assert not under.cap_hit
+    assert under.tokens_remaining == 1_000_000
+    assert under.dollars_remaining == 38.0
+    assert under.reason is None
+
+    by_tokens = DailyCapStatus(TenantDailySpend(tokens=10_000_000, dollars=1.0), caps)
+    assert by_tokens.cap_hit and by_tokens.token_cap_hit
+    assert "tokens" in (by_tokens.reason or "")
+
+    by_dollars = DailyCapStatus(TenantDailySpend(tokens=1, dollars=50.0), caps)
+    assert by_dollars.cap_hit and by_dollars.dollar_cap_hit
+    assert "spend" in (by_dollars.reason or "")
+    # Headroom never goes negative, even past the cap.
+    assert by_dollars.dollars_remaining == 0.0
+
+
+@pytest.mark.asyncio
+async def test_daily_caps_fall_back_to_install_defaults_when_unresolvable():
+    """Failing open on a spend ceiling is the expensive direction."""
+    from uuid import uuid4
+
+    from soctalk.core import cost
+
+    caps = await cost.resolve_tenant_daily_caps(_ExplodingSession(), uuid4())
+    assert caps.tokens == cost.tenant_daily_token_cap()
+    assert caps.dollars == cost.tenant_daily_dollar_cap()
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_override_is_clamped_and_junk_is_ignored(monkeypatch):
+    from uuid import uuid4
+
+    from soctalk.core import cost
+
+    monkeypatch.setenv("SOCTALK_TENANT_DAILY_DOLLAR_CAP_MAX", "100")
+    db = _FakeSession({cost.DAILY_DOLLAR_CAP_KEY: 999_999, cost.DAILY_TOKEN_CAP_KEY: "junk"})
+    caps = await cost.resolve_tenant_daily_caps(db, uuid4())
+    assert caps.dollars == 100.0
+    # An unreadable token cap leaves the install default in place.
+    assert caps.tokens == cost.tenant_daily_token_cap()

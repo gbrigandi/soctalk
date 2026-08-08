@@ -71,6 +71,12 @@ class Investigation(InvestigationSummary):
     tokens_used: int | None
     tokens_budget: int | None
     disposition: str | None
+    # Enough to act on a budget halt from the investigation view (#127): which
+    # run to unlock, and what it spent against its ceiling. MSSP-only, like the
+    # token figures above — a customer sees neither cost nor run internals.
+    run_id: str | None = None
+    dollars_used: float | None = None
+    dollars_budget: float | None = None
 
 
 class InvestigationList(BaseModel):
@@ -253,6 +259,7 @@ async def get_investigation(investigation_id: UUID, request: Request) -> Investi
             text(
                 """
                 SELECT id, status, tokens_used, tokens_budget,
+                       dollars_used, dollars_budget,
                        started_at, ended_at, last_error
                 FROM investigation_runs WHERE investigation_id = :c
                 ORDER BY started_at DESC LIMIT 1
@@ -330,6 +337,13 @@ async def get_investigation(investigation_id: UUID, request: Request) -> Investi
         tokens_used=None if is_customer else (int(run["tokens_used"]) if run else None),
         tokens_budget=None if is_customer else (int(run["tokens_budget"]) if run else None),
         disposition=disposition,
+        run_id=None if is_customer else (str(run["id"]) if run else None),
+        dollars_used=(
+            None if is_customer else (float(run["dollars_used"] or 0.0) if run else None)
+        ),
+        dollars_budget=(
+            None if is_customer else (float(run["dollars_budget"] or 0.0) if run else None)
+        ),
     )
 
 
