@@ -58,14 +58,31 @@ _HOST_VENDORS = {
 }
 
 
-def provider_kind_for(provider: str | None, base_url: str | None) -> str:
+# Engines that mean the tokens are served on our own GPUs. Their marginal
+# token cost is zero (the GPU hour is the real cost), which is why the catalog
+# carries self_hosted rows at $0 rather than leaving them unpriced.
+_SELF_HOSTED_ENGINES = frozenset({"vllm", "sglang"})
+
+
+def provider_kind_for(
+    provider: str | None, base_url: str | None, engine: str | None = None
+) -> str:
     """Classify a backend by protocol and, where the host says so, by vendor.
 
     ``openai-compatible`` is a protocol, not a provider: it identifies nothing
     on its own, and one gateway can route the same model string to different
     upstreams at different prices. So the kind records what we actually know,
     and ``provider_id_for`` carries the vendor when the host reveals it.
+
+    ``engine`` wins when it names a self-hosted server. A vLLM or SGLang tier
+    speaks the OpenAI protocol on some arbitrary host, so without this it
+    classified as ``openai_compatible`` and could never match the catalog's
+    self_hosted rows — leaving a self-hosted tenant on the fail-expensive
+    unknown-model fallback while a $0 row for its model sat in the table
+    (Codex review round 2, finding 1).
     """
+    if (engine or "").strip().lower() in _SELF_HOSTED_ENGINES:
+        return "self_hosted"
     p = (provider or "").strip().lower()
     if p == "anthropic":
         return "anthropic"
@@ -206,11 +223,15 @@ async def resolve_run_prices(
         provider = tier.get("provider") or cfg.llm_provider
         base_url = tier.get("base_url") or cfg.llm_base_url
         model = tier.get("model") or fallback_model
+        # Only tiers carry an engine; the primary config has no equivalent
+        # field, so a single-provider self-hosted tenant still resolves by
+        # host and stays openai_compatible.
+        engine = tier.get("engine")
         if not model:
             continue
         roles[role] = {
             "model": model,
-            "provider_kind": provider_kind_for(provider, base_url),
+            "provider_kind": provider_kind_for(provider, base_url, engine),
             "provider_id": provider_id_for(base_url),
         }
 

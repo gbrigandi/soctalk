@@ -55,6 +55,15 @@ def upgrade() -> None:
     # Only runs that can still spend are touched. A completed or failed run's
     # budget is history and rewriting it would falsify what it actually ran
     # under.
+    #
+    # Two things it must NOT clobber, mirroring the ON CONFLICT DO NOTHING
+    # above (Codex review round 2, finding 3):
+    #   * a tenant_policies override, which is the newer and more authoritative
+    #     source and may already differ from the legacy column;
+    #   * a run whose dollars_budget was adjusted by hand, which is exactly the
+    #     recovery state a budget-halted run could be left in before the unlock
+    #     endpoint existed.
+    # So it only touches rows still sitting at the column default.
     op.execute(
         """
         UPDATE investigation_runs r
@@ -62,7 +71,13 @@ def upgrade() -> None:
           FROM integration_configs c
          WHERE c.tenant_id = r.tenant_id
            AND c.llm_dollar_budget_per_run IS NOT NULL
-           AND r.status IN ('active', 'paused', 'waiting_on_gate', 'halted_budget');
+           AND r.status IN ('active', 'paused', 'waiting_on_gate', 'halted_budget')
+           AND r.dollars_budget = 5.0
+           AND NOT EXISTS (
+                 SELECT 1 FROM tenant_policies tp
+                  WHERE tp.tenant_id = r.tenant_id
+                    AND tp.key = 'max_dollars_per_investigation'
+               );
         """
     )
 

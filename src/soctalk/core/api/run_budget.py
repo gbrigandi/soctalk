@@ -19,7 +19,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, StrictInt
+from pydantic import BaseModel, StrictFloat, StrictInt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,10 +115,13 @@ class RunBudgetUpdate(BaseModel):
 
     override: StrictInt | None = None
     token_override: StrictInt | None = None
-    dollar_override: float | None = None
+    # StrictFloat, not float: bool is a subclass of int, so a JSON `true`
+    # would coerce to a $1.00 ceiling (Codex review round 2, finding 4).
+    # StrictInt already gives the token fields this property.
+    dollar_override: StrictFloat | StrictInt | None = None
     # Rolling 24h ceilings (#129). Same tri-state, same clamping.
     daily_token_override: StrictInt | None = None
-    daily_dollar_override: float | None = None
+    daily_dollar_override: StrictFloat | StrictInt | None = None
 
 
 async def _assert_tenant_exists(db: AsyncSession, tenant_id: UUID) -> None:

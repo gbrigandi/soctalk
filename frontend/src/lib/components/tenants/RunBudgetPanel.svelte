@@ -35,10 +35,20 @@
 	$: editable = tenantId != null && canEdit;
 
 	/** Sub-cent ceilings are real (a short run costs fractions of a cent), so
-	 *  two decimals would render them as $0.00. Precision follows magnitude. */
-	function money(v: number): string {
+	 *  two decimals would render them as $0.00. Precision follows magnitude.
+	 *
+	 *  Tolerates a missing value on purpose: an API server predating the dollar
+	 *  and 24h fields returns a response without them, and a panel that throws
+	 *  on undefined takes the WHOLE tenant page down with it, not just itself. */
+	function money(v: number | null | undefined): string {
+		if (v == null || !Number.isFinite(v)) return '—';
 		if (v === 0) return '$0.00';
 		return Math.abs(v) < 0.01 ? `$${v.toFixed(6)}` : `$${v.toFixed(2)}`;
+	}
+
+	/** Same defence for the token figures. */
+	function num(v: number | null | undefined): string {
+		return v == null || !Number.isFinite(v) ? '—' : formatNumber(v);
 	}
 
 	function syncInputs(b: RunBudget) {
@@ -197,7 +207,7 @@
 		{#if budget && !loading}
 			<div class="flex gap-2">
 				<span class="badge variant-soft" data-testid="run-budget-effective">
-					{formatNumber(budget.effective)} tokens/run
+					{num(budget.effective)} tokens/run
 				</span>
 				<span class="badge variant-soft" data-testid="run-budget-dollar-effective">
 					{money(budget.dollar_effective)}/run
@@ -229,38 +239,38 @@
 			<div>
 				<dt class="opacity-60">Install default</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-default">
-					{formatNumber(budget.install_default)} tokens · {money(budget.dollar_install_default)}
+					{num(budget.install_default)} tokens · {money(budget.dollar_install_default)}
 				</dd>
 			</div>
 			<div>
 				<dt class="opacity-60">Install cap</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-cap">
-					{formatNumber(budget.install_max)} tokens · {money(budget.dollar_install_max)}
+					{num(budget.install_max)} tokens · {money(budget.dollar_install_max)}
 				</dd>
 			</div>
 			<div>
 				<dt class="opacity-60">Tenant override</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-override">
-					{budget.tenant_override != null ? formatNumber(budget.tenant_override) : '—'} tokens ·
+					{budget.tenant_override != null ? num(budget.tenant_override) : '—'} tokens ·
 					{budget.dollar_tenant_override != null ? money(budget.dollar_tenant_override) : '—'}
 				</dd>
 			</div>
 			<div>
 				<dt class="opacity-60">Used (24h)</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-spend">
-					{formatNumber(budget.spend_24h_tokens)} tokens · {money(budget.spend_24h_dollars)}
+					{num(budget.spend_24h_tokens)} tokens · {money(budget.spend_24h_dollars)}
 				</dd>
 			</div>
 			<div>
 				<dt class="opacity-60">Daily ceiling</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-daily-cap">
-					{formatNumber(budget.daily_token_cap)} tokens · {money(budget.daily_dollar_cap)}
+					{num(budget.daily_token_cap)} tokens · {money(budget.daily_dollar_cap)}
 				</dd>
 			</div>
 			<div>
 				<dt class="opacity-60">Remaining today</dt>
 				<dd class="font-mono tabular-nums" data-testid="run-budget-daily-remaining">
-					{formatNumber(budget.daily_tokens_remaining)} tokens ·
+					{num(budget.daily_tokens_remaining)} tokens ·
 					{money(budget.daily_dollars_remaining)}
 				</dd>
 			</div>
@@ -316,7 +326,7 @@
 			<div class="flex items-end gap-2 flex-wrap mt-3">
 				<label class="label flex-1 min-w-40">
 					<span class="text-sm opacity-70">
-						Tokens/24h (blank = {formatNumber(budget.daily_token_install_default)})
+						Tokens/24h (blank = {num(budget.daily_token_install_default)})
 					</span>
 					<input
 						class="input font-mono"
