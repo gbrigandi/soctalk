@@ -405,6 +405,37 @@ def _json_object_hint(schema: type) -> HumanMessage:
     ))
 
 
+def _has_json_marker(messages: list[Any]) -> bool:
+    """Whether any message already contains the literal word "json"."""
+    for m in messages:
+        content = getattr(m, "content", m)
+        if isinstance(content, str):
+            if "json" in content.lower():
+                return True
+        elif isinstance(content, list):
+            for block in content:
+                text = block.get("text", "") if isinstance(block, dict) else ""
+                if "json" in str(text).lower():
+                    return True
+    return False
+
+
+def _json_marker_message() -> Any:
+    """A minimal marker for gateways that demand the word before honouring
+    ``response_format``.
+
+    Several OpenAI-compatible gateways front upstreams (DashScope-served Qwen
+    is the one we hit on NovaRoute) that reject the request outright with
+    ``'messages' must contain the word 'json' in some form, to use
+    'response_format'`` unless the prompt says it. The schema is already
+    enforced by the response_format itself, so this adds the token and nothing
+    else -- it must not restate the schema or it would compete with strict
+    decoding.
+    """
+    return HumanMessage(content="Return the result as JSON.")
+
+
+
 async def _invoke_structured(
     llm: Any, schema: type, messages: list[Any], req: InferenceRequest,
     *, mode: DecodingMode = None,  # type: ignore[assignment]
@@ -418,6 +449,13 @@ async def _invoke_structured(
         messages = [*messages, _json_object_hint(schema)]
     else:
         structured = llm.with_structured_output(schema, include_raw=True)
+        # Strict json_schema is still a response_format, so the same gateways
+        # demand the marker. JSON_OBJECT above gets it via the hint; without
+        # this, strict mode 400s on those upstreams before the model is ever
+        # reached — which is how qwen3.7-flash failed every structured call in
+        # the NovaRoute benchmark.
+        if mode == DecodingMode.JSON_SCHEMA_STRICT and not _has_json_marker(messages):
+            messages = [*messages, _json_marker_message()]
     attempts = 0
 
     result = await structured.ainvoke(messages)
