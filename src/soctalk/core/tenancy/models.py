@@ -390,7 +390,16 @@ def validate_llm_model_prices(
                     f"llm_model_prices entry {len(out) + 1}: {field} must not be negative"
                 )
             priced[field] = value
-        out[model.strip()] = priced
+        key = model.strip()
+        # Keys are normalized by stripping, so "gpt-4o" and " gpt-4o " collapse
+        # to the same model. Silently keeping the last one would mis-price a
+        # tenant while the caller believes both entries took effect
+        # (Codex review round 3, finding 3).
+        if key in out:
+            raise ValueError(
+                f"llm_model_prices entry {len(out) + 1} duplicates an earlier model"
+            )
+        out[key] = priced
     return out
 
 

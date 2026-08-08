@@ -568,6 +568,18 @@ async def update_tenant_llm(
                 error=str(exc),
             )
 
+    # Resolve the effective prices here too, so PATCH and GET return the same
+    # shape. Without this a caller that treats the PATCH response as the fresh
+    # config sees effective_prices: null immediately after editing the very
+    # overlay that determines it (Codex review round 3, finding 4). Same
+    # non-fatal contract as GET: a pricing problem must not fail the write that
+    # already succeeded.
+    try:
+        effective = await resolve_run_prices(session, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("effective_prices_unresolved", error=str(exc))
+        effective = None
+
     # Same Postgres-authoritative contract as GET — see get_tenant_llm.
     return LlmConfigRead(
         provider=cfg.llm_provider,
@@ -579,6 +591,7 @@ async def update_tenant_llm(
         max_tokens=cfg.llm_max_tokens,
         dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
         model_prices=cfg.llm_model_prices,
+        effective_prices=effective,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),

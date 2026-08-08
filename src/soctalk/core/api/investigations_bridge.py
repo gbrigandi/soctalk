@@ -84,6 +84,10 @@ class InvestigationList(BaseModel):
     total: int
     page: int
     page_size: int
+    # The UI's Next button keys off this. It was never returned, so it read as
+    # undefined and Next stayed disabled however many pages existed
+    # (Codex review round 3, finding 1).
+    has_more: bool = False
 
 
 def _db(request: Request) -> AsyncSession:
@@ -228,7 +232,13 @@ async def list_investigations(
         )
         for r in rows
     ]
-    return InvestigationList(items=items, total=int(total), page=page, page_size=page_size)
+    return InvestigationList(
+        items=items,
+        total=int(total),
+        page=page,
+        page_size=page_size,
+        has_more=(page * page_size) < int(total),
+    )
 
 
 @router.get("/{investigation_id}", response_model=Investigation)

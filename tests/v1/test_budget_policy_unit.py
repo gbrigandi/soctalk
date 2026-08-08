@@ -215,3 +215,53 @@ def test_a_non_finite_budget_cannot_survive_the_halt_check():
         "dollars_budget": float("nan"),
     }
     assert budget.over_budget(state) is False
+
+
+# --- Codex review round 3 ---------------------------------------------------
+
+
+def test_duplicate_model_keys_are_rejected_after_normalization():
+    """Keys are stripped, so "gpt-4o" and " gpt-4o " collapse to one.
+
+    Keeping the last silently would mis-price a tenant while the caller
+    believes both entries took effect (Codex review round 3, finding 3).
+    """
+    from soctalk.core.tenancy.models import validate_llm_model_prices
+
+    with pytest.raises(ValueError, match="duplicate"):
+        validate_llm_model_prices(
+            {
+                "gpt-4o": {"input": 1, "output": 2},
+                " gpt-4o ": {"input": 9, "output": 9},
+            }
+        )
+    ok = validate_llm_model_prices(
+        {"a": {"input": 1, "output": 2}, "b": {"input": 3, "output": 4}}
+    )
+    assert set(ok) == {"a", "b"}
+
+
+def test_money_fields_reject_bool_on_every_write_path():
+    """A JSON `true` must never become a $1.00 ceiling, on any endpoint."""
+    from pydantic import ValidationError
+
+    from soctalk.core.api.run_budget import RunBudgetUpdate, RunUnlockRequest
+
+    for model, field in (
+        (RunBudgetUpdate, "dollar_override"),
+        (RunBudgetUpdate, "daily_dollar_override"),
+        (RunUnlockRequest, "dollar_budget"),
+    ):
+        with pytest.raises(ValidationError):
+            model(**{field: True})
+        # A real number still works.
+        assert getattr(model(**{field: 2.5}), field) == 2.5
+
+
+def test_investigation_list_reports_whether_more_pages_exist():
+    """The UI's Next button keys off has_more, which was never returned."""
+    from soctalk.core.api.investigations_bridge import InvestigationList
+
+    assert InvestigationList(items=[], total=0, page=1, page_size=25).has_more is False
+    full = InvestigationList(items=[], total=60, page=1, page_size=25, has_more=True)
+    assert full.has_more is True

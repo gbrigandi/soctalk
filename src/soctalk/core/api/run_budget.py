@@ -360,7 +360,15 @@ async def update_run_budget(
 @tenant_router.get(
     "/run-budget",
     response_model=RunBudgetView,
-    dependencies=[Depends(require_tenant_role())],  # any tenant role may read
+    # NOT a bare require_tenant_role(): that defaults to allowing
+    # customer_viewer, and this view carries 24h spend, remaining budget and
+    # the effective ceilings. The investigations bridge deliberately blanks
+    # every cost and run field for a customer audience, so exposing the same
+    # numbers here would route around that decision (Codex review round 3,
+    # finding 2). /api/tenant/llm is already pinned this way.
+    dependencies=[
+        Depends(require_tenant_role(Role.TENANT_ADMIN, Role.TENANT_MANAGER, Role.TENANT_ANALYST))
+    ],
 )
 async def get_tenant_run_budget(request: Request) -> RunBudgetView:
     identity = current_identity(request)
@@ -386,7 +394,10 @@ async def get_tenant_run_budget(request: Request) -> RunBudgetView:
 class RunUnlockRequest(BaseModel):
     """New ceilings for the resumed run. Absent means keep the current one."""
 
-    dollar_budget: float | None = None
+    # Strict for the same reason as RunBudgetUpdate: this is a money field, and
+    # a JSON `true` coercing to a $1.00 ceiling is not a rounding error
+    # (Codex review round 3, finding 5).
+    dollar_budget: StrictFloat | StrictInt | None = None
     token_budget: StrictInt | None = None
 
 
