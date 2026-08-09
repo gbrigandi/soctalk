@@ -313,7 +313,13 @@ spec:
               what actually points at them.
             */}}
             {{- $provider := ternary "anthropic" "openai" (eq $rawProvider "anthropic") }}
-            {{- $baseRaw := .Values.defaults.llm.baseUrl | default "" }}
+            {{- /*
+              Trimmed once, here, so classification, validation and the emitted
+              value all see the same string. A value with surrounding whitespace
+              worked before — the runtime trims env vars — so rejecting it would
+              break installs that were fine (Codex review of #142, round 11).
+            */}}
+            {{- $baseRaw := .Values.defaults.llm.baseUrl | default "" | trim }}
             - name: SOCTALK_LLM_PROVIDER
               value: {{ $provider | quote }}
             {{- /*
