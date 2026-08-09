@@ -210,6 +210,13 @@ class ClaimedRun(BaseModel):
     tokens_used: int
     tokens_budget: int
     dollars_used: float = 0.0
+    # Of ``dollars_used``, how much was spent on models with no known price.
+    # Rehydrated on every claim from the ledger rather than kept only in graph
+    # state: a run released after a transient provider error and re-claimed
+    # would otherwise restart with this at zero, and the spend it had exempted
+    # would suddenly become enforceable — halting a run on exactly the invented
+    # dollars this exists to disregard (Codex review, phases 1-2).
+    dollars_unpriced: float = 0.0
     dollars_budget: float = 0.0
     lease_id: UUID
     lease_expires_at: datetime
@@ -239,6 +246,10 @@ class WorkerHeartbeatPayload(BaseModel):
     # not send them and the ledger records NULL, which is the truth.
     cost_basis: str | None = Field(default=None, max_length=32)
     price_source: str | None = Field(default=None, max_length=32)
+    # Cumulative spend on models with no known price. Recorded but not enforced
+    # (#124): the figure is a guess, and halting a run on a guess stops triage
+    # over money that was never spent.
+    dollars_unpriced: float | None = Field(default=None, ge=0.0)
 
 
 class WorkerEventItem(BaseModel):
@@ -269,6 +280,10 @@ class ReleasePayload(BaseModel):
     # not send them and the ledger records NULL, which is the truth.
     cost_basis: str | None = Field(default=None, max_length=32)
     price_source: str | None = Field(default=None, max_length=32)
+    # Cumulative spend on models with no known price. Recorded but not enforced
+    # (#124): the figure is a guess, and halting a run on a guess stops triage
+    # over money that was never spent.
+    dollars_unpriced: float | None = Field(default=None, ge=0.0)
 
 
 class CompletePayload(BaseModel):
@@ -284,6 +299,10 @@ class CompletePayload(BaseModel):
     # not send them and the ledger records NULL, which is the truth.
     cost_basis: str | None = Field(default=None, max_length=32)
     price_source: str | None = Field(default=None, max_length=32)
+    # Cumulative spend on models with no known price. Recorded but not enforced
+    # (#124): the figure is a guess, and halting a run on a guess stops triage
+    # over money that was never spent.
+    dollars_unpriced: float | None = Field(default=None, ge=0.0)
     last_error: str | None = Field(default=None, max_length=4096)
     disposition: str | None = Field(
         default=None, pattern=r"^(close_fp|escalate|leave_open)$"
@@ -321,7 +340,7 @@ def _seconds_until(when) -> int | None:
 
 
 @router.post("/runs/claim", response_model=ClaimedRun | ClaimDenied | None)
-async def claim_run(request: Request) -> ClaimedRun | None:
+async def claim_run(request: Request) -> ClaimedRun | ClaimDenied | None:
     """Claim the oldest active run for the caller's tenant.
 
     Returns ``null`` (HTTP 200) when nothing is available — keeps the
@@ -364,7 +383,13 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 text(
                     """
                     SELECT r.id, r.investigation_id, r.tokens_used, r.tokens_budget,
-                           r.dollars_used, r.dollars_budget, r.price_snapshot
+                           r.dollars_used, r.dollars_budget, r.price_snapshot,
+                           COALESCE((
+                               SELECT SUM(l.dollars_delta)
+                                 FROM llm_spend_ledger l
+                                WHERE l.run_id = r.id
+                                  AND l.price_source = 'unknown'
+                           ), 0)::float AS dollars_unpriced
                     FROM investigation_runs r
                     JOIN investigations i ON i.id = r.investigation_id
                                          AND i.tenant_id = r.tenant_id
@@ -446,6 +471,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 tokens_used=row["tokens_used"],
                 tokens_budget=row["tokens_budget"],
                 dollars_used=float(row["dollars_used"] or 0.0),
+                dollars_unpriced=float(row["dollars_unpriced"] or 0.0),
                 dollars_budget=float(row["dollars_budget"] or 0.0),
                 lease_id=lease_id,
                 lease_expires_at=lease_expires,
@@ -520,6 +546,7 @@ async def _record_spend_delta(
     dollars: float | None,
     cost_basis: str | None = None,
     price_source: str | None = None,
+    dollars_unpriced: float | None = None,
 ) -> None:
     """Ledger the spend reported since this run last reported (#129).
 
@@ -553,6 +580,55 @@ async def _record_spend_delta(
         # A report that adds nothing (a heartbeat between LLM calls) needs no row.
         if d_tokens == 0 and d_dollars == 0.0:
             return
+
+        # Split the window by what was priced and what was not, rather than
+        # labelling the whole delta with whatever the LAST call happened to use
+        # (Codex review, phases 1-2). That mattered: one label decides whether
+        # the entire delta is exempt from the daily ceiling, so a window mixing
+        # one catalog call with one unpriced call would exempt both or neither.
+        #
+        # The worker reports CUMULATIVE unpriced spend; the already-ledgered
+        # portion is the sum of this run's unknown-source rows, so the
+        # difference is what is new. No extra column needed.
+        d_unpriced = 0.0
+        if dollars_unpriced is not None:
+            prev_unpriced = float(
+                (
+                    await db.execute(
+                        text(
+                            "SELECT COALESCE(SUM(dollars_delta), 0) "
+                            "FROM llm_spend_ledger "
+                            "WHERE run_id = :r AND price_source = 'unknown'"
+                        ),
+                        {"r": str(run_id)},
+                    )
+                ).scalar_one()
+                or 0.0
+            )
+            d_unpriced = max(0.0, float(dollars_unpriced) - prev_unpriced)
+            d_unpriced = min(d_unpriced, d_dollars)
+
+        if d_unpriced > 0.0:
+            # Two rows: the unpriced money is recorded in full but tagged so the
+            # daily ceiling skips its dollars. Tokens ride the priced row so
+            # they are never double counted; they are enforced either way.
+            await db.execute(
+                text(
+                    "INSERT INTO llm_spend_ledger "
+                    "  (tenant_id, run_id, occurred_at, tokens_delta, dollars_delta, "
+                    "   cost_basis, price_source) "
+                    "VALUES (:t, :r, now(), 0, :dd, :cb, 'unknown')"
+                ),
+                {
+                    "t": str(tenant_id),
+                    "r": str(run_id),
+                    "dd": d_unpriced,
+                    "cb": cost_basis,
+                },
+            )
+            d_dollars = max(0.0, d_dollars - d_unpriced)
+            if d_tokens == 0 and d_dollars == 0.0:
+                return
         await db.execute(
             text(
                 "INSERT INTO llm_spend_ledger "
@@ -602,6 +678,7 @@ async def heartbeat_run(
             payload.dollars_used,
             cost_basis=payload.cost_basis,
             price_source=payload.price_source,
+                dollars_unpriced=payload.dollars_unpriced,
         )
         result = await db.execute(
             text(
@@ -742,6 +819,7 @@ async def release_run(
             payload.dollars_used,
             cost_basis=payload.cost_basis,
             price_source=payload.price_source,
+                dollars_unpriced=payload.dollars_unpriced,
         )
         row = (
             await db.execute(
@@ -834,6 +912,7 @@ async def complete_run(
             payload.dollars_used,
             cost_basis=payload.cost_basis,
             price_source=payload.price_source,
+                dollars_unpriced=payload.dollars_unpriced,
         )
         row = (
             await db.execute(

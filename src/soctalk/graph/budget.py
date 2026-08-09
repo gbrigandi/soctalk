@@ -490,7 +490,11 @@ def track(state: dict[str, Any], response: Any) -> int:
             reasoning_tokens=usage.reasoning_tokens,
             rates=_snapshot_rates(state, model),
         )
-        state.setdefault("cost_basis", "estimated")
+        # Assignment, not setdefault: with setdefault, one provider-reported
+        # call early in a run permanently labelled every later estimate as
+        # "provider_reported", which is the opposite of what these fields are
+        # for (Codex review, phases 1-2).
+        state["cost_basis"] = "estimated"
     # Which rate card produced the number. Kept on state rather than computed
     # only for the log line, so the worker can report it and the ledger can
     # store it — "a figure nobody can attribute" was the problem, and a value
@@ -499,7 +503,20 @@ def track(state: dict[str, Any], response: Any) -> int:
         # No rate card was consulted: the provider said what it charged.
         state["price_source"] = "provider"
     else:
-        state["price_source"] = _snapshot_source(state, model) or "unknown"
+        snapshot_source = _snapshot_source(state, model)
+        if snapshot_source:
+            state["price_source"] = snapshot_source
+        else:
+            # No snapshot is NOT the same as no price. A run created before
+            # snapshots existed, or one whose price resolution failed (which
+            # start_run explicitly tolerates), still prices from the built-in
+            # table — and labelling that "unknown" would have exempted the
+            # entire legacy path from enforcement under phase 2. Only a model
+            # that actually fell through to the fail-expensive fallback is
+            # unknown.
+            prices = _effective_prices()
+            normalized = _normalize_model(model, prices)
+            state["price_source"] = "builtin" if normalized in prices else "unknown"
 
     state["tokens_used"] = int(state["tokens_used"]) + delta_tokens
     state["dollars_used"] = float(state["dollars_used"]) + delta_dollars
@@ -620,7 +637,7 @@ def crossed_soft_warn(state: dict[str, Any]) -> bool:
     r = soft_warn_ratio()
     if int(state["tokens_used"]) >= r * int(state["tokens_budget"]):
         return True
-    if float(state["dollars_used"]) >= r * float(state["dollars_budget"]):
+    if enforceable_dollars(state) >= r * float(state["dollars_budget"]):
         return True
     return False
 
@@ -645,9 +662,15 @@ def reason(state: dict[str, Any]) -> str:
     parts: list[str] = []
     if int(state["tokens_used"]) >= int(state["tokens_budget"]):
         parts.append(f"tokens={state['tokens_used']}/{state['tokens_budget']}")
-    if float(state["dollars_used"]) >= float(state["dollars_budget"]):
+    if enforceable_dollars(state) >= float(state["dollars_budget"]):
         parts.append(
-            f"dollars={_fmt_dollars(float(state['dollars_used']))}"
+            f"dollars={_fmt_dollars(enforceable_dollars(state))}"
             f"/{_fmt_dollars(float(state['dollars_budget']))}"
         )
+    unpriced = float(state.get("dollars_unpriced", 0.0))
+    if unpriced:
+        # Say it out loud. Otherwise an operator sees a run stopped at
+        # "dollars=$1.20/$5.00" and cannot tell that another $9 of unpriced
+        # spend happened and was deliberately not counted.
+        parts.append(f"unpriced={_fmt_dollars(unpriced)} (not enforced)")
     return "; ".join(parts) if parts else "within budget"

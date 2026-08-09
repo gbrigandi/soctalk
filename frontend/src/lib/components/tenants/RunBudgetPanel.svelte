@@ -387,7 +387,9 @@
 								? 'billed by provider'
 								: basis === 'estimated'
 									? 'our estimate'
-									: 'unknown basis'}
+									: basis === 'unpriced'
+										? 'unpriced (not enforced)'
+										: 'unknown basis'}
 							{money(v.dollars)}
 						</span>
 					{/each}

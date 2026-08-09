@@ -42,11 +42,16 @@ class _FakeLLM:
         return r
 
 
-def _ai(content, tool_calls=None):
+def _ai(content, tool_calls=None, model="claude-sonnet-4-6"):
     return AIMessage(
         content=content,
         tool_calls=tool_calls or [],
         usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        # Name a PRICED model. Without it the response carries model=None, the
+        # spend resolves as unpriced, and since #141 phase 2 unpriced dollars no
+        # longer close a budget — so a test that tripped its ceiling on invented
+        # dollars stopped tripping. It was relying on the bug.
+        response_metadata={"model_name": model},
     )
 
 

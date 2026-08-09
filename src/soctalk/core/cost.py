@@ -243,7 +243,16 @@ _DAILY_SPEND_SQL = """
 # cap query on purpose: the cap must stay a hot, narrow read, and this is only
 # consulted when someone is looking at the figures.
 _SPEND_PROVENANCE_SQL = """
-    SELECT COALESCE(cost_basis, 'unknown')          AS basis,
+    SELECT CASE
+             WHEN cost_basis = 'provider_reported' THEN 'provider_reported'
+             -- Unpriced spend is an ESTIMATE too, so grouping on cost_basis
+             -- alone merged it with catalog-priced estimates and hid the
+             -- exempt portion the operator most needs to see (Codex review,
+             -- phases 1-2, P2).
+             WHEN price_source = 'unknown'         THEN 'unpriced'
+             WHEN cost_basis IS NULL               THEN 'unknown_provenance'
+             ELSE cost_basis
+           END                                      AS basis,
            COALESCE(SUM(dollars_delta), 0.0)::float AS dollars,
            COALESCE(SUM(tokens_delta), 0)::bigint   AS tokens
       FROM llm_spend_ledger

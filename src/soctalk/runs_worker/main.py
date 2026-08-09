@@ -406,6 +406,9 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         # ignored for claimed runs.
         **_tokens_budget_kv(claim.get("tokens_budget")),
         "dollars_used": float(claim.get("dollars_used") or 0.0),
+        # Carried across a release/re-claim so previously-exempt spend stays
+        # exempt; without it a retried run halts on invented dollars.
+        "dollars_unpriced": float(claim.get("dollars_unpriced") or 0.0),
         # The run row is the only source; see _dollars_budget_kv.
         **_dollars_budget_kv(claim.get("dollars_budget")),
         # Rates this run is priced at, frozen when the run was created (#125).
@@ -582,6 +585,7 @@ async def _heartbeat_loop(
                     # say whether it was measured or inferred (#141 phase 1).
                     "cost_basis": state.get("cost_basis"),
                     "price_source": state.get("price_source"),
+                    "dollars_unpriced": float(state.get("dollars_unpriced", 0.0)),
                 },
                 timeout=10.0,
             )
@@ -652,6 +656,7 @@ async def _post_release(
     client: httpx.AsyncClient, run_id: str, lease_id: str, category: str,
     tokens_used: int, dollars_used: float,
     cost_basis: str | None = None, price_source: str | None = None,
+    dollars_unpriced: float | None = None,
 ) -> None:
     """POST a release-for-retry. Same transport tolerance as _post_complete:
     a 409 means we no longer own the run (benign), transport blips are retried
@@ -662,6 +667,7 @@ async def _post_release(
         "lease_id": lease_id, "error_category": category,
         "tokens_used": tokens_used, "dollars_used": dollars_used,
         "cost_basis": cost_basis, "price_source": price_source,
+        "dollars_unpriced": dollars_unpriced,
     })
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     attempts = _post_attempts()
@@ -809,6 +815,7 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         await _post_release(
             client, run_id, lease_id, transient_category, used, dollars_used,
             cost_basis=state.get("cost_basis"), price_source=state.get("price_source"),
+            dollars_unpriced=float(state.get("dollars_unpriced", 0.0)),
         )
         return
 
@@ -919,6 +926,7 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         "dollars_used": dollars_used,
         "cost_basis": state.get("cost_basis"),
         "price_source": state.get("price_source"),
+        "dollars_unpriced": float(state.get("dollars_unpriced", 0.0)),
         "last_error": last_error,
         "disposition": disposition,
         "verdict_summary": verdict_summary,

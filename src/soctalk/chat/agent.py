@@ -832,7 +832,16 @@ async def run_turn(
             call_in, call_out = token_budget.extract_usage(response)
             total_tokens_in += call_in
             total_tokens_out += call_out
-            turn_dollars_this_call = float(state["dollars_used"])
+            # Only spend we can attribute counts toward the turn's dollars
+            # (#124, #141 phase 2). Chat shares graph/budget.track, so it hit
+            # the same fallback: a chat turn on an unpriced model billed at
+            # $15/$75 and that invented figure fed the tenant's daily ceiling,
+            # which gates the worker's claim loop too — so an unpriced chat
+            # session could stop triage (Codex review, phases 1-2, P1).
+            #
+            # The full amount is still recorded on the message row, so nothing
+            # is hidden; it just does not get to close a ceiling.
+            turn_dollars_this_call = token_budget.enforceable_dollars(state)
             total_turn_dollars += turn_dollars_this_call
 
             # Anthropic-via-LangChain returns ``response.content`` as

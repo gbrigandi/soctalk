@@ -743,3 +743,72 @@ def test_a_claim_denial_is_not_mistaken_for_a_claimed_run():
 
     run_body = {"run_id": "abc", "investigation_id": "def"}
     assert not run_body.get("denied")
+
+
+def test_exemption_survives_a_release_and_reclaim():
+    """A retried run must not start enforcing spend it already exempted.
+
+    dollars_used is rehydrated from the run row on claim; dollars_unpriced was
+    only in graph state, so a run released on a transient provider error came
+    back with the exemption at zero and could halt on the very fallback dollars
+    the exemption exists to disregard (Codex review, phases 1-2).
+    """
+    from soctalk.graph.budget import over_budget
+
+    # What a re-claimed run looks like WITHOUT rehydration: the exemption is
+    # lost and the run halts.
+    lost = {
+        "tokens_used": 0, "tokens_budget": 10**9,
+        "dollars_used": 400.0, "dollars_budget": 5.0,
+        "price_snapshot": {"version": 1, "models": {}},
+    }
+    assert over_budget(lost) is True
+
+    # With the claim carrying it, the run continues, as it did before the retry.
+    rehydrated = {**lost, "dollars_unpriced": 400.0}
+    assert over_budget(rehydrated) is False
+
+
+def test_builtin_priced_models_are_not_labelled_unknown(monkeypatch):
+    """No snapshot is not the same as no price.
+
+    A run created before snapshots existed, or one whose price resolution
+    failed (start_run explicitly tolerates that), still prices from the
+    built-in table. Labelling it "unknown" would have exempted the entire
+    legacy path from enforcement under phase 2 — every such run silently
+    uncapped. Caught by an existing chat test that stopped tripping its budget.
+    """
+    from soctalk.core.pricing.usage import CanonicalUsage
+    from soctalk.graph import budget
+
+    st = {
+        "tokens_used": 0, "tokens_budget": 10**9,
+        "dollars_used": 0.0, "dollars_budget": 10**6,
+    }  # deliberately NO price_snapshot
+    usage = CanonicalUsage(input_tokens=1_000_000, output_tokens=0)
+
+    monkeypatch.setattr(budget, "canonical_usage", lambda _r: usage)
+    monkeypatch.setattr(budget, "_model_name", lambda _r: "claude-sonnet-4-6")
+    budget.track(st, object())
+
+    assert st["price_source"] == "builtin"
+    assert st.get("dollars_unpriced", 0.0) == 0.0
+    assert budget.enforceable_dollars(st) == st["dollars_used"] > 0
+
+
+def test_only_a_genuine_fallback_is_unknown(monkeypatch):
+    from soctalk.core.pricing.usage import CanonicalUsage
+    from soctalk.graph import budget
+
+    st = {
+        "tokens_used": 0, "tokens_budget": 10**9,
+        "dollars_used": 0.0, "dollars_budget": 10**6,
+    }
+    usage = CanonicalUsage(input_tokens=1000, output_tokens=1000)
+    monkeypatch.setattr(budget, "canonical_usage", lambda _r: usage)
+    monkeypatch.setattr(budget, "_model_name", lambda _r: "no-such-model-anywhere")
+    budget.track(st, object())
+
+    assert st["price_source"] == "unknown"
+    assert st["dollars_unpriced"] == st["dollars_used"] > 0
+    assert budget.enforceable_dollars(st) == 0.0

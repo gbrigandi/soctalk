@@ -66,6 +66,14 @@ class ResponseAction(BaseModel):
             )
         if self.when is not None:
             validate_condition(self.when, RESPONSE_STATE_CONTRACT)
+        cap = RESPONSE_CAPABILITIES[self.capability]
+        if cap.allowed_params is not None:
+            unknown = sorted(set(self.params) - cap.allowed_params)
+            if unknown:
+                raise ValueError(
+                    f"capability {self.capability!r} does not accept param(s) "
+                    f"{unknown} (accepted: {sorted(cap.allowed_params)})"
+                )
         return self
 
 
