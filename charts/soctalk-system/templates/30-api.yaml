@@ -313,6 +313,7 @@ spec:
               what actually points at them.
             */}}
             {{- $provider := ternary "anthropic" "openai" (eq $rawProvider "anthropic") }}
+            {{- $baseRaw := .Values.defaults.llm.baseUrl | default "" }}
             - name: SOCTALK_LLM_PROVIDER
               value: {{ $provider | quote }}
             {{- /*
@@ -335,7 +336,15 @@ spec:
               $rawProvider, not the canonicalised $provider, precisely because
               the canonicalisation erases that distinction.
             */}}
-            {{- $firstParty := or (eq $rawProvider "anthropic") (eq $rawProvider "openai") }}
+            {{- /*
+              Host-aware, not provider-string-only: `openai-compatible` pointed
+              at api.openai.com IS first-party in practice — which is the
+              chart's own default pairing — so judging by the provider string
+              alone treated it as an opaque gateway and let a mismatched model
+              through (Codex review of #142, round 6).
+            */}}
+            {{- $firstPartyHost := or (contains "api.openai.com" $baseRaw) (contains "api.anthropic.com" $baseRaw) }}
+            {{- $firstParty := or (eq $rawProvider "anthropic") (eq $rawProvider "openai") $firstPartyHost }}
             {{- $isClaude := hasPrefix "claude" (lower $model) }}
             {{- $coherent := and $hasModel (eq (eq $provider "anthropic") $isClaude) }}
             {{- if or (not $firstParty) $coherent }}
@@ -363,7 +372,7 @@ spec:
               at OpenAI's host. When the URL belongs to the OTHER vendor, emit
               nothing and let the SDK default apply.
             */}}
-            {{- $base := .Values.defaults.llm.baseUrl | default "" }}
+            {{- $base := $baseRaw }}
             {{- $isOpenAiHost := contains "api.openai.com" $base }}
             {{- $isAnthropicHost := contains "api.anthropic.com" $base }}
             {{- if $base }}
@@ -379,8 +388,17 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- /*
+              Canonicalised to what the TENANT chart accepts. This value is
+              persisted by the no-provider onboarding path and then rendered as
+              tenant `llm.provider`, whose schema allows only
+              openai-compatible|anthropic — so a schema-valid system value of
+              `openai`, `azure` or `ollama` made tenant provisioning fail
+              schema validation (Codex review of #142, round 6). Pre-existing,
+              not introduced here.
+            */}}
             - name: SOCTALK_LLM_PROVIDER_DEFAULT
-              value: {{ .Values.defaults.llm.provider | quote }}
+              value: {{ ternary "anthropic" "openai-compatible" (eq $rawProvider "anthropic") | quote }}
             - name: SOCTALK_LLM_BASE_URL_DEFAULT
               value: {{ .Values.defaults.llm.baseUrl | quote }}
             - name: SOCTALK_LLM_MODEL_DEFAULT
