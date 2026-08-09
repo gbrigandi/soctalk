@@ -325,9 +325,27 @@ spec:
             */}}
             {{- $model := .Values.defaults.llm.model | default "" }}
             {{- $isClaude := hasPrefix "claude" (lower $model) }}
-            {{- if and $model (eq (eq $provider "anthropic") $isClaude) }}
+            {{- $coherent := and $model (eq (eq $provider "anthropic") $isClaude) }}
+            {{- /*
+              On a mismatch, emit the PROVIDER's default rather than nothing.
+              Emitting nothing fell through to the code default, which is
+              claude-sonnet-4-6 — so an openai install configured with a Claude
+              model still called the OpenAI client with a Claude model, the
+              exact failure the suppression was meant to prevent (Codex review
+              of #142, round 4).
+            */}}
             - name: SOCTALK_CHAT_MODEL
-              value: {{ $model | quote }}
+              value: {{ $coherent | ternary $model (ternary "claude-sonnet-4-6" "gpt-4o" (eq $provider "anthropic")) | quote }}
+            {{- /*
+              A served engine (vLLM, SGLang) speaks the OpenAI protocol on an
+              arbitrary host, so pricing cannot tell it from a gateway without
+              being told. Without this, a self-hosted primary priced as
+              openai_compatible and could never match the catalog's self_hosted
+              rows.
+            */}}
+            {{- if .Values.defaults.llm.engine }}
+            - name: SOCTALK_CHAT_ENGINE
+              value: {{ .Values.defaults.llm.engine | quote }}
             {{- end }}
             {{- /*
               Same coherence rule as the model. The chart's default baseUrl is

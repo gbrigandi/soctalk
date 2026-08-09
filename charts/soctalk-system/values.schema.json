@@ -303,6 +303,15 @@
                   }
                 }
               }
+            },
+            "engine": {
+              "type": "string",
+              "enum": [
+                "",
+                "vllm",
+                "sglang"
+              ],
+              "description": "Serving engine behind baseUrl when SocTalk prices it separately. Empty for a hosted vendor or generic gateway."
             }
           }
         },
