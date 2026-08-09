@@ -266,18 +266,22 @@ def roles_for_config(cfg: Any, tiers: dict[str, Any] | None = None) -> dict[str,
             "provider_id": provider_id_for(base_url),
         }
 
-        # Never stamp a SECOND entry for a model string another role already
-        # carries. _snapshot_rates matches by model across roles, and two
-        # entries for one string with different rates are treated as ambiguous
-        # and fall through to the built-in table — deliberately, because the
-        # call site does not say which role is spending.
+        # CHAT only: never stamp a second entry for a model string that a
+        # triage role already carries. _snapshot_rates matches by model across
+        # roles, and two entries for one string with different rates are
+        # treated as ambiguous and fall through to the built-in table — so
+        # adding `chat` for a model `fast` already covers would push a run that
+        # previously priced cleanly onto the fallback.
         #
-        # So adding `chat` for a model that `fast` already covers would push a
-        # run that previously priced cleanly onto the fallback: a regression
-        # introduced by the fix, not by the tenant's config (Codex review of
-        # the chat-role change). The existing entry already answers lookups for
-        # that string; a duplicate can only make things worse.
-        if any(existing["model"] == model for existing in roles.values()):
+        # fast and reasoning are deliberately NOT deduped. A hybrid tenant
+        # running one model string through two providers genuinely has two
+        # prices, and stamping both is what makes _snapshot_rates report the
+        # ambiguity rather than silently pick one. Suppressing them collapsed
+        # reasoning onto fast's backend — a worse bug than the one being fixed
+        # (Codex, round 2 of the chat-role change).
+        if role == "chat" and any(
+            existing["model"] == model for existing in roles.values()
+        ):
             continue
 
         roles[role] = entry

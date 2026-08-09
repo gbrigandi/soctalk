@@ -760,3 +760,38 @@ def test_chat_role_collapses_when_it_shares_the_primary_model():
     )
     roles = roles_for_config(cfg)
     assert {r["model"] for r in roles.values()} == {"one-model"}
+
+
+def test_hybrid_roles_keep_both_backends_for_one_model_string():
+    """fast and reasoning must NOT be deduped by model string.
+
+    A hybrid tenant running one model through two providers genuinely has two
+    prices. Stamping both is what makes _snapshot_rates report the ambiguity
+    instead of silently picking one. My first dedupe applied to every role and
+    collapsed reasoning onto fast's backend — a worse bug than the one it was
+    fixing (Codex, round 2 of the chat-role change).
+    """
+    from types import SimpleNamespace
+
+    from soctalk.core.pricing.resolve import roles_for_config
+
+    cfg = SimpleNamespace(
+        llm_model="m",
+        llm_fast_model="m",
+        llm_reasoning_model="m",
+        llm_provider="anthropic",
+        llm_base_url=None,
+        llm_tiers={
+            "fast": {
+                "provider": "openai-compatible",
+                "base_url": "https://novarouteai.com/v1",
+                "model": "m",
+            }
+        },
+    )
+    roles = roles_for_config(cfg)
+
+    assert roles["fast"]["provider_kind"] == "openai_compatible"
+    assert roles["reasoning"]["provider_kind"] == "anthropic"
+    # Chat shares the string, so it is the one that collapses.
+    assert "chat" not in roles

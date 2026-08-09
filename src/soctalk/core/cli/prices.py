@@ -172,6 +172,16 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
                          -- (Codex review of the chat-role change).
                          i.llm_model
                        )
+                    OR EXISTS (
+                         -- Per-tier models live in llm_tiers JSONB and are
+                         -- consumed by render and runtime, but the scalar
+                         -- columns above never see them — so a price change
+                         -- to a tier-only model reported no affected tenants
+                         -- (Codex, round 2).
+                         SELECT 1
+                           FROM jsonb_each(COALESCE(i.llm_tiers, '{}'::jsonb)) AS tier(k, v)
+                          WHERE v->>'model' = :m
+                       )
                  ORDER BY t.slug
                 """
             ),
