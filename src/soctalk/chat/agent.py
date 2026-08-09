@@ -224,6 +224,10 @@ class TurnContext:
     # shows what was actually spent (#124). Defaulted, so it sits with the
     # other optional fields — a defaulted field cannot precede required ones.
     total_dollars_unpriced: float = 0.0
+    # False when the tenant has dollar accounting off. Both conversation
+    # budget gates are skipped then, matching the per-run and daily behaviour
+    # and the panel's promise (Codex round 6).
+    cost_tracking: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +720,9 @@ async def run_turn(
     # Enforceable, not raw: an unpriced turn recorded real dollars, and gating
     # the NEXT turn on them would block a conversation over money the same
     # module refuses to enforce mid-turn (Codex round 3, P1).
-    if ctx.total_dollars - ctx.total_dollars_unpriced >= ctx.budget_dollars:
+    if ctx.cost_tracking and (
+        ctx.total_dollars - ctx.total_dollars_unpriced >= ctx.budget_dollars
+    ):
         yield sse.error(
             "budget_exhausted",
             "This conversation has reached its $%.2f cap." % ctx.budget_dollars,
@@ -971,7 +977,9 @@ async def run_turn(
             # the door and was then stopped by the first tool-call iteration
             # (Codex round 4, P1).
             prior_enforceable = ctx.total_dollars - ctx.total_dollars_unpriced
-            if prior_enforceable + total_turn_enforceable >= ctx.budget_dollars:
+            if ctx.cost_tracking and (
+                prior_enforceable + total_turn_enforceable >= ctx.budget_dollars
+            ):
                 stop_reason = "budget_exhausted"
                 break
 

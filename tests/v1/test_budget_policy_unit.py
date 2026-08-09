@@ -864,3 +864,41 @@ def test_unlock_compares_against_enforceable_spend():
     new_dollars = 5.0
     assert new_dollars > enforceable
     assert not new_dollars > dollars_used  # the old rule would have rejected it
+
+
+def test_cost_tracking_off_disables_the_daily_dollar_ceiling_too():
+    """The switch has to mean the same thing everywhere.
+
+    Only the per-run check honoured it, so a tenant with accounting off was
+    still stopped by the daily spend ceiling — and by chat's conversation cap —
+    while the panel said "Dollar ceilings are not enforced" (Codex round 6).
+    """
+    from soctalk.core.cost import DailyCaps, DailyCapStatus, TenantDailySpend
+
+    over = DailyCapStatus(
+        spend=TenantDailySpend(tokens=10, dollars=999.0),
+        caps=DailyCaps(tokens=1_000_000, dollars=50.0),
+    )
+    assert over.dollar_cap_hit is True
+    assert over.cap_hit is True
+
+    same_but_untracked = DailyCapStatus(
+        spend=TenantDailySpend(tokens=10, dollars=999.0),
+        caps=DailyCaps(tokens=1_000_000, dollars=50.0),
+        cost_tracking=False,
+    )
+    assert same_but_untracked.dollar_cap_hit is False
+    assert same_but_untracked.cap_hit is False
+
+
+def test_tokens_still_cap_when_cost_tracking_is_off():
+    """Turning off dollar accounting is not a request to remove every bound."""
+    from soctalk.core.cost import DailyCaps, DailyCapStatus, TenantDailySpend
+
+    st = DailyCapStatus(
+        spend=TenantDailySpend(tokens=10_000_000, dollars=0.0),
+        caps=DailyCaps(tokens=1_000_000, dollars=50.0),
+        cost_tracking=False,
+    )
+    assert st.token_cap_hit is True
+    assert st.cap_hit is True

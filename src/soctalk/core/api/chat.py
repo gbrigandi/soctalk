@@ -644,6 +644,18 @@ async def post_message(
     # Capture pre-stream context (the agent only needs values, not the
     # request session itself — by the time _stream() runs the
     # middleware has already committed and the session is closing).
+    from soctalk.core.ir.policies import resolve_cost_tracking
+
+    # Tenant-scoped conversations honour the tenant's switch; a fleet
+    # conversation spans tenants, so it keeps accounting on.
+    cost_tracking = True
+    _ct_tenant = conv.get("tenant_id")
+    if _ct_tenant:
+        try:
+            cost_tracking = await resolve_cost_tracking(db, UUID(str(_ct_tenant)))
+        except Exception:  # noqa: BLE001 - a policy read must not break chat
+            cost_tracking = True
+
     ctx = TurnContext(
         conversation_id=conv_uuid,
         tenant_id=tenant_id,
@@ -659,6 +671,7 @@ async def post_message(
         budget_dollars=float(conv["budget_dollars"]),
         total_dollars=float(conv["total_dollars"]),
         total_dollars_unpriced=float(conv.get("dollars_unpriced") or 0.0),
+        cost_tracking=cost_tracking,
         investigation_id=(
             UUID(conv["investigation_id"]) if conv["investigation_id"] else None
         ),

@@ -544,6 +544,10 @@ class DailyCapStatus:
     # keep older callers constructing this with two arguments working.
     timezone: str = "UTC"
     resets_at: datetime | None = None
+    # False when this tenant has dollar accounting switched off. The dollar
+    # ceiling then reports "not hit" regardless of spend, which is what the
+    # switch means; the token ceiling is unaffected.
+    cost_tracking: bool = True
 
     @property
     def token_cap_hit(self) -> bool:
@@ -551,6 +555,12 @@ class DailyCapStatus:
 
     @property
     def dollar_cap_hit(self) -> bool:
+        # Accounting off means the dollar ceiling is not enforced, which is what
+        # the switch says and what the panel promises. Only the per-run check
+        # honoured it before, so a tenant with accounting off was still stopped
+        # here and by chat's conversation cap (Codex round 6).
+        if not self.cost_tracking:
+            return False
         return self.spend.dollars >= self.caps.dollars
 
     @property
@@ -578,11 +588,27 @@ class DailyCapStatus:
 async def get_tenant_daily_status(
     db: AsyncSession, tenant_id: UUID
 ) -> DailyCapStatus:
-    """Spend and the ceilings it is measured against, in one read."""
+    """Spend and the ceilings it is measured against, in one read.
+
+    When the tenant has cost accounting turned off, the DOLLAR ceiling is not
+    enforced — which is what the switch says it does, and what the panel
+    promises. Only the per-run check honoured it before, so a tenant with
+    accounting off still got stopped by the daily spend ceiling and by chat's
+    conversation cap (Codex round 6). The token ceiling still applies: tokens
+    are counted, not inferred, so turning off dollar accounting is not a
+    request to remove every bound on work.
+    """
+    from soctalk.core.ir.policies import resolve_cost_tracking
+
     tz = await resolve_budget_day_timezone(db, tenant_id)
+    try:
+        tracking = await resolve_cost_tracking(db, tenant_id)
+    except Exception:  # noqa: BLE001 - a policy read must not break the cap
+        tracking = True
     return DailyCapStatus(
         spend=await get_tenant_daily_spend(db, tenant_id),
         caps=await resolve_tenant_daily_caps(db, tenant_id),
         timezone=tz,
         resets_at=(await db_day_window(db, tz))[1],
+        cost_tracking=tracking,
     )
