@@ -271,7 +271,16 @@ async def resolve_run_prices(
         )
 
     if not models:
-        return None
+        # A config that resolves no roles (a blank primary model, which the LLM
+        # PATCH permits) must still carry the switch, for the same reason as the
+        # no-config case above (Codex round 9).
+        return {
+            "version": SNAPSHOT_VERSION,
+            "currency": "USD",
+            "resolved_at": datetime.now(UTC).isoformat(),
+            "cost_tracking": await _cost_tracking_or_default(db, tenant_id),
+            "models": {},
+        }
 
     cost_tracking = await _cost_tracking_or_default(db, tenant_id)
 

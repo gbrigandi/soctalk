@@ -83,7 +83,26 @@ async def start_run(
         price_snapshot = await resolve_run_prices(db, tenant_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("run_price_resolution_failed", error=str(exc))
-        price_snapshot = None
+        # Still stamp the accounting switch. Pricing degrades to the legacy
+        # path either way, but the worker reads cost_tracking off the snapshot,
+        # so a NULL one silently re-enabled dollar ceilings for a tenant that
+        # had switched them off — a resolver blip changing enforcement is
+        # exactly the surprise this feature exists to remove (Codex round 9).
+        #
+        # Best effort, defaulting to ON: if the policy read fails too, keeping
+        # ceilings enforced is the safe side.
+        try:
+            from soctalk.core.ir.policies import resolve_cost_tracking
+
+            tracking = await resolve_cost_tracking(db, tenant_id)
+        except Exception:  # noqa: BLE001
+            tracking = True
+        price_snapshot = {
+            "version": 1,
+            "currency": "USD",
+            "cost_tracking": tracking,
+            "models": {},
+        }
     # X in "re-triage up to X attempts". The column's DB default is 4
     # (migration v1_0039); the env lets an operator raise or lower it for new
     # runs without a migration. Read per call so a config change applies to
