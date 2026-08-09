@@ -145,6 +145,15 @@ async def seeded_tenant(
             llm_base_url="https://api.example.com/v1",
             llm_model="gpt-4",
             llm_provider="openai-compatible",
+            # Cost accounting is ON in CI (#141 phase 3). This tenant points at
+            # a gateway, whose (provider_kind, model) pair is deliberately not
+            # in the catalog — a gateway's price for a model is not the
+            # vendor's price for it — so the price gate refuses the PATCH
+            # without an override. Setting one is what a real operator does.
+            llm_model_prices={
+                m: {"input": 1.0, "output": 2.0}
+                for m in ("gpt-4", "gpt-4o", "gpt-4o-mini", "o3")
+            },
             wazuh_url=None,  # controller writes after install
             wazuh_enabled=True,
             thehive_enabled=False,

@@ -431,35 +431,6 @@ async def onboard_tenant(
             llm_reasoning_model = reconcile_provider_model(
                 llm_provider, llm_reasoning_model
             )
-    # Onboarding is a config entry point too, and it bypassed the price gate
-    # entirely — so a tenant could be created with an unpriced model that the
-    # LLM PATCH would have refused (#141 phase 3). Same rule, same escape
-    # hatches, applied before the tenant row is written.
-    #
-    # Warn rather than refuse: onboarding creates infrastructure, and blocking
-    # it over pricing would leave a half-provisioned tenant behind. The gate on
-    # the config PATCH still stops the model being *changed* to something
-    # unpriced, and the run will report price_source='unknown' so the spend is
-    # visibly unattributed rather than silently enforced.
-    _unpriced = await gate.unpriced_models(
-        session,
-        tenant.id,
-        provider=llm_provider,
-        base_url=llm_base_url,
-        models={
-            "model": llm_model,
-            "fast_model": llm_fast_model,
-            "reasoning_model": llm_reasoning_model,
-        },
-    )
-    if _unpriced:
-        logger.warning(
-            "tenant_onboarded_with_unpriced_model",
-            tenant_id=str(tenant.id),
-            unpriced=_unpriced,
-            hint="dollar ceilings will not be enforced for these models",
-        )
-
     # Only pass llm_provider when set so the column default
     # ('openai-compatible') applies for a provider-less, key-less onboard.
     llm_kwargs: dict[str, Any] = {"llm_model": llm_model}
@@ -536,6 +507,42 @@ async def onboard_tenant(
             )
         )
         await session.commit()
+
+    # Onboarding is a config entry point too, and it bypassed the price gate —
+    # a tenant could be created with a model the LLM PATCH would refuse (#141
+    # phase 3).
+    #
+    # Checked AFTER the commit, not before: onboarding builds every row and
+    # commits once, and any query in the middle triggers an autoflush that
+    # writes the tenant early and breaks that design. Found by CI, which is
+    # what removing the SOCTALK_COST_TRACKING=off workaround was for.
+    #
+    # Warn rather than refuse: onboarding creates infrastructure, and failing
+    # it over pricing would strand a half-provisioned tenant. The PATCH gate
+    # still stops the model being CHANGED to something unpriced, and such runs
+    # report price_source='unknown', so the spend is visibly unattributed
+    # rather than silently enforced.
+    try:
+        _unpriced = await gate.unpriced_models(
+            session,
+            tenant.id,
+            provider=llm_provider,
+            base_url=llm_base_url,
+            models={
+                "model": llm_model,
+                "fast_model": llm_fast_model,
+                "reasoning_model": llm_reasoning_model,
+            },
+        )
+        if _unpriced:
+            logger.warning(
+                "tenant_onboarded_with_unpriced_model",
+                tenant_id=str(tenant.id),
+                unpriced=_unpriced,
+                hint="dollar ceilings will not be enforced for these models",
+            )
+    except Exception as exc:  # noqa: BLE001 - a warning must not fail onboarding
+        logger.warning("onboard_price_check_failed", error=str(exc))
 
     return _to_read(tenant)
 
