@@ -831,8 +831,39 @@ async def run_turn(
     # catalog exists to close. Never fatal: a pricing problem must not stop the
     # conversation, it just falls back to the shipped defaults.
     chat_prices: dict[str, Any] | None = None
-    _price_tenant = ctx.focused_tenant_id or ctx.tenant_id
-    if _price_tenant is not None:
+    # A FLEET conversation runs the install's model on the install's backend,
+    # whatever tenant it happens to be focused on. Pricing it from the focused
+    # tenant's config billed it against a backend it never touched, and with no
+    # focus it carried no snapshot at all and fell to the built-in table (#142).
+    #
+    # Tenant conversations keep using the tenant resolver, which also applies
+    # that tenant's price overrides.
+    _price_tenant = None if ctx.scope == "mssp_fleet" else ctx.tenant_id
+    if ctx.scope == "mssp_fleet":
+        try:
+            from soctalk.core.ir.policies import cost_tracking_install_default
+            from soctalk.core.pricing.resolve import resolve_prices_for_backend
+
+            _cfg = resolved.llm_config
+            _provider = getattr(_cfg, "provider", None)
+            _base = (
+                getattr(_cfg, "anthropic_base_url", None)
+                if str(_provider) == "anthropic"
+                else getattr(_cfg, "openai_base_url", None)
+            )
+            chat_prices = await resolve_prices_for_backend(
+                db,
+                model=resolved.model,
+                provider=str(_provider) if _provider else None,
+                base_url=_base,
+                # No tenant, so no tenant policy to read — the install default
+                # is the only meaningful answer, matching how the fleet
+                # conversation gate already resolves it.
+                cost_tracking=cost_tracking_install_default(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("fleet_chat_price_resolution_failed error=%s", exc)
+    elif _price_tenant is not None:
         try:
             # Price the model this CONVERSATION runs, not the tenant default.
             # A conversation can be created with an explicit model and keeps it

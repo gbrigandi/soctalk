@@ -854,3 +854,60 @@ def test_chat_prices_the_conversation_model_not_the_tenant_default():
     # And the dedupe still applies against the model in play, not the default.
     same = roles_for_config(cfg, chat_model="gpt-4o")
     assert "chat" not in same
+
+
+@pytest.mark.asyncio
+async def test_backend_scoped_snapshot_has_the_same_shape(monkeypatch):
+    """Fleet chat needs a snapshot with no tenant behind it (#142).
+
+    It must be the same shape as a run snapshot, or _snapshot_rates,
+    _snapshot_source and the provenance breakdown would all need special cases.
+    """
+    from soctalk.core.pricing import resolve as R
+
+    async def fake_resolve_one(db, *, model, provider_kind, provider_id, overrides):
+        return {
+            "model": model,
+            "provider_kind": provider_kind,
+            "provider_id": provider_id,
+            "input_per_mtok": 1.0,
+            "output_per_mtok": 2.0,
+            "source": "catalog",
+        }
+
+    monkeypatch.setattr(R, "_resolve_one", fake_resolve_one)
+
+    snap = await R.resolve_prices_for_backend(
+        object(),
+        model="gpt-4o",
+        provider="openai-compatible",
+        base_url="https://api.openai.com/v1",
+        cost_tracking=True,
+    )
+    assert set(snap) == {"version", "currency", "resolved_at", "cost_tracking", "models"}
+    assert set(snap["models"]) == {"chat"}
+    # Priced at the backend it was told about, not a tenant's.
+    assert snap["models"]["chat"]["provider_kind"] == "openai"
+
+    # And the worker's matcher reads it without special-casing.
+    from soctalk.graph.budget import _snapshot_rates
+
+    assert _snapshot_rates({"price_snapshot": snap}, "gpt-4o") == {
+        "input": 1.0,
+        "output": 2.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_backend_snapshot_carries_the_accounting_switch(monkeypatch):
+    from soctalk.core.pricing import resolve as R
+    from soctalk.graph.budget import cost_tracking_off
+
+    async def fake_resolve_one(db, **kw):
+        return {"model": kw["model"], "source": "unknown"}
+
+    monkeypatch.setattr(R, "_resolve_one", fake_resolve_one)
+    snap = await R.resolve_prices_for_backend(
+        object(), model="m", provider="anthropic", base_url=None, cost_tracking=False
+    )
+    assert cost_tracking_off({"price_snapshot": snap}) is True

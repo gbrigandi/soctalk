@@ -317,6 +317,46 @@ async def _cost_tracking_or_default(db: AsyncSession, tenant_id: UUID) -> bool:
         return True
 
 
+async def resolve_prices_for_backend(
+    db: AsyncSession,
+    *,
+    model: str,
+    provider: str | None,
+    base_url: str | None,
+    engine: str | None = None,
+    overrides: dict[str, Any] | None = None,
+    cost_tracking: bool = True,
+) -> dict[str, Any] | None:
+    """A snapshot for ONE model at an explicitly named backend (#142).
+
+    For work that is not scoped to a tenant's LLM config — fleet chat runs the
+    INSTALL's model on the install's backend, so pricing it from a focused
+    tenant's config billed it against a backend it never touched, and with no
+    focus it carried no snapshot at all and fell to the built-in table.
+
+    Same snapshot shape as ``resolve_run_prices`` so every consumer
+    (``_snapshot_rates``, ``_snapshot_source``, the provenance breakdown) works
+    unchanged; it simply carries one role.
+    """
+    name = (model or "").strip()
+    if not name:
+        return None
+    entry = await _resolve_one(
+        db,
+        model=name,
+        provider_kind=provider_kind_for(provider, base_url, engine),
+        provider_id=provider_id_for(base_url),
+        overrides=overrides,
+    )
+    return {
+        "version": SNAPSHOT_VERSION,
+        "currency": "USD",
+        "resolved_at": datetime.now(UTC).isoformat(),
+        "cost_tracking": cost_tracking,
+        "models": {"chat": entry},
+    }
+
+
 async def resolve_run_prices(
     db: AsyncSession,
     tenant_id: UUID,
