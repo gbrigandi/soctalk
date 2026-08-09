@@ -112,10 +112,15 @@ async def _run(apply: bool) -> int:
                 # command's stdout and is gone (Codex review of phases 4-5).
                 await s.execute(
                     text(
-                        "INSERT INTO audit_log (tenant_id, actor_principal, action, "
-                        "  resource_type, resource_id, after, notes) "
-                        "VALUES (:t, 'system:backfill-prices', "
-                        "  'cost_tracking.disabled', 'tenant', :t, "
+                        # id and actor_id are NOT NULL with no default, so
+                        # omitting them made --apply fail before the policy row
+                        # was ever written. My testing only ever ran the dry
+                        # run, which never reaches this statement (Codex review
+                        # of phases 4-5, round 2).
+                        "INSERT INTO audit_log (id, tenant_id, actor_principal, "
+                        "  actor_id, action, resource_type, resource_id, after, notes) "
+                        "VALUES (gen_random_uuid(), :t, 'system:backfill-prices', "
+                        "  'system', 'cost_tracking.disabled', 'tenant', :t, "
                         "  CAST(:after AS jsonb), :notes)"
                     ),
                     {

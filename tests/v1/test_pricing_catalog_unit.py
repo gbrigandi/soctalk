@@ -656,3 +656,37 @@ def test_namespaced_models_are_matched_regardless_of_provider_id():
         # And the recorded provider_id is NOT what provider_id_for() returns
         # for the openrouter host — which is exactly why the fallback exists.
         assert r.get("provider_id") not in (None, "openrouter"), r
+
+
+def test_form_kind_mapping_matches_the_backend():
+    """The UI must derive provider_kind the way the resolver does.
+
+    The form writes `<kind>:*:<model>` overrides, and the gate looks them up
+    under the kind IT derives — which reads the host, not just the provider
+    string. Mapping every non-Anthropic provider to openai_compatible wrote
+    overrides that could never be found (Codex review of phases 4-5, round 2).
+    """
+    from soctalk.core.pricing.resolve import provider_kind_for
+
+    def form_kind(provider: str, base_url: str) -> str:
+        host = base_url.split("//")[-1].split("/")[0].lower() if base_url else ""
+        if provider == "anthropic":
+            return "anthropic"
+        if host.endswith("openrouter.ai"):
+            return "openrouter"
+        if host.endswith("api.openai.com"):
+            return "openai"
+        return "openai_compatible"
+
+    cases = [
+        ("anthropic", ""),
+        ("openai-compatible", "https://api.openai.com/v1"),
+        ("openai-compatible", "https://openrouter.ai/api/v1"),
+        ("openai-compatible", "https://novarouteai.com/v1"),
+        ("openai-compatible", ""),
+    ]
+    for provider, url in cases:
+        assert form_kind(provider, url) == provider_kind_for(provider, url or None), (
+            provider,
+            url,
+        )

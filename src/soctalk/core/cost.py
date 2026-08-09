@@ -402,12 +402,16 @@ async def assert_tenant_daily_cap_ok(
     # tenant past a ceiling that has effectively been committed (Codex review
     # of phases 4-5).
     over_reserved = False
-    if status.cost_tracking:
-        res_tokens, res_dollars = await reserved_headroom(db, tenant_id)
-        if res_tokens or res_dollars:
-            over_reserved = (
-                status.spend.tokens + res_tokens >= status.caps.tokens
-                or status.spend.dollars + res_dollars >= status.caps.dollars
+    res_tokens, res_dollars = await reserved_headroom(db, tenant_id)
+    if res_tokens or res_dollars:
+        # Tokens are checked whatever the accounting switch says. Turning off
+        # DOLLAR accounting does not turn off the token ceiling, and gating
+        # both on one flag let a grandfathered unpriced tenant over-admit token
+        # budget under concurrency (Codex review of phases 4-5, round 2).
+        over_reserved = status.spend.tokens + res_tokens >= status.caps.tokens
+        if status.cost_tracking:
+            over_reserved = over_reserved or (
+                status.spend.dollars + res_dollars >= status.caps.dollars
             )
             if over_reserved:
                 logger.info(

@@ -438,8 +438,28 @@
 				// `*` for the vendor slug: the form knows the protocol and the
 				// URL, not which upstream a gateway routes to, and the resolver
 				// treats `kind:*:model` as covering that protocol.
+				// Mirrors provider_kind_for() in core/pricing/resolve.py. Mapping
+				// every non-Anthropic provider to openai_compatible wrote an
+				// override the gate would never look for: the backend derives the
+				// kind from the HOST too, so api.openai.com is `openai` and
+				// openrouter.ai is `openrouter`, and a wildcard under the wrong
+				// kind does not unblock the model (Codex review of phases 4-5,
+				// round 2).
+				const host = (() => {
+					try {
+						return new URL(formData.base_url.trim()).hostname.toLowerCase();
+					} catch {
+						return '';
+					}
+				})();
 				const kind =
-					formData.provider === 'anthropic' ? 'anthropic' : 'openai_compatible';
+					formData.provider === 'anthropic'
+						? 'anthropic'
+						: host.endsWith('openrouter.ai')
+							? 'openrouter'
+							: host.endsWith('api.openai.com')
+								? 'openai'
+								: 'openai_compatible';
 				payload.model_prices = {
 					...(read?.model_prices ?? {}),
 					[`${kind}:*:${formData.model.trim()}`]: { input: inNum, output: outNum }

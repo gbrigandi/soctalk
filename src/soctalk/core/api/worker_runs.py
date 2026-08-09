@@ -329,6 +329,11 @@ class ClaimDenied(BaseModel):
     retry_after_seconds: int | None = None
 
 
+# Namespace for the per-tenant claim lock. Arbitrary but fixed, and distinct
+# from the migration lock so the two can never contend.
+_CLAIM_LOCK_NAMESPACE = 8210441
+
+
 def _seconds_until(when) -> int | None:
     """Whole seconds until ``when``, or None. Clamped at zero: a negative
     Retry-After is worse than none at all."""
@@ -352,6 +357,23 @@ async def claim_run(request: Request) -> ClaimedRun | ClaimDenied | None:
     db = _db(request)
 
     async with tenant_context(db, tenant_id):
+        # Serialise the whole check-then-claim for this tenant (#129, #141
+        # phase 5). Reservations closed the window where a run's spend had not
+        # landed yet, but not the one where two workers read headroom
+        # simultaneously and then leased DIFFERENT rows via SKIP LOCKED — each
+        # sees the other's reservation only after it exists. The lock makes
+        # "decide, then take" atomic per tenant (Codex review of phases 4-5,
+        # round 2).
+        #
+        # Transaction-scoped, so it releases on commit or rollback with no
+        # unlock path to leak. Keyed on the tenant, so tenants never queue
+        # behind each other. A distinct namespace constant keeps it from
+        # colliding with the migration lock in alembic/env.py.
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(:ns, hashtext(:t))"),
+            {"ns": _CLAIM_LOCK_NAMESPACE, "t": str(tenant_id)},
+        )
+
         # Circuit breaker: refuse to claim new runs once the tenant has
         # blown through its daily spend ceiling. Shared with the
         # chat path via ``soctalk.core.cost.assert_tenant_daily_cap_ok``
