@@ -25,7 +25,6 @@ from __future__ import annotations
 from uuid import UUID
 
 import structlog
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.policies import resolve_cost_tracking

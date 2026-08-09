@@ -24,9 +24,9 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.cost import (
-    get_spend_provenance,
     DAILY_DOLLAR_CAP_KEY,
     DAILY_TOKEN_CAP_KEY,
+    get_spend_provenance,
     get_tenant_daily_status,
     tenant_daily_dollar_cap,
     tenant_daily_dollar_cap_max,

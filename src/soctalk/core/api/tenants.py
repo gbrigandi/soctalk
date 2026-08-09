@@ -517,11 +517,19 @@ async def onboard_tenant(
     # writes the tenant early and breaks that design. Found by CI, which is
     # what removing the SOCTALK_COST_TRACKING=off workaround was for.
     #
-    # Warn rather than refuse: onboarding creates infrastructure, and failing
-    # it over pricing would strand a half-provisioned tenant. The PATCH gate
-    # still stops the model being CHANGED to something unpriced, and such runs
-    # report price_source='unknown', so the spend is visibly unattributed
+    # Warn rather than refuse. My first reason for this was wrong — a 422 here
+    # would roll back cleanly, as Codex pointed out, because the provisioning
+    # job and commit both come later. The real reason is that **at onboard time
+    # there is no tenant yet to hold a price override**. Refusing would
+    # dead-end anyone onboarding a gateway-backed tenant, whose
+    # (provider_kind, model) pair is deliberately absent from the catalog, with
+    # no way to fix it short of seeding the install catalog first. The PATCH
+    # gate still stops the model being CHANGED to something unpriced, and such
+    # runs report price_source='unknown', so the spend is visibly unattributed
     # rather than silently enforced.
+    #
+    # If onboarding should instead accept rates in its payload and then refuse
+    # without them, that is a product decision — recorded on #141.
     try:
         _unpriced = await gate.unpriced_models(
             session,
@@ -535,14 +543,14 @@ async def onboard_tenant(
             },
         )
         if _unpriced:
-            logger.warning(
+            structlog.get_logger().warning(
                 "tenant_onboarded_with_unpriced_model",
                 tenant_id=str(tenant.id),
                 unpriced=_unpriced,
                 hint="dollar ceilings will not be enforced for these models",
             )
     except Exception as exc:  # noqa: BLE001 - a warning must not fail onboarding
-        logger.warning("onboard_price_check_failed", error=str(exc))
+        structlog.get_logger().warning("onboard_price_check_failed", error=str(exc))
 
     return _to_read(tenant)
 

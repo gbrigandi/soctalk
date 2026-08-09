@@ -72,7 +72,15 @@ jobs:
         run: |
           lint-imports --config .importlinter
 
-      - name: ruff
+      - name: ruff (undefined names are fatal)
+        # The full ruff pass stays advisory until the baseline is clean, but
+        # F821 is not a style opinion — an undefined name is a crash waiting
+        # for the right code path. One reached main this session because the
+        # only tests covering it are integration-only, and the advisory ruff
+        # step reported it without failing.
+        run: ruff check --select F821 src tests
+
+      - name: ruff (full, advisory)
         run: ruff check src tests || true  # non-fatal until baseline clean
 
       - name: Run unit tests (skip Postgres integration)

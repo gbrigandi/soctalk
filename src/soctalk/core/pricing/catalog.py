@@ -17,10 +17,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import Column, DateTime, Text, text
-from soctalk.core.pricing.names import base_model_id
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Field, SQLModel
+
+from soctalk.core.pricing.names import base_model_id
 
 # The dimensions this application understands today. A row may carry more (the
 # column is JSONB precisely so a new pricing axis is not a migration), but only
