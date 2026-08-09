@@ -260,11 +260,27 @@ def roles_for_config(cfg: Any, tiers: dict[str, Any] | None = None) -> dict[str,
         engine = tier.get("engine")
         if not model:
             continue
-        roles[role] = {
+        entry = {
             "model": model,
             "provider_kind": provider_kind_for(provider, base_url, engine),
             "provider_id": provider_id_for(base_url),
         }
+
+        # Never stamp a SECOND entry for a model string another role already
+        # carries. _snapshot_rates matches by model across roles, and two
+        # entries for one string with different rates are treated as ambiguous
+        # and fall through to the built-in table — deliberately, because the
+        # call site does not say which role is spending.
+        #
+        # So adding `chat` for a model that `fast` already covers would push a
+        # run that previously priced cleanly onto the fallback: a regression
+        # introduced by the fix, not by the tenant's config (Codex review of
+        # the chat-role change). The existing entry already answers lookups for
+        # that string; a duplicate can only make things worse.
+        if any(existing["model"] == model for existing in roles.values()):
+            continue
+
+        roles[role] = entry
     return roles
 
 

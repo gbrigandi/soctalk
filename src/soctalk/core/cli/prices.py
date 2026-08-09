@@ -164,7 +164,13 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
                   JOIN tenants t ON t.id = i.tenant_id
                  WHERE :m IN (
                          COALESCE(i.llm_fast_model, i.llm_model),
-                         COALESCE(i.llm_reasoning_model, i.llm_model)
+                         COALESCE(i.llm_reasoning_model, i.llm_model),
+                         -- The bare primary too: chat runs on it, and with both
+                         -- overrides set the COALESCEs above never reach it —
+                         -- so an operator was told a price change affected no
+                         -- tenants while it changed what their chat cost
+                         -- (Codex review of the chat-role change).
+                         i.llm_model
                        )
                  ORDER BY t.slug
                 """
