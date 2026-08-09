@@ -343,12 +343,28 @@ async def get_tenant_daily_spend(
 # Unpriced spend is excluded on both sides, matching every other ceiling.
 _RESERVED_SQL = """
     SELECT COALESCE(SUM(
-               GREATEST(r.dollars_budget - r.dollars_used, 0.0)
+               -- Mirror what enforcement actually compares against:
+               -- over_budget() uses dollars_used MINUS the unpriced portion, so
+               -- reserving budget - dollars_used under-reserves a run that has
+               -- spent mostly-unpriced dollars. A $5 run with $4 unpriced and
+               -- $0 priced reserved $1 while still being allowed to spend $5
+               -- enforceable (Codex review of phases 4-5, round 3).
+               GREATEST(
+                   r.dollars_budget
+                     - GREATEST(r.dollars_used - COALESCE(u.unpriced, 0.0), 0.0),
+                   0.0
+               )
            ), 0.0)::float AS dollars,
            COALESCE(SUM(
                GREATEST(r.tokens_budget - r.tokens_used, 0)
            ), 0)::bigint  AS tokens
       FROM investigation_runs r
+      LEFT JOIN (
+          SELECT run_id, SUM(dollars_delta) AS unpriced
+            FROM llm_spend_ledger
+           WHERE price_source = 'unknown'
+           GROUP BY run_id
+      ) u ON u.run_id = r.id
      WHERE r.tenant_id = :t
        AND r.status = 'active'
        -- LEASED runs only, not everything with status='active'. That status

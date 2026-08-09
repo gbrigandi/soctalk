@@ -1079,3 +1079,22 @@ def test_a_leased_run_reserves_but_a_queued_one_does_not():
     assert reserves(leased) is True
     assert reserves(queued) is False   # would otherwise block itself
     assert reserves(expired) is False  # lease lapsed; the reaper will requeue it
+
+
+def test_reservation_mirrors_enforceable_spend_not_raw_spend():
+    """A mostly-unpriced run must not under-reserve.
+
+    over_budget() compares dollars_used MINUS the unpriced portion, so
+    reserving `budget - dollars_used` left a run able to spend more enforceable
+    dollars than it had reserved: $5 budget, $4 unpriced, $0 priced reserved $1
+    while still being allowed to spend $5 (Codex review of phases 4-5, round 3).
+    """
+    def reserved(budget, used, unpriced):
+        return max(budget - max(used - unpriced, 0.0), 0.0)
+
+    # The failing shape: almost all spend was unpriced.
+    assert reserved(5.0, 4.0, 4.0) == 5.0      # was 1.0 before the fix
+    # A fully priced run is unchanged.
+    assert reserved(5.0, 4.0, 0.0) == 1.0
+    # An overspent run never credits headroom back.
+    assert reserved(5.0, 9.0, 0.0) == 0.0
