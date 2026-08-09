@@ -1098,3 +1098,48 @@ def test_reservation_mirrors_enforceable_spend_not_raw_spend():
     assert reserved(5.0, 4.0, 0.0) == 1.0
     # An overspent run never credits headroom back.
     assert reserved(5.0, 9.0, 0.0) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_gate_covers_the_chat_model_not_only_triage_roles(monkeypatch):
+    """A tenant with explicit fast AND reasoning models never exercises the
+    primary — but chat runs on it.
+
+    roles_for_config falls back to llm_model only when a role has none of its
+    own, so with both set the gate never saw the primary and accepted an
+    unpriced one. chat/agent.py resolves its model as `integ.llm_model or ...`,
+    so that model DID run and its spend was silently unenforceable.
+
+    Found by driving the config form end to end on the NUC: the UI said "no
+    price is known" and the save succeeded anyway.
+    """
+    from types import SimpleNamespace
+
+    from soctalk.core.pricing import gate
+
+    looked_up: list[str] = []
+
+    async def fake_lookup(db, *, provider_kind, model, provider_id=None):
+        looked_up.append(model)
+        return None if model == "unpriced-primary" else object()
+
+    monkeypatch.setattr(gate.catalog, "lookup", fake_lookup)
+
+    async def tracking_on(_db, _tenant):
+        return True
+
+    monkeypatch.setattr(gate, "resolve_cost_tracking", tracking_on)
+
+    cfg = SimpleNamespace(
+        llm_model="unpriced-primary",       # what chat will use
+        llm_fast_model="priced-fast",       # triage roles are both explicit...
+        llm_reasoning_model="priced-fast",  # ...so neither falls back
+        llm_provider="openai-compatible",
+        llm_base_url="https://novarouteai.com/v1",
+        llm_tiers=None,
+        llm_model_prices=None,
+    )
+    missing = await gate.unpriced_config(object(), uuid.uuid4(), cfg)
+
+    assert "unpriced-primary" in looked_up, "the primary model was never checked"
+    assert any("unpriced-primary" in m for m in missing), missing
