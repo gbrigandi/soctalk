@@ -272,9 +272,8 @@ def _build_verdict_context(state: dict[str, Any]) -> dict[str, Any]:
         else:
             emoji = "❓"
 
-        synth = "[SYNTHETIC DEMO DATA] " if e.get("synthetic") else ""
         enrichments_lines.append(
-            f"{emoji} **{synth}{obs_type}:** {value}\n"
+            f"{emoji} **{obs_type}:** {value}\n"
             f"   Analyzer: {analyzer} | Verdict: {verdict_val} | Confidence: {confidence:.0%}"
         )
 
@@ -287,8 +286,7 @@ def _build_verdict_context(state: dict[str, Any]) -> dict[str, Any]:
         desc = f.get("description", "No description")
         evidence = f.get("evidence", [])
 
-        synth = "[SYNTHETIC DEMO DATA] " if f.get("synthetic") else ""
-        findings_lines.append(f"### {synth}[{severity.upper()}] {desc}")
+        findings_lines.append(f"### [{severity.upper()}] {desc}")
         if evidence:
             findings_lines.append("Evidence:")
             for ev in evidence[:3]:
