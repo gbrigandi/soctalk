@@ -222,6 +222,12 @@ async def lookup(
                     hint="two rows share this (provider_kind, model); set a "
                     "tenant price override to say which rate applies",
                 )
+                # Return, not continue. Falling through would try the
+                # version-stripped family next, so an ambiguous exact SKU
+                # could still resolve to a priced family row — the same
+                # preemption the reordering above removed, arriving by the
+                # family fallback instead (Codex phase-3 round 5).
+                return None
             continue
         if provider_id:
             row = (
