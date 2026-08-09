@@ -343,7 +343,19 @@ spec:
               alone treated it as an opaque gateway and let a mismatched model
               through (Codex review of #142, round 6).
             */}}
-            {{- $firstPartyHost := or (contains "api.openai.com" $baseRaw) (contains "api.anthropic.com" $baseRaw) }}
+            {{- /*
+              Compare the parsed HOST exactly. `contains` matched any URL with
+              the vendor host as a substring, so a proxy at
+              https://api.openai.com.proxy.local/v1 was judged first-party and
+              had its model overwritten (Codex review of #142, round 7).
+            */}}
+            {{- $host := "" }}
+            {{- if $baseRaw }}
+            {{- $host = regexReplaceAll ":[0-9]+$" (lower (urlParse $baseRaw).host) "" }}
+            {{- end }}
+            {{- $isOpenAiHost := eq $host "api.openai.com" }}
+            {{- $isAnthropicHost := eq $host "api.anthropic.com" }}
+            {{- $firstPartyHost := or $isOpenAiHost $isAnthropicHost }}
             {{- $firstParty := or (eq $rawProvider "anthropic") (eq $rawProvider "openai") $firstPartyHost }}
             {{- $isClaude := hasPrefix "claude" (lower $model) }}
             {{- $coherent := and $hasModel (eq (eq $provider "anthropic") $isClaude) }}
@@ -372,9 +384,8 @@ spec:
               at OpenAI's host. When the URL belongs to the OTHER vendor, emit
               nothing and let the SDK default apply.
             */}}
+            {{- /* $isOpenAiHost/$isAnthropicHost are the exact-host checks computed above. */}}
             {{- $base := $baseRaw }}
-            {{- $isOpenAiHost := contains "api.openai.com" $base }}
-            {{- $isAnthropicHost := contains "api.anthropic.com" $base }}
             {{- if $base }}
             {{- if eq $provider "anthropic" }}
             {{- if not $isOpenAiHost }}
