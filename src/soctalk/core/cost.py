@@ -329,6 +329,48 @@ async def get_tenant_daily_spend(
     )
 
 
+# Headroom already promised to runs that are in flight (#129, #141 phase 5).
+#
+# The daily ceiling was a read-before-spend circuit breaker: N workers could
+# each read "under cap" and all claim, because none of their spend exists yet.
+# Serialising the claim does not help — the spend happens later.
+#
+# An active run's UNSPENT budget is already a reservation, so no new table is
+# needed: a run that has been allowed to start is permitted to spend up to its
+# ceiling, and that promise should count against the tenant's day before the
+# next claim is allowed.
+#
+# Unpriced spend is excluded on both sides, matching every other ceiling.
+_RESERVED_SQL = """
+    SELECT COALESCE(SUM(
+               GREATEST(r.dollars_budget - r.dollars_used, 0.0)
+           ), 0.0)::float AS dollars,
+           COALESCE(SUM(
+               GREATEST(r.tokens_budget - r.tokens_used, 0)
+           ), 0)::bigint  AS tokens
+      FROM investigation_runs r
+     WHERE r.tenant_id = :t
+       AND r.status = 'active'
+"""
+
+
+async def reserved_headroom(db: AsyncSession, tenant_id: UUID) -> tuple[int, float]:
+    """``(tokens, dollars)`` promised to runs already in flight.
+
+    Never raises: a reservation read that fails must not stop a claim, so the
+    caller degrades to the old read-before-spend behaviour rather than
+    deadlocking the queue.
+    """
+    try:
+        row = (
+            await db.execute(text(_RESERVED_SQL), {"t": str(tenant_id)})
+        ).mappings().first()
+    except Exception:  # noqa: BLE001
+        logger.warning("reserved_headroom_unavailable", tenant_id=str(tenant_id))
+        return (0, 0.0)
+    return (int(row["tokens"] or 0), float(row["dollars"] or 0.0))
+
+
 async def assert_tenant_daily_cap_ok(
     db: AsyncSession, tenant_id: UUID, *, source: str
 ) -> TenantDailySpend | None:
@@ -339,7 +381,30 @@ async def assert_tenant_daily_cap_ok(
     tripped the breaker.
     """
     status = await get_tenant_daily_status(db, tenant_id)
-    if status.cap_hit:
+
+    # Count in-flight promises as well as recorded spend, so a burst of
+    # concurrent claims cannot each pass a check the others invalidate
+    # (#141 phase 5). Only for the worker's claim path: chat turns spend as
+    # they go rather than holding a budget, so there is nothing to reserve.
+    over_reserved = False
+    if source == "worker_claim" and status.cost_tracking:
+        res_tokens, res_dollars = await reserved_headroom(db, tenant_id)
+        if res_tokens or res_dollars:
+            over_reserved = (
+                status.spend.tokens + res_tokens >= status.caps.tokens
+                or status.spend.dollars + res_dollars >= status.caps.dollars
+            )
+            if over_reserved:
+                logger.info(
+                    "tenant_daily_cap_reserved",
+                    source=source,
+                    tenant_id=str(tenant_id),
+                    spent_dollars=round(status.spend.dollars, 4),
+                    reserved_dollars=round(res_dollars, 4),
+                    dollar_cap=status.caps.dollars,
+                )
+
+    if status.cap_hit or over_reserved:
         logger.warning(
             "tenant_daily_cap_hit",
             source=source,

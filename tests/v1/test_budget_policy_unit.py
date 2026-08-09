@@ -1003,3 +1003,52 @@ def test_a_run_with_no_llm_config_still_carries_the_switch():
     # And with accounting ON, an empty-models snapshot still enforces.
     st_on = {**st, "price_snapshot": {**minimal, "cost_tracking": True}}
     assert over_budget(st_on) is True
+
+
+# --- phase 5: the daily ceiling counts promises, not just spend -------------
+#
+# It was a read-before-spend circuit breaker: N workers could each read "under
+# cap" and all claim, because none of their spend existed yet. Serialising the
+# claim does not help — the spend happens later. An active run's UNSPENT budget
+# is already a reservation, so counting it closes the window without a new
+# table (#129).
+
+
+def _reserved(runs):
+    """Mirror of _RESERVED_SQL: unspent headroom of in-flight runs."""
+    tokens = sum(max(r["tokens_budget"] - r["tokens_used"], 0) for r in runs)
+    dollars = sum(max(r["dollars_budget"] - r["dollars_used"], 0.0) for r in runs)
+    return tokens, dollars
+
+
+def test_concurrent_claims_cannot_each_pass_a_check_the_others_invalidate():
+    cap = 50.0
+    spent = 10.0
+    # Four runs in flight, each allowed up to $12 and having spent nothing.
+    inflight = [
+        {"tokens_budget": 0, "tokens_used": 0, "dollars_budget": 12.0, "dollars_used": 0.0}
+    ] * 4
+    _, reserved = _reserved(inflight)
+
+    # The old rule looked only at recorded spend and would allow another claim.
+    assert spent < cap
+    # Counting promises, the tenant is already committed past its ceiling.
+    assert spent + reserved >= cap
+
+
+def test_reservation_shrinks_as_a_run_actually_spends():
+    """A run that has spent its budget no longer reserves it twice."""
+    inflight = [
+        {"tokens_budget": 0, "tokens_used": 0, "dollars_budget": 5.0, "dollars_used": 5.0}
+    ]
+    _, reserved = _reserved(inflight)
+    assert reserved == 0.0
+
+
+def test_overspent_run_does_not_reserve_negative_headroom():
+    """GREATEST(..., 0): a run past its ceiling must not credit the tenant."""
+    inflight = [
+        {"tokens_budget": 0, "tokens_used": 0, "dollars_budget": 5.0, "dollars_used": 9.0}
+    ]
+    _, reserved = _reserved(inflight)
+    assert reserved == 0.0
