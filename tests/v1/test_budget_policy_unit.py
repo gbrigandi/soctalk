@@ -491,11 +491,12 @@ def test_unpriced_message_names_every_way_out():
 async def test_price_gate_calls_the_catalog_with_a_valid_signature(monkeypatch):
     """Exercises the lookup path, not just the message.
 
-    The first version of this gate called ``provider_id_for(provider, base_url)``
-    — two arguments to a one-argument function. Every unit test passed because
-    none of them reached the lookup; CI's integration suite caught it as a
-    TypeError on eight unrelated LLM-PATCH tests. Cover the call itself.
+    The first version called ``provider_id_for(provider, base_url)`` — two
+    arguments to a one-argument function. Every unit test passed because none
+    reached the lookup; CI caught it as a TypeError on eight unrelated tests.
     """
+    from types import SimpleNamespace
+
     from soctalk.core.pricing import gate
 
     seen: dict[str, object] = {}
@@ -513,24 +514,79 @@ async def test_price_gate_calls_the_catalog_with_a_valid_signature(monkeypatch):
 
     monkeypatch.setattr(gate, "resolve_cost_tracking", tracking_on)
 
-    missing = await gate.unpriced_models(
-        object(),
-        uuid.uuid4(),
-        provider="openai-compatible",
-        base_url="https://novarouteai.com/v1",
-        models={"model": "claude-x-9", "fast_model": None},
+    cfg = SimpleNamespace(
+        llm_model="claude-x-9",
+        llm_fast_model=None,
+        llm_reasoning_model=None,
+        llm_provider="openai-compatible",
+        llm_base_url="https://novarouteai.com/v1",
+        llm_tiers=None,
+        llm_model_prices=None,
     )
+    missing = await gate.unpriced_config(object(), uuid.uuid4(), cfg)
 
-    assert missing == ["model: claude-x-9"]
+    # Both roles fall back to the primary model, so it is reported per role.
+    assert "fast: claude-x-9" in missing
     assert seen["model"] == "claude-x-9"
     # provider_id carries the VENDOR BEHIND A GATEWAY, read from the host — a
-    # gateway's price for a model is not the vendor's price for it. First-party
-    # endpoints are identified by provider_kind instead and carry no id.
+    # gateway's price for a model is not the vendor's price for it.
     assert seen["pid"] == "novaroute"
 
 
 @pytest.mark.asyncio
+async def test_price_gate_checks_each_tier_against_its_own_backend(monkeypatch):
+    """A per-tier backend must not be priced against the primary config.
+
+    The gate used to derive one (kind, provider_id) from the primary and apply
+    it to every model, while runtime resolved each tier separately — so a tier
+    could pass on the primary's catalog row and then run 'unknown' on its own
+    gateway (Codex review of phase 3).
+    """
+    from types import SimpleNamespace
+
+    from soctalk.core.pricing import gate
+
+    seen: list[tuple[str, str | None, str]] = []
+
+    async def fake_lookup(db, *, provider_kind, model, provider_id=None):
+        seen.append((provider_kind, provider_id, model))
+        return None
+
+    monkeypatch.setattr(gate.catalog, "lookup", fake_lookup)
+
+    async def tracking_on(_db, _tenant):
+        return True
+
+    monkeypatch.setattr(gate, "resolve_cost_tracking", tracking_on)
+
+    cfg = SimpleNamespace(
+        llm_model="primary-model",
+        llm_fast_model=None,
+        llm_reasoning_model=None,
+        llm_provider="anthropic",
+        llm_base_url=None,
+        llm_tiers={
+            "fast": {
+                "provider": "openai-compatible",
+                "base_url": "https://novarouteai.com/v1",
+                "model": "gateway-model",
+            }
+        },
+        llm_model_prices=None,
+    )
+    await gate.unpriced_config(object(), uuid.uuid4(), cfg)
+
+    by_model = {m: (k, pid) for k, pid, m in seen}
+    # The tier is looked up at ITS backend...
+    assert by_model["gateway-model"] == ("openai_compatible", "novaroute")
+    # ...and the primary at the primary's, not collapsed into one.
+    assert by_model["primary-model"][0] == "anthropic"
+
+
+@pytest.mark.asyncio
 async def test_price_gate_is_inert_when_tracking_is_off(monkeypatch):
+    from types import SimpleNamespace
+
     from soctalk.core.pricing import gate
 
     async def boom(*a, **k):  # must never be reached
@@ -543,11 +599,12 @@ async def test_price_gate_is_inert_when_tracking_is_off(monkeypatch):
 
     monkeypatch.setattr(gate, "resolve_cost_tracking", tracking_off)
 
-    assert await gate.unpriced_models(
-        object(), uuid.uuid4(),
-        provider="self-hosted", base_url="http://localhost:8000/v1",
-        models={"model": "some-local-gguf"},
-    ) == []
+    cfg = SimpleNamespace(
+        llm_model="some-local-gguf", llm_fast_model=None, llm_reasoning_model=None,
+        llm_provider="self-hosted", llm_base_url="http://localhost:8000/v1",
+        llm_tiers=None, llm_model_prices=None,
+    )
+    assert await gate.unpriced_config(object(), uuid.uuid4(), cfg) == []
 
 
 # --- cost tracking must actually reach runtime enforcement -----------------

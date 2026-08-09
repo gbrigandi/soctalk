@@ -531,16 +531,19 @@ async def onboard_tenant(
     # If onboarding should instead accept rates in its payload and then refuse
     # without them, that is a product decision — recorded on #141.
     try:
-        _unpriced = await gate.unpriced_models(
-            session,
-            tenant.id,
-            provider=llm_provider,
-            base_url=llm_base_url,
-            models={
-                "model": llm_model,
-                "fast_model": llm_fast_model,
-                "reasoning_model": llm_reasoning_model,
-            },
+        # Re-read the committed config so the check sees exactly what was
+        # written, including any install-default fast tier injected above —
+        # which the previous version ran before and therefore never checked
+        # (Codex review of phase 3).
+        _cfg = (
+            await session.execute(
+                select(IntegrationConfig).where(
+                    IntegrationConfig.tenant_id == tenant.id
+                )
+            )
+        ).scalars().first()
+        _unpriced = (
+            await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
         )
         if _unpriced:
             structlog.get_logger().warning(
@@ -730,6 +733,33 @@ async def create_tenant(
     # issue a ``:retry`` once they're ready. Keeping this endpoint
     # inline would fork lifecycle behavior with /onboard.
     await session.commit()
+
+    # The legacy create endpoint writes an IntegrationConfig directly, so it
+    # bypassed the price gate entirely — the one entry point still open after
+    # phase 3 claimed to close them all (Codex review). Same warn-not-refuse
+    # rule and the same reason as onboarding: there is no tenant yet to hold a
+    # price override when the config is created.
+    try:
+        _cfg = (
+            await session.execute(
+                select(IntegrationConfig).where(
+                    IntegrationConfig.tenant_id == tenant.id
+                )
+            )
+        ).scalars().first()
+        _unpriced = (
+            await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
+        )
+        if _unpriced:
+            structlog.get_logger().warning(
+                "tenant_created_with_unpriced_model",
+                tenant_id=str(tenant.id),
+                unpriced=_unpriced,
+                hint="dollar ceilings will not be enforced for these models",
+            )
+    except Exception as exc:  # noqa: BLE001 - a warning must not fail creation
+        structlog.get_logger().warning("create_price_check_failed", error=str(exc))
+
     return _to_read(tenant)
 
 

@@ -300,11 +300,15 @@ def _soctalk_system_ns() -> str:
 class ModelPriceSuggestion(BaseModel):
     """What the catalog knows about a model, for prefilling the rate fields.
 
-    A convenience, not an authority: ``found=false`` simply means we have
-    nothing to offer and the operator types the rates themselves. The endpoint
-    never invents a number — in particular it will not answer with a vendor's
-    rate for a model reached through a gateway, because a gateway's price for a
-    model is not the vendor's price for it.
+    A convenience, not an authority: ``found=false`` means we have nothing to
+    offer and the operator types the rates themselves.
+
+    When the tenant's own backend has no row, the VENDOR's row is offered with
+    ``exact=false`` and a note, because dead-ending someone who routes a
+    well-known model through a gateway is worse than showing them a number and
+    saying whose it is. Clients must read ``exact``, not just ``found``: a
+    gateway's price for a model is not the vendor's price for it, and nothing
+    is stored until the operator saves it.
     """
 
     model: str
@@ -559,22 +563,10 @@ async def update_tenant_llm(
         # Configuration time is the right gate. Refusing at run time would stop
         # triage silently, which is what the pricing feature exists to prevent;
         # refusing here puts the model name in front of the person choosing it.
-        gated_models = {
-            "model": cfg.llm_model,
-            "fast_model": cfg.llm_fast_model,
-            "reasoning_model": cfg.llm_reasoning_model,
-        }
-        for tier_name, tier in (cfg.llm_tiers or {}).items():
-            if isinstance(tier, dict) and tier.get("model"):
-                gated_models[f"tier:{tier_name}"] = tier["model"]
-        unpriced = await gate.unpriced_models(
-            session,
-            tenant_id,
-            provider=cfg.llm_provider,
-            base_url=cfg.llm_base_url,
-            models=gated_models,
-            overrides=cfg.llm_model_prices,
-        )
+        # The config object itself, so the gate derives each role's backend
+        # with the same function run-time pricing uses — including per-tier
+        # providers, which a flat model list could not express.
+        unpriced = await gate.unpriced_config(session, tenant_id, cfg)
         if unpriced:
             raise HTTPException(422, gate.unpriced_message(unpriced))
 

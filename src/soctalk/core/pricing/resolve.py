@@ -209,6 +209,47 @@ async def _resolve_one(
     return entry
 
 
+def roles_for_config(cfg: Any, tiers: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Each role with the backend it will ACTUALLY run on.
+
+    Shared by run-time pricing and the config-time price gate. They used to
+    derive this separately: the gate resolved one ``(kind, provider_id)`` from
+    the primary config and applied it to every model, while runtime resolved
+    each tier against its own provider and base URL. A tier could therefore
+    pass the gate on the primary's catalog row and then run as ``unknown`` on
+    its gateway, or be refused although it was priced (Codex review of phase 3).
+
+    One function now, so the two cannot drift.
+
+    A hybrid tenant (#12) can run fast and reasoning on different providers,
+    and those cost different amounts even for the same model string. NULL or
+    empty falls back to the primary, matching how render.py resolves
+    fastModel / reasoningModel.
+    """
+    tiers = tiers or (getattr(cfg, "llm_tiers", None) or {})
+    roles: dict[str, dict[str, Any]] = {}
+    for role, fallback_model in (
+        ("fast", cfg.llm_fast_model or cfg.llm_model),
+        ("reasoning", cfg.llm_reasoning_model or cfg.llm_model),
+    ):
+        tier = tiers.get(role) or {}
+        provider = tier.get("provider") or cfg.llm_provider
+        base_url = tier.get("base_url") or cfg.llm_base_url
+        model = tier.get("model") or fallback_model
+        # Only tiers carry an engine; the primary config has no equivalent
+        # field, so a single-provider self-hosted tenant still resolves by
+        # host and stays openai_compatible.
+        engine = tier.get("engine")
+        if not model:
+            continue
+        roles[role] = {
+            "model": model,
+            "provider_kind": provider_kind_for(provider, base_url, engine),
+            "provider_id": provider_id_for(base_url),
+        }
+    return roles
+
+
 async def _cost_tracking_or_default(db: AsyncSession, tenant_id: UUID) -> bool:
     """The tenant's accounting switch, defaulting to ON if unreadable.
 
@@ -267,26 +308,7 @@ async def resolve_run_prices(
     #
     # NULL or empty falls back to the primary, matching how render.py resolves
     # fastModel / reasoningModel.
-    roles: dict[str, dict[str, Any]] = {}
-    for role, fallback_model in (
-        ("fast", cfg.llm_fast_model or cfg.llm_model),
-        ("reasoning", cfg.llm_reasoning_model or cfg.llm_model),
-    ):
-        tier = tiers.get(role) or {}
-        provider = tier.get("provider") or cfg.llm_provider
-        base_url = tier.get("base_url") or cfg.llm_base_url
-        model = tier.get("model") or fallback_model
-        # Only tiers carry an engine; the primary config has no equivalent
-        # field, so a single-provider self-hosted tenant still resolves by
-        # host and stays openai_compatible.
-        engine = tier.get("engine")
-        if not model:
-            continue
-        roles[role] = {
-            "model": model,
-            "provider_kind": provider_kind_for(provider, base_url, engine),
-            "provider_id": provider_id_for(base_url),
-        }
+    roles = roles_for_config(cfg, tiers)
 
     models: dict[str, Any] = {}
     for role, spec in roles.items():

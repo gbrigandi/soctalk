@@ -22,6 +22,7 @@ UI rather than being an env var only a shell can reach.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -29,51 +30,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.policies import resolve_cost_tracking
 from soctalk.core.pricing import catalog
-from soctalk.core.pricing.resolve import (
-    override_key,
-    provider_id_for,
-    provider_kind_for,
-)
+from soctalk.core.pricing.resolve import override_key, roles_for_config
 
 logger = structlog.get_logger(__name__)
 
 
-async def unpriced_models(
+async def unpriced_config(
     db: AsyncSession,
     tenant_id: UUID,
+    cfg: Any,
     *,
-    provider: str | None,
-    base_url: str | None,
-    models: dict[str, str | None],
-    overrides: dict | None = None,
+    tiers: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Which of ``models`` have no price, as ``"role: model"`` strings.
+    """Which of this config's roles have no price, as ``"role: model"``.
 
-    ``models`` maps a role name (``model``, ``fast_model``, ...) to the model
-    ID. Empty roles are skipped — an unset fast model falls back to the primary
-    one, so it is not separately unpriced.
+    Takes the CONFIG rather than a flat model list, and derives each role's
+    backend with ``roles_for_config`` — the same function run-time pricing
+    uses. The previous signature took one provider/base_url for every model, so
+    a per-tier backend was priced against the primary config: a tier could pass
+    the gate on the primary's catalog row and then run ``unknown`` on its own
+    gateway, or be refused although it was priced (Codex review of phase 3).
 
-    A tenant price override counts as priced: the operator has stated the rate,
-    which is the thing the catalog would otherwise supply.
+    A tenant price override counts as priced, in any of its three key shapes.
 
     Returns [] when cost tracking is off, so callers need no second check.
     """
     if not await resolve_cost_tracking(db, tenant_id):
         return []
 
-    kind = provider_kind_for(provider, base_url)
-    pid = provider_id_for(base_url)
-    overlay = overrides or {}
-
+    overlay = getattr(cfg, "llm_model_prices", None) or {}
     missing: list[str] = []
-    for role, model in models.items():
-        name = (model or "").strip()
+    for role, spec in roles_for_config(cfg, tiers).items():
+        name = (spec.get("model") or "").strip()
         if not name:
             continue
-        # A qualified override counts, and so does a bare one: the resolver
-        # tries them in that order, so the gate must accept either (#141
-        # phase 3). Without this, setting a per-backend price still left the
-        # model looking unpriced and the save was refused.
+        kind = spec["provider_kind"]
+        pid = spec["provider_id"]
         if (
             name in overlay
             or override_key(kind, pid, name) in overlay
