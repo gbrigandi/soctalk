@@ -690,3 +690,23 @@ def test_form_kind_mapping_matches_the_backend():
             provider,
             url,
         )
+
+
+def test_anthropic_host_is_recognised_like_openais():
+    """Found on a live install, not by reading the code.
+
+    A tenant pointed at api.anthropic.com with provider left as
+    "openai-compatible" classified as openai_compatible and missed every
+    anthropic catalog row, so a seeded model (claude-sonnet-4-6) read as
+    unpriced. The host says which vendor is billing, and api.openai.com was
+    already treated that way.
+    """
+    from soctalk.core.pricing.resolve import provider_kind_for
+
+    assert provider_kind_for("openai-compatible", "https://api.anthropic.com") == "anthropic"
+    assert provider_kind_for("openai-compatible", "https://api.openai.com/v1") == "openai"
+    # A genuine gateway is unaffected.
+    assert (
+        provider_kind_for("openai-compatible", "https://novarouteai.com/v1")
+        == "openai_compatible"
+    )

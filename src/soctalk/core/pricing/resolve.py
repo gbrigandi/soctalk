@@ -92,6 +92,13 @@ def provider_kind_for(
         return "openrouter"
     if host.endswith("api.openai.com"):
         return "openai"
+    # Anthropic's own host, by the same rule as OpenAI's above. Its absence was
+    # found on a live install: a tenant pointing at api.anthropic.com with the
+    # provider left as "openai-compatible" classified as openai_compatible and
+    # missed every anthropic catalog row, so a seeded model read as unpriced.
+    # The host is the authority here — it says which vendor is billing.
+    if host.endswith("api.anthropic.com"):
+        return "anthropic"
     if p in ("openai", "openai-compatible"):
         return "openai_compatible"
     return "openai_compatible"
