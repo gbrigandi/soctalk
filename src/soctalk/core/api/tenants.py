@@ -530,6 +530,12 @@ async def onboard_tenant(
     #
     # If onboarding should instead accept rates in its payload and then refuse
     # without them, that is a product decision — recorded on #141.
+    #
+    # The response is built BEFORE the check. A rollback below expires the
+    # committed ``tenant`` instance, and _to_read would then lazy-load expired
+    # attributes on an AsyncSession — turning a warning failure into
+    # MissingGreenlet (Codex phase-3 round 3).
+    _result = _to_read(tenant)
     try:
         # Re-read the committed config so the check sees exactly what was
         # written, including any install-default fast tier injected above —
@@ -559,13 +565,16 @@ async def onboard_tenant(
                 hint="dollar ceilings will not be enforced for these models",
             )
     except Exception as exc:  # noqa: BLE001 - a warning must not fail onboarding
-        # A failed query leaves this post-commit transaction dirty, and the
-        # middleware still commits on a 2xx — which would turn a warning into a
-        # failed onboard. Roll it back (Codex phase-3 round 2).
-        await session.rollback()
         structlog.get_logger().warning("onboard_price_check_failed", error=str(exc))
+    finally:
+        # Unconditional, not just on the exception path: gate.unpriced_config
+        # SWALLOWS catalog errors and returns normally, so an aborted
+        # transaction can survive without anything being raised here — and the
+        # middleware commits it on a 2xx, failing the request over a warning
+        # (Codex phase-3 round 3).
+        await session.rollback()
 
-    return _to_read(tenant)
+    return _result
 
 
 @router.post(
@@ -749,8 +758,12 @@ async def create_tenant(
     # phase 3 claimed to close them all (Codex review). Same warn-not-refuse
     # rule and the same reason as onboarding: there is no tenant yet to hold a
     # price override when the config is created.
+    #
+    # Response built first, transaction always ended — same reasoning as the
+    # onboard check above (Codex phase-3 round 3).
+    _result = _to_read(tenant)
     try:
-        # Same RLS and rollback reasoning as the onboard check above.
+        # Same RLS reasoning as the onboard check above.
         async with tenant_context(session, tenant.id):
             _cfg = (
                 await session.execute(
@@ -770,10 +783,11 @@ async def create_tenant(
                 hint="dollar ceilings will not be enforced for these models",
             )
     except Exception as exc:  # noqa: BLE001 - a warning must not fail creation
-        await session.rollback()
         structlog.get_logger().warning("create_price_check_failed", error=str(exc))
+    finally:
+        await session.rollback()
 
-    return _to_read(tenant)
+    return _result
 
 
 @router.get(

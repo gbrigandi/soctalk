@@ -21,6 +21,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Field, SQLModel
 
+import structlog
+
 from soctalk.core.pricing.names import base_model_id
 
 # The dimensions this application understands today. A row may carry more (the
@@ -139,6 +141,9 @@ def dollars_per_mtok(dimensions: dict[str, Any], key: str) -> float | None:
     return float(raw) / MICRO
 
 
+logger = structlog.get_logger(__name__)
+
+
 async def count(db: AsyncSession) -> int:
     """How many entries the catalog holds, install-wide.
 
@@ -226,21 +231,38 @@ async def lookup(
         # which provider_id was recorded. NOT done for bare model names, where
         # the same string legitimately costs different amounts at different
         # gateways and ignoring provider_id would pick one arbitrarily.
-        if "/" in candidate:
-            row = (
+        if provider_kind == "openrouter" and "/" in candidate:
+            # Restricted to openrouter, not every namespaced id (Codex phase-3
+            # round 3). A namespaced model names its UPSTREAM vendor, not the
+            # gateway doing the billing, so applying this to
+            # ``openai_compatible`` would let one gateway's row answer for
+            # another's — the distinction this layer exists to preserve.
+            #
+            # LIMIT 2 and a uniqueness check: if two rows exist for the same
+            # (kind, model), there is no principled way to choose, and silently
+            # picking one is how a tenant gets billed at another's rate.
+            rows = (
                 await db.execute(
                     text(
                         """
                         SELECT * FROM model_prices
                          WHERE provider_kind = :kind
                            AND model = :model
-                         LIMIT 1
+                         LIMIT 2
                         """
                     ),
                     {"kind": provider_kind, "model": candidate},
                 )
-            ).mappings().first()
-            if row is not None:
-                return ModelPrice(**dict(row))
+            ).mappings().all()
+            if len(rows) == 1:
+                return ModelPrice(**dict(rows[0]))
+            if len(rows) > 1:
+                logger.warning(
+                    "price_catalog_ambiguous_namespaced_model",
+                    model=candidate,
+                    provider_kind=provider_kind,
+                    hint="two rows share this (provider_kind, model); set a "
+                    "tenant price override to say which rate applies",
+                )
 
     return None
