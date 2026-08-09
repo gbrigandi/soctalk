@@ -349,9 +349,24 @@ spec:
               https://api.openai.com.proxy.local/v1 was judged first-party and
               had its model overwritten (Codex review of #142, round 7).
             */}}
+            {{- /*
+              Normalise before comparing, or equality misses forms that reach
+              the same vendor (Codex review of #142, round 8):
+                - a schemeless URL parses entirely into .path, leaving .host
+                  empty, so every such URL read as third-party;
+                - a trailing-dot FQDN (api.openai.com.) is the same host.
+              Order matters: strip the path first, then userinfo, then port,
+              then the root dot.
+            */}}
             {{- $host := "" }}
             {{- if $baseRaw }}
-            {{- $host = regexReplaceAll ":[0-9]+$" (lower (urlParse $baseRaw).host) "" }}
+            {{- $host = (urlParse (lower $baseRaw)).host }}
+            {{- if not $host }}
+            {{- $host = first (splitList "/" (lower $baseRaw)) }}
+            {{- end }}
+            {{- $host = last (splitList "@" $host) }}
+            {{- $host = regexReplaceAll ":[0-9]+$" $host "" }}
+            {{- $host = trimSuffix "." $host }}
             {{- end }}
             {{- $isOpenAiHost := eq $host "api.openai.com" }}
             {{- $isAnthropicHost := eq $host "api.anthropic.com" }}
