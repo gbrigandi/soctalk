@@ -351,6 +351,16 @@ _RESERVED_SQL = """
       FROM investigation_runs r
      WHERE r.tenant_id = :t
        AND r.status = 'active'
+       -- LEASED runs only, not everything with status='active'. That status
+       -- also covers queued and retry-waiting runs, so counting them let a
+       -- single queued run whose budget meets the daily cap block ITSELF
+       -- before it was ever claimed — the queue refusing to start its own
+       -- work (Codex review of phases 4-5).
+       --
+       -- A leased run is genuinely in flight and genuinely holds its budget.
+       AND r.claimed_by IS NOT NULL
+       AND r.lease_expires_at IS NOT NULL
+       AND r.lease_expires_at > now()
 """
 
 
@@ -386,8 +396,13 @@ async def assert_tenant_daily_cap_ok(
     # concurrent claims cannot each pass a check the others invalidate
     # (#141 phase 5). Only for the worker's claim path: chat turns spend as
     # they go rather than holding a budget, so there is nothing to reserve.
+    # Reservations are checked for EVERY admission path, not just the worker's.
+    # Chat holds no budget of its own, so it makes no reservation — but letting
+    # it spend into headroom already promised to in-flight runs would push the
+    # tenant past a ceiling that has effectively been committed (Codex review
+    # of phases 4-5).
     over_reserved = False
-    if source == "worker_claim" and status.cost_tracking:
+    if status.cost_tracking:
         res_tokens, res_dollars = await reserved_headroom(db, tenant_id)
         if res_tokens or res_dollars:
             over_reserved = (

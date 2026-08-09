@@ -72,12 +72,29 @@
 	let priceInput = '';
 	let priceOutput = '';
 	let priceEdited = false;
+	// Keyed on the backend too, not just the model: the same model string costs
+	// different amounts through different providers, so changing provider or
+	// base_url must re-look-up rather than keep the previous backend's rates
+	// (Codex review of phases 4-5).
 	let priceLookupFor = '';
+
+	function resetPriceState(): void {
+		// Called whenever an edit session starts or ends. Without this,
+		// priceEdited stayed true across sessions, so a later unrelated edit —
+		// or an ACCEPTED suggestion — still shipped model_prices and wrote an
+		// override nobody asked for.
+		priceSuggestion = null;
+		priceInput = '';
+		priceOutput = '';
+		priceEdited = false;
+		priceLookupFor = '';
+	}
 
 	async function lookupPrice(): Promise<void> {
 		const model = formData.model.trim();
-		if (!model || !tenantId || model === priceLookupFor) return;
-		priceLookupFor = model;
+		const key = `${formData.provider}|${formData.base_url.trim()}|${model}`;
+		if (!model || !tenantId || key === priceLookupFor) return;
+		priceLookupFor = key;
 		try {
 			const s = await tenantsApi.priceSuggestion(tenantId, {
 				model,
@@ -262,6 +279,7 @@
 	}
 
 	function startEdit(): void {
+		resetPriceState();
 		// Seed the form from the masked read. The key field stays blank — a blank
 		// key means "leave unchanged" so we never round-trip a placeholder.
 		formData = {
@@ -287,6 +305,7 @@
 	}
 
 	function cancelEdit(): void {
+		resetPriceState();
 		editing = false;
 		formData = { ...formData, api_key: '' };
 		formError = null;
@@ -410,9 +429,20 @@
 					formError = 'Rates must be non-negative numbers in $/Mtok.';
 					return;
 				}
+				// Qualified key, not a bare model name. A bare key applies to that
+				// model at EVERY backend, and the same model string legitimately
+				// costs different amounts through different gateways — which is
+				// why the resolver grew qualified keys in the first place (Codex
+				// review of phases 4-5).
+				//
+				// `*` for the vendor slug: the form knows the protocol and the
+				// URL, not which upstream a gateway routes to, and the resolver
+				// treats `kind:*:model` as covering that protocol.
+				const kind =
+					formData.provider === 'anthropic' ? 'anthropic' : 'openai_compatible';
 				payload.model_prices = {
 					...(read?.model_prices ?? {}),
-					[formData.model.trim()]: { input: inNum, output: outNum }
+					[`${kind}:*:${formData.model.trim()}`]: { input: inNum, output: outNum }
 				};
 			}
 
@@ -423,11 +453,13 @@
 			if (Object.keys(payload).length === 0) {
 				// Nothing changed — close the form without a no-op PATCH.
 				editing = false;
+				resetPriceState();
 				return;
 			}
 
 			read = await tenantsApi.updateLlm(tenantId, payload);
 			editing = false;
+			resetPriceState();
 			formData = { ...formData, api_key: '' };
 			addToast({
 				type: 'success',

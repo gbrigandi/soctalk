@@ -1052,3 +1052,30 @@ def test_overspent_run_does_not_reserve_negative_headroom():
     ]
     _, reserved = _reserved(inflight)
     assert reserved == 0.0
+
+
+def test_a_leased_run_reserves_but_a_queued_one_does_not():
+    """Reservations count runs actually in flight, not everything 'active'.
+
+    'active' also covers queued and retry-waiting runs, so counting them let a
+    single queued run whose budget met the daily cap block ITSELF before it was
+    ever claimed — the queue refusing to start its own work (Codex review of
+    phases 4-5).
+    """
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    leased = {"claimed_by": "worker-1", "lease_expires_at": now + timedelta(minutes=5)}
+    queued = {"claimed_by": None, "lease_expires_at": None}
+    expired = {"claimed_by": "worker-1", "lease_expires_at": now - timedelta(minutes=5)}
+
+    def reserves(run):
+        return (
+            run["claimed_by"] is not None
+            and run["lease_expires_at"] is not None
+            and run["lease_expires_at"] > now
+        )
+
+    assert reserves(leased) is True
+    assert reserves(queued) is False   # would otherwise block itself
+    assert reserves(expired) is False  # lease lapsed; the reaper will requeue it

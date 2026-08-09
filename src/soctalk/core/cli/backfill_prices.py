@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from uuid import UUID
@@ -73,8 +74,13 @@ async def _run(apply: bool) -> int:
             if cfg is None:
                 continue
 
-            # A tenant that has ALREADY opted out is left alone: they made that
+            # A tenant that has already opted OUT is left alone: they made that
             # choice deliberately and this command must not re-litigate it.
+            #
+            # An explicit ON is NOT an opt-out. Skipping every existing row
+            # treated "accounting is on" as "leave them unpriced and live",
+            # which is the opposite of what it says (Codex review of phases
+            # 4-5). Those tenants fall through and are handled like any other.
             existing = (
                 await s.execute(
                     text(
@@ -84,7 +90,13 @@ async def _run(apply: bool) -> int:
                     {"t": str(tenant_id), "k": COST_TRACKING_KEY},
                 )
             ).scalar_one_or_none()
-            if existing is not None:
+            if existing is not None and str(existing).strip().strip('"').lower() in {
+                "false",
+                "0",
+                "off",
+                "no",
+                "disabled",
+            }:
                 already_off.append(slug)
                 continue
 
@@ -95,6 +107,28 @@ async def _run(apply: bool) -> int:
 
             grandfathered.append((slug, unpriced))
             if apply:
+                # A durable record of WHY, and of which models. The policy row
+                # only says "off"; without this the reason lives in one
+                # command's stdout and is gone (Codex review of phases 4-5).
+                await s.execute(
+                    text(
+                        "INSERT INTO audit_log (tenant_id, actor_principal, action, "
+                        "  resource_type, resource_id, after, notes) "
+                        "VALUES (:t, 'system:backfill-prices', "
+                        "  'cost_tracking.disabled', 'tenant', :t, "
+                        "  CAST(:after AS jsonb), :notes)"
+                    ),
+                    {
+                        "t": str(tenant_id),
+                        "after": json.dumps(
+                            {"cost_tracking_enabled": False, "unpriced": unpriced}
+                        ),
+                        "notes": (
+                            "cost accounting switched off: no price is known for "
+                            + ", ".join(unpriced)
+                        ),
+                    },
+                )
                 await s.execute(
                     text(
                         "INSERT INTO tenant_policies (tenant_id, key, value, updated_at) "
