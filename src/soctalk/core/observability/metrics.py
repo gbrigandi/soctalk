@@ -25,6 +25,14 @@ tenant_events_ingested = Counter(
     labelnames=["tenant_id"],
 )
 
+claims_denied_total = Counter(
+    "soctalk_claims_denied_total",
+    "Run claims refused, by reason. A tenant blocked on its daily ceiling used "
+    "to be indistinguishable from an idle queue (#129); this is what makes the "
+    "difference visible without reading logs.",
+    ["reason"],
+)
+
 tenant_investigations_opened = Counter(
     "soctalk_tenant_investigations_opened_total",
     "Investigations opened by the orchestrator, per tenant.",

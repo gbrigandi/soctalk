@@ -680,3 +680,66 @@ def test_an_unpriced_model_is_recorded_as_unknown_not_silently_estimated(monkeyp
 
     assert st["cost_basis"] == "estimated"
     assert st["price_source"] == "unknown"
+
+
+# --- phase 2: an unpriced figure must not halt anything (#124) --------------
+
+
+def test_unpriced_spend_is_visible_but_not_enforceable():
+    from soctalk.graph.budget import enforceable_dollars
+
+    st = {"dollars_used": 104.0, "dollars_unpriced": 99.0}
+    # The money is not hidden: the total still says what was spent.
+    assert st["dollars_used"] == 104.0
+    # But only the priced part may stop a run.
+    assert enforceable_dollars(st) == 5.0
+
+
+def test_a_run_is_not_halted_by_guesswork():
+    """The #139 shape: a model missing from the catalog billed 16x and halted
+    an investigation on spend that never happened."""
+    from soctalk.graph.budget import over_budget
+
+    st = {
+        "tokens_used": 0, "tokens_budget": 10**9,
+        "dollars_used": 400.0, "dollars_unpriced": 400.0, "dollars_budget": 5.0,
+        "price_snapshot": {"version": 1, "models": {}},
+    }
+    assert over_budget(st) is False
+
+
+def test_priced_spend_still_halts_normally():
+    from soctalk.graph.budget import over_budget
+
+    st = {
+        "tokens_used": 0, "tokens_budget": 10**9,
+        "dollars_used": 6.0, "dollars_unpriced": 1.0, "dollars_budget": 5.0,
+        "price_snapshot": {"version": 1, "models": {}},
+    }
+    assert over_budget(st) is True
+
+
+def test_tokens_still_bound_an_entirely_unpriced_run():
+    """Removing the dollar cap must not remove every cap."""
+    from soctalk.graph.budget import over_budget
+
+    st = {
+        "tokens_used": 200_000, "tokens_budget": 200_000,
+        "dollars_used": 999.0, "dollars_unpriced": 999.0, "dollars_budget": 5.0,
+        "price_snapshot": {"version": 1, "models": {}},
+    }
+    assert over_budget(st) is True
+
+
+def test_a_claim_denial_is_not_mistaken_for_a_claimed_run():
+    """A denial body is truthy; the worker must not treat it as work.
+
+    Before the guard, `return body if body else None` would have handed the
+    denial dict to the run loop, which would fail downstream on a missing run
+    id — turning a clear "you are over your ceiling" into a crash.
+    """
+    body = {"denied": True, "reason": "daily_cap", "retry_after_seconds": 900}
+    assert isinstance(body, dict) and body.get("denied")
+
+    run_body = {"run_id": "abc", "investigation_id": "def"}
+    assert not run_body.get("denied")

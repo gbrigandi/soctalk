@@ -952,7 +952,25 @@ async def _claim_one(client: httpx.AsyncClient) -> dict[str, Any] | None:
     if resp.status_code == 200 and resp.text.strip() in ("", "null"):
         return None
     body = resp.json()
-    return body if body else None
+    if not body:
+        return None
+    # A structured denial is still "nothing to claim" as far as the loop is
+    # concerned, but it says WHY (#129, #141 phase 2.2). Logged at info so an
+    # operator watching worker logs sees "over the daily ceiling, resets in N
+    # seconds" instead of silence indistinguishable from an idle queue.
+    #
+    # Checked before the body is treated as a run: a denial dict is truthy, so
+    # without this it would be handled as a claim and fail downstream on a
+    # missing run id.
+    if isinstance(body, dict) and body.get("denied"):
+        logger.info(
+            "claim_denied reason=%s detail=%s retry_after=%ss",
+            body.get("reason"),
+            body.get("detail"),
+            body.get("retry_after_seconds"),
+        )
+        return None
+    return body
 
 
 async def _worker_loop(

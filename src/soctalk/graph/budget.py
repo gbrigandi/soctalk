@@ -503,6 +503,19 @@ def track(state: dict[str, Any], response: Any) -> int:
 
     state["tokens_used"] = int(state["tokens_used"]) + delta_tokens
     state["dollars_used"] = float(state["dollars_used"]) + delta_dollars
+    # Track the unpriced portion separately (#124, #141 phase 2). It stays IN
+    # dollars_used so the money remains visible and the ledger still records it
+    # — hiding spend would be its own defect — but enforcement subtracts it.
+    #
+    # A fallback figure is a guess about a model nobody has priced. Enforcing on
+    # it halted real runs on spend that never happened: 16x over-charged on a
+    # live install before #139, halting an investigation on $0.41 of $0.026 of
+    # real cost. Tokens, run caps and attempt limits still bound runaway work,
+    # because those are counted rather than inferred.
+    if state.get("price_source") == "unknown":
+        state["dollars_unpriced"] = (
+            float(state.get("dollars_unpriced", 0.0)) + delta_dollars
+        )
     state["cache_read_tokens"] = int(state.get("cache_read_tokens", 0)) + cache_read
     state["cache_creation_tokens"] = (
         int(state.get("cache_creation_tokens", 0)) + cache_creation
@@ -545,6 +558,16 @@ def cost_tracking_off(state: dict[str, Any]) -> bool:
     return False
 
 
+def enforceable_dollars(state: dict[str, Any]) -> float:
+    """Spend that may halt a run: the total minus anything priced by guesswork.
+
+    ``dollars_used`` deliberately includes unpriced spend so it stays visible
+    and ledgered; this is the figure enforcement is allowed to act on (#124).
+    """
+    total = float(state.get("dollars_used", 0.0))
+    return max(0.0, total - float(state.get("dollars_unpriced", 0.0)))
+
+
 def over_budget(state: dict[str, Any]) -> bool:
     """True when EITHER the token cap OR the dollar cap is exceeded.
 
@@ -562,7 +585,7 @@ def over_budget(state: dict[str, Any]) -> bool:
         return True
     if cost_tracking_off(state):
         return False
-    if float(state["dollars_used"]) >= float(state["dollars_budget"]):
+    if enforceable_dollars(state) >= float(state["dollars_budget"]):
         return True
     return False
 

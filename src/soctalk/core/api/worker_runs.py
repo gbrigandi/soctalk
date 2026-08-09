@@ -105,8 +105,10 @@ async def _record_verdict_memo(
 
 # Tenant daily spend cap helpers moved to ``soctalk.core.cost`` so the
 # chat handler can enforce the same ceiling. Re-export for back-compat.
+from soctalk.core.observability.metrics import claims_denied_total
 from soctalk.core.cost import (  # noqa: E402
     assert_tenant_daily_cap_ok,
+    get_tenant_daily_status,
 )
 
 
@@ -292,7 +294,33 @@ class CompletePayload(BaseModel):
     enrichments: dict[str, Any] = Field(default_factory=dict)
 
 
-@router.post("/runs/claim", response_model=ClaimedRun | None)
+class ClaimDenied(BaseModel):
+    """Why a claim returned no work, when the reason is not "no work".
+
+    A bare ``null`` for both cases made a tenant blocked on its ceiling look
+    exactly like an idle queue: the worker kept polling, nothing errored, and
+    triage stopped with no signal anywhere (#129). The worker treats this as
+    "nothing to claim" exactly as before — the difference is that it can now
+    say why, and the reason is counted.
+    """
+
+    denied: bool = True
+    reason: str
+    detail: str | None = None
+    retry_after_seconds: int | None = None
+
+
+def _seconds_until(when) -> int | None:
+    """Whole seconds until ``when``, or None. Clamped at zero: a negative
+    Retry-After is worse than none at all."""
+    if when is None:
+        return None
+    from datetime import UTC, datetime
+
+    return max(0, int((when - datetime.now(UTC)).total_seconds()))
+
+
+@router.post("/runs/claim", response_model=ClaimedRun | ClaimDenied | None)
 async def claim_run(request: Request) -> ClaimedRun | None:
     """Claim the oldest active run for the caller's tenant.
 
@@ -313,7 +341,23 @@ async def claim_run(request: Request) -> ClaimedRun | None:
         if await assert_tenant_daily_cap_ok(
             db, tenant_id, source="worker_claim"
         ) is None:
-            return None
+            # Say why. The worker still stops claiming, but an operator can
+            # now tell "over ceiling" from "queue empty", and the counter makes
+            # it visible without reading logs.
+            status = await get_tenant_daily_status(db, tenant_id)
+            claims_denied_total.labels(reason="daily_cap").inc()
+            logger.info(
+                "claim_denied",
+                tenant_id=str(tenant_id),
+                reason="daily_cap",
+                which=status.reason,
+                resets_at=status.resets_at.isoformat() if status.resets_at else None,
+            )
+            return ClaimDenied(
+                reason="daily_cap",
+                detail=status.reason,
+                retry_after_seconds=_seconds_until(status.resets_at),
+            )
 
         row = (
             await db.execute(

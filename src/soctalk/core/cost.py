@@ -217,7 +217,14 @@ _DAILY_SPEND_SQL = """
         -- stamped when the spend was reported and nothing moves them after
         -- (#129, Codex review round 4, finding 1).
         SELECT tokens_delta::bigint AS tokens,
-               dollars_delta        AS dollars
+               -- Unpriced spend is counted in tokens but NOT in dollars: the
+               -- figure is a guess about a model nobody has priced, and a
+               -- ceiling enforced on a guess stops triage over money that was
+               -- never spent (#124, #141 phase 2). It stays in the ledger and
+               -- shows up in the provenance breakdown, so the gap is visible
+               -- rather than hidden.
+               CASE WHEN price_source = 'unknown' THEN 0.0
+                    ELSE dollars_delta END AS dollars
           FROM llm_spend_ledger
          WHERE tenant_id = :t
            AND occurred_at
