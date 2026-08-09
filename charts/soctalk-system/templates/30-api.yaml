@@ -299,22 +299,58 @@ spec:
               tenant ONBOARDING; nothing was giving load_config() the provider,
               model or base URL, so a charted install ran (and priced) fleet
               chat on the hardcoded fallback rather than defaults.llm.model
-              (#142, Codex review).
+              (#142).
 
-              Deliberately not set when a value is empty, so an operator's own
-              env override still wins.
+              Each is omitted when empty so an operator's own env override wins.
             */}}
-            {{- if .Values.defaults.llm.provider }}
+            {{- $rawProvider := .Values.defaults.llm.provider | lower }}
+            {{- /*
+              load_config admits only anthropic|openai, but values.schema.json
+              also accepts openai-compatible, azure and ollama. Emitting those
+              literally crashed the API at startup on a schema-VALID install
+              (Codex review of #142). azure and ollama speak the OpenAI
+              protocol, so they canonicalise to openai; the base URL below is
+              what actually points at them.
+            */}}
+            {{- $provider := ternary "anthropic" "openai" (eq $rawProvider "anthropic") }}
             - name: SOCTALK_LLM_PROVIDER
-              value: {{ .Values.defaults.llm.provider | lower | replace "openai-compatible" "openai" | quote }}
-            {{- end }}
-            {{- if .Values.defaults.llm.model }}
+              value: {{ $provider | quote }}
+            {{- /*
+              Only emit a chat model that MATCHES the provider. The chart's
+              default model is gpt-4o and install.sh writes a provider without
+              touching the model, so an anthropic install rendered
+              provider=anthropic with SOCTALK_CHAT_MODEL=gpt-4o and fleet chat
+              called Anthropic with an OpenAI model (Codex review of #142).
+              When they disagree, emit nothing and let the code default apply.
+            */}}
+            {{- $model := .Values.defaults.llm.model | default "" }}
+            {{- $isClaude := hasPrefix "claude" (lower $model) }}
+            {{- if and $model (eq (eq $provider "anthropic") $isClaude) }}
             - name: SOCTALK_CHAT_MODEL
-              value: {{ .Values.defaults.llm.model | quote }}
+              value: {{ $model | quote }}
             {{- end }}
-            {{- if and .Values.defaults.llm.baseUrl (ne (.Values.defaults.llm.provider | lower) "anthropic") }}
+            {{- /*
+              Same coherence rule as the model. The chart's default baseUrl is
+              OpenAI's, so overriding only the provider rendered
+              ANTHROPIC_BASE_URL=https://api.openai.com/v1 — pointing Anthropic
+              at OpenAI's host. When the URL belongs to the OTHER vendor, emit
+              nothing and let the SDK default apply.
+            */}}
+            {{- $base := .Values.defaults.llm.baseUrl | default "" }}
+            {{- $isOpenAiHost := contains "api.openai.com" $base }}
+            {{- $isAnthropicHost := contains "api.anthropic.com" $base }}
+            {{- if $base }}
+            {{- if eq $provider "anthropic" }}
+            {{- if not $isOpenAiHost }}
+            - name: ANTHROPIC_BASE_URL
+              value: {{ $base | quote }}
+            {{- end }}
+            {{- else }}
+            {{- if not $isAnthropicHost }}
             - name: OPENAI_BASE_URL
-              value: {{ .Values.defaults.llm.baseUrl | quote }}
+              value: {{ $base | quote }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             - name: SOCTALK_LLM_PROVIDER_DEFAULT
               value: {{ .Values.defaults.llm.provider | quote }}
