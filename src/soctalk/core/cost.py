@@ -231,7 +231,15 @@ _DAILY_SPEND_SQL = """
                >= (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)
         UNION ALL
         SELECT (COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0))::bigint AS tokens,
-               COALESCE(dollars, 0.0)                                     AS dollars
+               -- Same rule as the worker ledger above: spend priced by
+               -- guesswork does not close a ceiling. Chat matters here in
+               -- particular because this ceiling also gates the worker's claim
+               -- loop, so an unpriced chat session could stop triage entirely
+               -- (Codex round 3, P1).
+               GREATEST(
+                   COALESCE(dollars, 0.0) - COALESCE(dollars_unpriced, 0.0),
+                   0.0
+               )                                                          AS dollars
           FROM chat_messages
          WHERE tenant_id = :t
            AND created_at >= (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)
@@ -249,7 +257,7 @@ _SPEND_PROVENANCE_SQL = """
              -- that would file exempt fallback dollars as billed-by-provider —
              -- the opposite of what this breakdown is for (Codex round 2, P2).
              WHEN price_source = 'unknown'         THEN 'unpriced'
-             WHEN cost_basis = 'provider_reported' THEN 'provider_reported''
+             WHEN cost_basis = 'provider_reported' THEN 'provider_reported'
              WHEN cost_basis IS NULL               THEN 'unknown_provenance'
              ELSE cost_basis
            END                                      AS basis,

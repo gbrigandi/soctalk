@@ -219,6 +219,11 @@ class TurnContext:
     focused_tenant_slug: str | None = None
     # Set by the caller to signal cancellation (closed tab, /stop).
     disconnected: asyncio.Event = field(default_factory=asyncio.Event)
+    # Of ``total_dollars``, the portion priced by guesswork. Subtracted before
+    # any budget comparison; the total itself stays whole so the recorded bill
+    # shows what was actually spent (#124). Defaulted, so it sits with the
+    # other optional fields — a defaulted field cannot precede required ones.
+    total_dollars_unpriced: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +266,10 @@ async def _load_history(
                 d["content"] = {}
         out.append(d)
     return out
-
+    # Of ``total_dollars``, the portion priced by guesswork. Subtracted
+    # before any budget comparison; the total itself stays whole so the
+    # recorded bill shows what was actually spent (#124).
+    total_dollars_unpriced: float = 0.0
 
 def _summarise_tool_row(row: dict[str, Any]) -> str:
     """One-line evictable summary of an old tool call."""
@@ -527,6 +535,7 @@ async def _insert_message(
     tokens_in: int = 0,
     tokens_out: int = 0,
     dollars: float = 0.0,
+    dollars_unpriced: float = 0.0,
     model_name: str | None = None,
 ) -> UUID:
     """Insert one chat_messages row and return its id.
@@ -541,10 +550,11 @@ async def _insert_message(
             """
             INSERT INTO chat_messages (
                 id, conversation_id, tenant_id, role, content,
-                tokens_in, tokens_out, dollars, model_name, created_at
+                tokens_in, tokens_out, dollars, dollars_unpriced,
+                model_name, created_at
             ) VALUES (
                 :id, :cid, :t, :role, CAST(:content AS jsonb),
-                :tin, :tout, :dollars, :model, now()
+                :tin, :tout, :dollars, :dollars_unpriced, :model, now()
             )
             """
         ),
@@ -557,6 +567,7 @@ async def _insert_message(
             "tin": tokens_in,
             "tout": tokens_out,
             "dollars": dollars,
+            "dollars_unpriced": dollars_unpriced,
             "model": model_name,
         },
     )
@@ -569,6 +580,7 @@ async def _update_conversation_totals(
     conversation_id: UUID,
     add_tokens: int,
     add_dollars: float,
+    add_dollars_unpriced: float = 0.0,
     new_status: str | None = None,
 ) -> tuple[int, float]:
     """Increment the rolling totals on the conversation row.
@@ -583,6 +595,7 @@ async def _update_conversation_totals(
                 UPDATE conversations
                    SET total_tokens = total_tokens + :tk,
                        total_dollars = total_dollars + :d,
+                       dollars_unpriced = dollars_unpriced + :du,
                        last_message_at = now(),
                        status = COALESCE(:st, status)
                  WHERE id = :id
@@ -592,6 +605,7 @@ async def _update_conversation_totals(
             {
                 "tk": int(add_tokens),
                 "d": float(add_dollars),
+                "du": float(add_dollars_unpriced),
                 "st": new_status,
                 "id": str(conversation_id),
             },
@@ -699,7 +713,10 @@ async def run_turn(
     """
     # 0. Per-conversation budget check up-front. If already exhausted,
     #    short-circuit before any LLM cost.
-    if ctx.total_dollars >= ctx.budget_dollars:
+    # Enforceable, not raw: an unpriced turn recorded real dollars, and gating
+    # the NEXT turn on them would block a conversation over money the same
+    # module refuses to enforce mid-turn (Codex round 3, P1).
+    if ctx.total_dollars - ctx.total_dollars_unpriced >= ctx.budget_dollars:
         yield sse.error(
             "budget_exhausted",
             "This conversation has reached its $%.2f cap." % ctx.budget_dollars,
@@ -963,6 +980,7 @@ async def run_turn(
                 tokens_in=total_tokens_in,
                 tokens_out=total_tokens_out,
                 dollars=total_turn_dollars,
+                dollars_unpriced=total_turn_dollars - total_turn_enforceable,
                 model_name=ctx.model_name,
             )
 
@@ -987,6 +1005,7 @@ async def run_turn(
             conversation_id=ctx.conversation_id,
             add_tokens=(total_tokens_in + total_tokens_out),
             add_dollars=total_turn_dollars,
+            add_dollars_unpriced=total_turn_dollars - total_turn_enforceable,
             new_status=(
                 "budget_exhausted" if stop_reason == "budget_exhausted" else None
             ),

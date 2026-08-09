@@ -552,8 +552,8 @@ async def post_message(
                            ft.slug AS focused_tenant_slug,
                            c.created_by_user_id::text,
                            c.investigation_id::text, c.model_name,
-                           c.status, c.total_dollars, c.budget_dollars,
-                           c.title
+                           c.status, c.total_dollars, c.dollars_unpriced,
+                           c.budget_dollars, c.title
                     FROM conversations c
                     LEFT JOIN tenants ft ON ft.id = c.focused_tenant_id
                     WHERE c.id = :id FOR UPDATE OF c NOWAIT
@@ -658,6 +658,7 @@ async def post_message(
         model_name=conv["model_name"],
         budget_dollars=float(conv["budget_dollars"]),
         total_dollars=float(conv["total_dollars"]),
+        total_dollars_unpriced=float(conv.get("dollars_unpriced") or 0.0),
         investigation_id=(
             UUID(conv["investigation_id"]) if conv["investigation_id"] else None
         ),
