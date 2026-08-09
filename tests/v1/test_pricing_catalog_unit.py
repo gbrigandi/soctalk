@@ -631,3 +631,28 @@ def test_bare_overrides_keep_working():
         "input_per_mtok": 1.0,
         "output_per_mtok": 2.0,
     }
+
+
+def test_namespaced_models_are_matched_regardless_of_provider_id():
+    """OpenRouter rows were unreachable, despite shipping in the seed.
+
+    They are seeded with provider_id set to the UPSTREAM vendor ("deepseek"),
+    while provider_id_for() returns "openrouter" from the host — so neither the
+    exact nor the NULL lookup could reach them. A namespaced model id carries
+    the vendor itself, which makes ignoring provider_id safe for that shape
+    only (Codex phase-3 round 2).
+    """
+    import json
+    import pathlib
+
+    doc = json.loads(pathlib.Path("data/pricing/seed-prices.json").read_text())
+    rows = doc if isinstance(doc, list) else (doc.get("models") or doc.get("prices"))
+    openrouter = [r for r in rows if r.get("provider_kind") == "openrouter"]
+    assert openrouter, "seed carries no openrouter rows"
+
+    for r in openrouter:
+        # The property the fallback relies on: the model names itself.
+        assert "/" in r["model"], r["model"]
+        # And the recorded provider_id is NOT what provider_id_for() returns
+        # for the openrouter host — which is exactly why the fallback exists.
+        assert r.get("provider_id") not in (None, "openrouter"), r

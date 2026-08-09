@@ -213,4 +213,34 @@ async def lookup(
         if row is not None:
             return ModelPrice(**dict(row))
 
+        # Last resort, and ONLY for a namespaced model id ("vendor/model").
+        #
+        # OpenRouter rows are seeded with provider_id set to the UPSTREAM vendor
+        # ("deepseek", "zhipu"), while provider_id_for() returns "openrouter"
+        # from the host — so neither the exact nor the NULL lookup above could
+        # ever reach them, and every OpenRouter tenant read as unpriced despite
+        # shipped rows (Codex phase-3 round 2).
+        #
+        # Safe here precisely because the model string carries the vendor
+        # itself: "deepseek/deepseek-v4-flash" identifies one row regardless of
+        # which provider_id was recorded. NOT done for bare model names, where
+        # the same string legitimately costs different amounts at different
+        # gateways and ignoring provider_id would pick one arbitrarily.
+        if "/" in candidate:
+            row = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT * FROM model_prices
+                         WHERE provider_kind = :kind
+                           AND model = :model
+                         LIMIT 1
+                        """
+                    ),
+                    {"kind": provider_kind, "model": candidate},
+                )
+            ).mappings().first()
+            if row is not None:
+                return ModelPrice(**dict(row))
+
     return None
