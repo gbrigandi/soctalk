@@ -318,6 +318,28 @@ export const tenantsApi = {
 	// Per-tenant LLM configuration — masked read, changed-fields-only
 	// patch, and an explicit key clear (204, no body).
 	getLlm: (id: string) => _request<TenantLlmRead>(`/mssp/tenants/${id}/llm`),
+	/** Catalog rates for a model, to PREFILL the rate fields (#141 phase 4).
+	 *  `found: false` means we have nothing to offer and the operator types
+	 *  them. `exact: false` means these are the VENDOR's rates, not this
+	 *  gateway's — clients must read `exact`, not just `found`. */
+	priceSuggestion: (
+		id: string,
+		q: { model: string; provider?: string; base_url?: string }
+	) => {
+		const p = new URLSearchParams({ model: q.model });
+		if (q.provider) p.set('provider', q.provider);
+		if (q.base_url) p.set('base_url', q.base_url);
+		return _request<{
+			model: string;
+			found: boolean;
+			exact: boolean;
+			input_per_mtok: number | null;
+			output_per_mtok: number | null;
+			source: string | null;
+			as_of: string | null;
+			note: string | null;
+		}>(`/mssp/tenants/${id}/llm/price-suggestion?${p.toString()}`);
+	},
 	updateLlm: (id: string, payload: TenantLlmUpdate) =>
 		_request<TenantLlmRead>(`/mssp/tenants/${id}/llm`, {
 			method: 'PATCH',

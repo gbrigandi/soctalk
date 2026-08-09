@@ -51,6 +51,51 @@
 		api_key: string;
 	}
 
+	// Catalog rates for the model being typed (#141 phase 4). The catalog is a
+	// CONVENIENCE here, not an authority: it prefills what we know so the
+	// operator can confirm or correct it. Nothing found means blank fields they
+	// fill in themselves.
+	//
+	// `priceEdited` is the whole point of the two-field dance: a prefilled rate
+	// is only PERSISTED as a tenant override once the operator actually changes
+	// it. Saving every accepted suggestion would freeze a copy of today's
+	// catalog on the tenant, so a later price correction would stop reaching
+	// them — silently, because the numbers looked right when they saved.
+	let priceSuggestion: {
+		found: boolean;
+		exact: boolean;
+		input_per_mtok: number | null;
+		output_per_mtok: number | null;
+		source: string | null;
+		note: string | null;
+	} | null = null;
+	let priceInput = '';
+	let priceOutput = '';
+	let priceEdited = false;
+	let priceLookupFor = '';
+
+	async function lookupPrice(): Promise<void> {
+		const model = formData.model.trim();
+		if (!model || !tenantId || model === priceLookupFor) return;
+		priceLookupFor = model;
+		try {
+			const s = await tenantsApi.priceSuggestion(tenantId, {
+				model,
+				provider: formData.provider,
+				base_url: formData.base_url.trim() || undefined
+			});
+			priceSuggestion = s;
+			if (!priceEdited) {
+				priceInput = s.input_per_mtok != null ? String(s.input_per_mtok) : '';
+				priceOutput = s.output_per_mtok != null ? String(s.output_per_mtok) : '';
+			}
+		} catch {
+			// A lookup failure must not block editing the model; the operator can
+			// still type rates, and the save-time gate still has the final say.
+			priceSuggestion = null;
+		}
+	}
+
 	let formData: LlmForm = {
 		provider: 'openai-compatible',
 		base_url: '',
@@ -353,6 +398,23 @@
 				payload.max_tokens = Number(maxTokStr);
 			}
 			if (formData.api_key) payload.api_key = formData.api_key;
+			// Rates ride along ONLY if the operator changed them. An accepted
+			// suggestion is left unsaved on purpose: persisting it would pin a copy
+			// of today's catalog to this tenant, and a later correction would then
+			// stop reaching them — invisibly, because the numbers were right when
+			// they saved (#141 phase 4).
+			if (priceEdited && priceInput.trim() && priceOutput.trim()) {
+				const inNum = Number(priceInput);
+				const outNum = Number(priceOutput);
+				if (!Number.isFinite(inNum) || !Number.isFinite(outNum) || inNum < 0 || outNum < 0) {
+					formError = 'Rates must be non-negative numbers in $/Mtok.';
+					return;
+				}
+				payload.model_prices = {
+					...(read?.model_prices ?? {}),
+					[formData.model.trim()]: { input: inNum, output: outNum }
+				};
+			}
 
 			// Per-tier chain: undefined = omit (unchanged), {} = clear, map = replace.
 			const tiersPayload = buildTiers();
@@ -460,8 +522,69 @@
 				{/if}
 				<label class="label">
 					<span class="text-sm">{m.ten_llm_model()}</span>
-					<input name="model" class="input" bind:value={formData.model} placeholder="gpt-4o" />
+					<input
+						name="model"
+						class="input"
+						bind:value={formData.model}
+						placeholder="gpt-4o"
+						data-testid="llm-model"
+						on:blur={lookupPrice}
+					/>
 				</label>
+				<!-- Rates for the model above. Prefilled from the catalog where we
+				     know them, blank where we do not, and only SAVED as a tenant
+				     override if the operator changes them (#141 phase 4). -->
+				<div class="rounded border border-surface-500/20 p-3" data-testid="llm-price">
+					<div class="text-sm mb-2">
+						{#if priceSuggestion?.found && priceSuggestion.exact}
+							<span class="opacity-70" data-testid="llm-price-source">
+								Rates from the price catalog{priceSuggestion.source
+									? ` (${priceSuggestion.source})`
+									: ''}.
+							</span>
+						{:else if priceSuggestion?.found}
+							<span class="text-warning-500" data-testid="llm-price-source">
+								{priceSuggestion.note ??
+									"Vendor list price — your gateway may charge differently."}
+							</span>
+						{:else if priceSuggestion}
+							<span class="text-warning-500" data-testid="llm-price-source">
+								No price is known for this model. Enter its rates, or it cannot be
+								used while cost accounting is on.
+							</span>
+						{:else}
+							<span class="opacity-70">Rates are looked up when you leave the model field.</span>
+						{/if}
+					</div>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+						<label class="label">
+							<span class="text-sm opacity-70">Input $/Mtok</span>
+							<input
+								class="input font-mono"
+								inputmode="decimal"
+								bind:value={priceInput}
+								data-testid="llm-price-input"
+								on:input={() => (priceEdited = true)}
+							/>
+						</label>
+						<label class="label">
+							<span class="text-sm opacity-70">Output $/Mtok</span>
+							<input
+								class="input font-mono"
+								inputmode="decimal"
+								bind:value={priceOutput}
+								data-testid="llm-price-output"
+								on:input={() => (priceEdited = true)}
+							/>
+						</label>
+					</div>
+					{#if priceEdited}
+						<p class="text-xs opacity-60 mt-2" data-testid="llm-price-override-note">
+							Saved as a per-tenant override. Catalog price corrections will no
+							longer apply to this model for this tenant.
+						</p>
+					{/if}
+				</div>
 				<label class="label">
 					<span class="text-sm">{m.ten_llm_fast_model()}</span>
 					<input
