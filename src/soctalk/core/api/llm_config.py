@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.llm_provider import normalize_provider
 from soctalk.core.pricing import catalog, gate
+from soctalk.core.tenancy.models import check_engine_provider_combo
 from soctalk.core.pricing.resolve import (
     provider_id_for,
     provider_kind_for,
@@ -64,6 +65,10 @@ class LlmConfigRead(BaseModel):
     provider: str
     base_url: str
     model: str
+    # Serving engine behind base_url. Exposed so an operator can SEE why a
+    # backend prices as self_hosted, and clear it when moving to a gateway
+    # (#142, Codex round 14).
+    engine: str | None = None
     # Per-role model overrides. ``None`` means "no override — falls
     # back to ``model``" (render.py resolves override-or-llm_model
     # into runsWorker.fastModel / reasoningModel).
@@ -231,6 +236,12 @@ class LlmConfigUpdate(BaseModel):
     )
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=255)
+    # Tri-state, same convention as fast_model/reasoning_model: None or
+    # omitted leaves it alone, '' clears it to NULL, any other value sets it.
+    # Without a way to CLEAR it, a tenant moving from a self-hosted endpoint
+    # to a gateway kept a stale engine and went on pricing the gateway as
+    # self_hosted (#142, Codex round 14).
+    engine: str | None = Field(default=None, max_length=32)
     # No min_length — the empty string is a meaningful value (CLEAR),
     # see the class docstring for the tri-state contract.
     fast_model: str | None = Field(default=None, max_length=255)
@@ -438,6 +449,7 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        engine=cfg.llm_engine,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
         temperature=cfg.llm_temperature,
@@ -512,6 +524,17 @@ async def update_tenant_llm(
             cfg.llm_base_url = payload.base_url
         if payload.model is not None:
             cfg.llm_model = payload.model
+        # Tri-state (see the field comment): '' clears it, so a tenant can
+        # move off a self-hosted endpoint without the stale engine keeping
+        # the new gateway priced as self_hosted (#142, Codex round 14).
+        if payload.engine is not None:
+            cfg.llm_engine = payload.engine.strip() or None
+        # Validate the RESULT, not the payload: provider and engine can arrive
+        # in separate PATCHes, and only the combination is wrong.
+        try:
+            check_engine_provider_combo(cfg.llm_provider, cfg.llm_engine)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         # Tri-state override semantics (see LlmConfigUpdate docstring):
         # None = unchanged; ''/whitespace = clear to NULL (revert to the
         # llm_model fallback); anything else = set verbatim.
@@ -690,6 +713,7 @@ async def update_tenant_llm(
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        engine=cfg.llm_engine,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
         temperature=cfg.llm_temperature,
@@ -1054,6 +1078,7 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        engine=cfg.llm_engine,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
         temperature=cfg.llm_temperature,
@@ -1120,6 +1145,7 @@ async def tenant_put_llm_key(
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        engine=cfg.llm_engine,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
         has_api_key=True,
@@ -1188,6 +1214,7 @@ async def tenant_clear_llm_key(request: Request) -> LlmConfigRead:
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        engine=cfg.llm_engine,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
         has_api_key=False,

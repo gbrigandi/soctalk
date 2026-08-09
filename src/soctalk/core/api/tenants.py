@@ -16,7 +16,7 @@ from uuid import UUID
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,7 @@ from soctalk.core.tenancy.decorators import require_role
 from soctalk.core.pricing import gate
 from soctalk.core.tenancy.models import (
     BrandingConfig,
+    check_engine_provider_combo,
     IntegrationConfig,
     Organization,
     ProvisioningJob,
@@ -171,6 +172,15 @@ class TenantOnboard(BaseModel):
         if v is not None and not v.strip():
             return None
         return v
+
+    @model_validator(mode="after")
+    def _check_engine_combo(self) -> TenantOnboard:
+        # provider_kind_for lets the engine win over the provider, so an
+        # anthropic tenant carrying a served engine would price as
+        # self_hosted against a catalog entry it never calls (#142, Codex
+        # round 14). Same rule the tiers already enforce.
+        check_engine_provider_combo(self.llm_provider, self.llm_engine)
+        return self
 
 
 class ProvisioningJobRead(BaseModel):

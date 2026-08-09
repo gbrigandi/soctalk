@@ -233,6 +233,29 @@ class User(SQLModel, table=True):
 _ALLOWED_LLM_TIERS: frozenset[str] = frozenset({"fast", "reasoning"})
 
 
+SERVED_ENGINES = {"openai_compatible", "vllm", "sglang"}
+
+
+def check_engine_provider_combo(provider: str | None, engine: str | None) -> None:
+    """Reject an engine that contradicts its provider.
+
+    ``provider_kind_for`` lets the engine win over the provider, so
+    provider=anthropic with engine=sglang prices an Anthropic backend as
+    self_hosted and bills it against a catalog entry it never touches
+    (#142, Codex round 14). Tiers already enforced this; the primary config
+    accepted it, which is how the combo reached pricing at all.
+
+    Raises ValueError, so it reads as a 422 at the API boundary. Kept as a
+    function rather than a validator because IntegrationConfig is a
+    ``table=True`` SQLModel and pydantic validators do not run on those.
+    """
+    if provider == "anthropic" and engine in SERVED_ENGINES:
+        raise ValueError(
+            f"engine {engine!r} is OpenAI-compatible; "
+            "not valid with provider 'anthropic'"
+        )
+
+
 class LLMTierConfig(BaseModel):
     """Validated per-tier LLM backend. Stored (as a dict) in
     ``IntegrationConfig.llm_tiers`` JSONB; validated in the application layer
