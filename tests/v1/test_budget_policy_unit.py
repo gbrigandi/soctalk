@@ -921,3 +921,28 @@ def test_fleet_daily_cap_honours_the_install_switch(monkeypatch):
     # Tokens are unaffected: they are counted, not inferred.
     tokens_over = MsspUserDailySpend(tokens=10**12, dollars=0.0)
     assert tokens_over.token_cap_hit is True
+
+
+def test_a_run_with_no_llm_config_still_carries_the_switch():
+    """A tenant with no IntegrationConfig used to get price_snapshot = NULL.
+
+    The worker reads the switch off the snapshot, so a NULL one meant per-run
+    dollar ceilings stayed enforced even with accounting off — the switch
+    looked broken for exactly the runs created before an LLM config existed
+    (Codex round 8). An empty models map prices identically (it matches
+    nothing, so the legacy table takes over) while carrying the flag.
+    """
+    from soctalk.graph.budget import cost_tracking_off, over_budget
+
+    minimal = {"version": 1, "currency": "USD", "cost_tracking": False, "models": {}}
+    st = {
+        "tokens_used": 0, "tokens_budget": 10**9,
+        "dollars_used": 500.0, "dollars_budget": 5.0,
+        "price_snapshot": minimal,
+    }
+    assert cost_tracking_off(st) is True
+    assert over_budget(st) is False
+
+    # And with accounting ON, an empty-models snapshot still enforces.
+    st_on = {**st, "price_snapshot": {**minimal, "cost_tracking": True}}
+    assert over_budget(st_on) is True

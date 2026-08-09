@@ -181,6 +181,19 @@ async def _resolve_one(
     return entry
 
 
+async def _cost_tracking_or_default(db: AsyncSession, tenant_id: UUID) -> bool:
+    """The tenant's accounting switch, defaulting to ON if unreadable.
+
+    Never fatal: an unreadable policy must not stop a run being created, and
+    "on" is the safe side — it keeps ceilings enforced rather than silently
+    switching them off.
+    """
+    try:
+        return await resolve_cost_tracking(db, tenant_id)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 async def resolve_run_prices(
     db: AsyncSession,
     tenant_id: UUID,
@@ -193,16 +206,27 @@ async def resolve_run_prices(
     than one LLM config later does not need this signature changed underneath
     its callers; today a tenant has one.
 
-    Returns None only when the tenant has no LLM config at all, which leaves
-    the run unstamped and the legacy pricing path in charge — the behaviour an
-    install gets before anything is configured.
+    Returns a snapshot with NO models when the tenant has no LLM config, rather
+    than None. Pricing behaves identically — an empty ``models`` map matches
+    nothing, so ``_snapshot_rates`` falls through to the legacy table exactly as
+    an absent snapshot did — but the snapshot still carries ``cost_tracking``,
+    which is what the worker reads to decide whether dollar ceilings apply at
+    all. Returning None dropped that, so a tenant with accounting switched off
+    was still halted on dollars for any run created before its LLM config
+    existed (Codex round 8).
     """
     stmt = select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant_id)
     if integration_config_id is not None:
         stmt = stmt.where(IntegrationConfig.id == integration_config_id)
     cfg = (await db.execute(stmt)).scalars().first()
     if cfg is None:
-        return None
+        return {
+            "version": SNAPSHOT_VERSION,
+            "currency": "USD",
+            "resolved_at": datetime.now(UTC).isoformat(),
+            "cost_tracking": await _cost_tracking_or_default(db, tenant_id),
+            "models": {},
+        }
 
     overrides = getattr(cfg, "llm_model_prices", None)
     tiers = cfg.llm_tiers or {}
@@ -249,13 +273,7 @@ async def resolve_run_prices(
     if not models:
         return None
 
-    # Never fatal: an unreadable policy must not stop a run being created, and
-    # defaulting to "tracking on" is the safe side — it keeps ceilings enforced
-    # rather than silently switching them off.
-    try:
-        cost_tracking = await resolve_cost_tracking(db, tenant_id)
-    except Exception:  # noqa: BLE001
-        cost_tracking = True
+    cost_tracking = await _cost_tracking_or_default(db, tenant_id)
 
     return {
         "version": SNAPSHOT_VERSION,
