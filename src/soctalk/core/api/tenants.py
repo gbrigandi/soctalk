@@ -535,46 +535,8 @@ async def onboard_tenant(
     # committed ``tenant`` instance, and _to_read would then lazy-load expired
     # attributes on an AsyncSession — turning a warning failure into
     # MissingGreenlet (Codex phase-3 round 3).
-    _result = _to_read(tenant)
-    try:
-        # Re-read the committed config so the check sees exactly what was
-        # written, including any install-default fast tier injected above —
-        # which the previous version ran before and therefore never checked
-        # (Codex review of phase 3).
-        # Inside tenant_context: the prior transaction has committed, so its
-        # SET LOCAL app.current_tenant_id is gone. On the production app-role
-        # session RLS would then return nothing for integration_configs and the
-        # check would silently pass on an empty config. The tests use an MSSP
-        # session, which bypasses RLS and hid it (Codex phase-3 round 2).
-        async with tenant_context(session, tenant.id):
-            _cfg = (
-                await session.execute(
-                    select(IntegrationConfig).where(
-                        IntegrationConfig.tenant_id == tenant.id
-                    )
-                )
-            ).scalars().first()
-            _unpriced = (
-                await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
-            )
-        if _unpriced:
-            structlog.get_logger().warning(
-                "tenant_onboarded_with_unpriced_model",
-                tenant_id=str(tenant.id),
-                unpriced=_unpriced,
-                hint="dollar ceilings will not be enforced for these models",
-            )
-    except Exception as exc:  # noqa: BLE001 - a warning must not fail onboarding
-        structlog.get_logger().warning("onboard_price_check_failed", error=str(exc))
-    finally:
-        # Unconditional, not just on the exception path: gate.unpriced_config
-        # SWALLOWS catalog errors and returns normally, so an aborted
-        # transaction can survive without anything being raised here — and the
-        # middleware commits it on a 2xx, failing the request over a warning
-        # (Codex phase-3 round 3).
-        await session.rollback()
-
-    return _result
+    await _warn_if_unpriced(tenant.id, event="tenant_onboarded_with_unpriced_model")
+    return _to_read(tenant)
 
 
 @router.post(
@@ -694,6 +656,44 @@ async def retry_provisioning(tenant_id: UUID, request: Request) -> ProvisioningJ
     )
 
 
+async def _warn_if_unpriced(tenant_id: UUID, *, event: str) -> None:
+    """Log when a tenant is created with a model nothing can price.
+
+    Runs on ITS OWN session, deliberately. Sharing the request session meant a
+    failed lookup left that transaction aborted (the gate swallows catalog
+    errors, so nothing was raised), and the rollback that fixed THAT expired
+    the session's identity map — breaking any caller still holding the tenant
+    object. A best-effort warning has no business touching the transaction that
+    carries the actual work (Codex phase-3 rounds 3-5).
+
+    Never raises: this is a diagnostic, not a gate.
+    """
+    from soctalk.core.tenancy.db import get_mssp_sessionmaker
+
+    try:
+        sm = get_mssp_sessionmaker()
+        async with sm() as check:
+            cfg = (
+                await check.execute(
+                    select(IntegrationConfig).where(
+                        IntegrationConfig.tenant_id == tenant_id
+                    )
+                )
+            ).scalars().first()
+            if cfg is None:
+                return
+            unpriced = await gate.unpriced_config(check, tenant_id, cfg)
+            if unpriced:
+                structlog.get_logger().warning(
+                    event,
+                    tenant_id=str(tenant_id),
+                    unpriced=unpriced,
+                    hint="dollar ceilings will not be enforced for these models",
+                )
+    except Exception as exc:  # noqa: BLE001 - a warning must never fail the request
+        structlog.get_logger().warning("price_check_failed", error=str(exc))
+
+
 @router.post(
     "",
     response_model=TenantRead,
@@ -761,33 +761,8 @@ async def create_tenant(
     #
     # Response built first, transaction always ended — same reasoning as the
     # onboard check above (Codex phase-3 round 3).
-    _result = _to_read(tenant)
-    try:
-        # Same RLS reasoning as the onboard check above.
-        async with tenant_context(session, tenant.id):
-            _cfg = (
-                await session.execute(
-                    select(IntegrationConfig).where(
-                        IntegrationConfig.tenant_id == tenant.id
-                    )
-                )
-            ).scalars().first()
-            _unpriced = (
-                await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
-            )
-        if _unpriced:
-            structlog.get_logger().warning(
-                "tenant_created_with_unpriced_model",
-                tenant_id=str(tenant.id),
-                unpriced=_unpriced,
-                hint="dollar ceilings will not be enforced for these models",
-            )
-    except Exception as exc:  # noqa: BLE001 - a warning must not fail creation
-        structlog.get_logger().warning("create_price_check_failed", error=str(exc))
-    finally:
-        await session.rollback()
-
-    return _result
+    await _warn_if_unpriced(tenant.id, event="tenant_created_with_unpriced_model")
+    return _to_read(tenant)
 
 
 @router.get(
