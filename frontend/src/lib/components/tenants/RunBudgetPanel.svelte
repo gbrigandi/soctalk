@@ -389,7 +389,9 @@
 									? 'our estimate'
 									: basis === 'unpriced'
 										? 'unpriced (not enforced)'
-										: 'unknown basis'}
+										: basis === 'mixed'
+											? 'mixed window'
+											: 'unknown basis'}
 							{money(v.dollars)}
 						</span>
 					{/each}

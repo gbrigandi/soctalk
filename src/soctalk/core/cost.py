@@ -257,6 +257,12 @@ _SPEND_PROVENANCE_SQL = """
              -- that would file exempt fallback dollars as billed-by-provider —
              -- the opposite of what this breakdown is for (Codex round 2, P2).
              WHEN price_source = 'unknown'         THEN 'unpriced'
+             -- A residual row is what survived splitting an unpriced portion
+             -- out of a mixed window. Its cost_basis describes the LAST call,
+             -- not the residual, so reporting it would have filed provider
+             -- spend as estimated and vice versa (Codex round 4). Say
+             -- "mixed" — enforced, but not attributable to one basis.
+             WHEN price_source = 'mixed'           THEN 'mixed'
              WHEN cost_basis = 'provider_reported' THEN 'provider_reported'
              WHEN cost_basis IS NULL               THEN 'unknown_provenance'
              ELSE cost_basis
@@ -397,7 +403,13 @@ class MsspUserDailySpend:
 _MSSP_USER_DAILY_SPEND_SQL = """
     SELECT COALESCE(SUM((COALESCE(m.tokens_in, 0)
                        + COALESCE(m.tokens_out, 0))::bigint), 0)::bigint AS tokens,
-           COALESCE(SUM(COALESCE(m.dollars, 0.0))::float, 0.0)::float    AS dollars
+           -- Same exemption as the tenant ceiling. This one gates fleet chat
+           -- posts, and was the last place raw chat dollars could halt
+           -- something on money priced by guesswork (Codex round 4, P2).
+           COALESCE(SUM(GREATEST(
+               COALESCE(m.dollars, 0.0) - COALESCE(m.dollars_unpriced, 0.0),
+               0.0
+           ))::float, 0.0)::float                                        AS dollars
       FROM chat_messages m
       JOIN conversations c ON c.id = m.conversation_id
      WHERE c.scope = 'mssp_fleet'

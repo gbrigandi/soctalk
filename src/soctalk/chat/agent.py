@@ -965,7 +965,13 @@ async def run_turn(
                 break
 
             # Budget check between iterations.
-            if ctx.total_dollars + total_turn_enforceable >= ctx.budget_dollars:
+            # Subtract the conversation's prior unpriced spend here too. The
+            # PRE-turn gate already did, but this between-iteration check did
+            # not, so a conversation that had recorded unpriced dollars passed
+            # the door and was then stopped by the first tool-call iteration
+            # (Codex round 4, P1).
+            prior_enforceable = ctx.total_dollars - ctx.total_dollars_unpriced
+            if prior_enforceable + total_turn_enforceable >= ctx.budget_dollars:
                 stop_reason = "budget_exhausted"
                 break
 
