@@ -370,15 +370,35 @@ spec:
               percent-encoded and Unicode dot forms to ".", so fold them here
               before comparing.
             */}}
+            {{- /*
+              Classify by the AUTHORITY only, and fold exactly what the runtime
+              folds — no more (Codex review of #142, round 10, checked against
+              httpx 0.28.1 / openai 2.32.0 / anthropic 0.96.0):
+
+                - %2e is NOT decoded by httpx: the host stays api%2eopenai%2ecom.
+                  Folding it here invented a first-party match the runtime does
+                  not agree with, which is worse than the miss it was meant to
+                  fix. Removed.
+                - U+3002/U+FF0E/U+FF61 ARE folded to "." by httpx, so they stay.
+                - the scheme must be stripped anchored at the START. Splitting
+                  on the LAST "://" let path data pose as the authority, so
+                  https://proxy.local/https://api.openai.com/v1 read as OpenAI
+                  while httpx resolves proxy.local.
+
+              A baseUrl with no scheme has no authority at all (httpx treats it
+              as relative), so it cannot be classified and cannot work as a base
+              URL. Reject it rather than guess.
+            */}}
             {{- $host := "" }}
             {{- if $baseRaw }}
-            {{- $host = lower $baseRaw }}
-            {{- $host = replace "%2e" "." $host }}
-            {{- $host = regexReplaceAll "[。．｡]" $host "." }}
-            {{- if contains "://" $host }}
-            {{- $host = last (splitList "://" $host) }}
+            {{- if not (regexMatch "^[a-zA-Z][a-zA-Z0-9+.-]*://" $baseRaw) }}
+            {{- fail (printf "defaults.llm.baseUrl must be an absolute URL including a scheme (for example https://); got %q" $baseRaw) }}
             {{- end }}
+            {{- $host = regexReplaceAll "^[a-z][a-z0-9+.-]*://" (lower $baseRaw) "" }}
+            {{- $host = regexReplaceAll "[。．｡]" $host "." }}
             {{- $host = first (splitList "/" $host) }}
+            {{- $host = first (splitList "?" $host) }}
+            {{- $host = first (splitList "#" $host) }}
             {{- $host = last (splitList "@" $host) }}
             {{- $host = regexReplaceAll ":[0-9]+$" $host "" }}
             {{- $host = regexReplaceAll "[.]+$" $host "" }}
