@@ -30,6 +30,7 @@ from soctalk.core.provisioning import TenantController
 from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role
+from soctalk.core.pricing import gate
 from soctalk.core.tenancy.models import (
     BrandingConfig,
     IntegrationConfig,
@@ -430,6 +431,35 @@ async def onboard_tenant(
             llm_reasoning_model = reconcile_provider_model(
                 llm_provider, llm_reasoning_model
             )
+    # Onboarding is a config entry point too, and it bypassed the price gate
+    # entirely — so a tenant could be created with an unpriced model that the
+    # LLM PATCH would have refused (#141 phase 3). Same rule, same escape
+    # hatches, applied before the tenant row is written.
+    #
+    # Warn rather than refuse: onboarding creates infrastructure, and blocking
+    # it over pricing would leave a half-provisioned tenant behind. The gate on
+    # the config PATCH still stops the model being *changed* to something
+    # unpriced, and the run will report price_source='unknown' so the spend is
+    # visibly unattributed rather than silently enforced.
+    _unpriced = await gate.unpriced_models(
+        session,
+        tenant.id,
+        provider=llm_provider,
+        base_url=llm_base_url,
+        models={
+            "model": llm_model,
+            "fast_model": llm_fast_model,
+            "reasoning_model": llm_reasoning_model,
+        },
+    )
+    if _unpriced:
+        logger.warning(
+            "tenant_onboarded_with_unpriced_model",
+            tenant_id=str(tenant.id),
+            unpriced=_unpriced,
+            hint="dollar ceilings will not be enforced for these models",
+        )
+
     # Only pass llm_provider when set so the column default
     # ('openai-compatible') applies for a provider-less, key-less onboard.
     llm_kwargs: dict[str, Any] = {"llm_model": llm_model}

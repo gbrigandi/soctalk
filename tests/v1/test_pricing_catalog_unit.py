@@ -579,3 +579,55 @@ def test_seeded_families_cover_the_shipped_model_defaults():
     """
     for family in ("claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-1"):
         assert family in budget._MODEL_PRICES_PER_MTOK, f"{family} unpriced"
+
+
+# --- phase 3: overrides must be able to name a backend --------------------
+
+
+def test_override_key_shape():
+    from soctalk.core.pricing.resolve import override_key
+
+    assert override_key("openai_compatible", "novaroute", "m") == (
+        "openai_compatible:novaroute:m"
+    )
+    # No vendor behind the gateway: wildcard, so the override covers the
+    # protocol rather than pretending to know the vendor.
+    assert override_key("openai_compatible", None, "m") == "openai_compatible:*:m"
+
+
+def test_qualified_override_beats_the_bare_one():
+    """The same model string can cost two different amounts.
+
+    A tenant pointing fast and reasoning at one model through two providers
+    genuinely has two prices; the model-keyed map collapsed them into one.
+    """
+    from soctalk.core.pricing.resolve import _rates_from_override
+
+    overrides = {
+        "m": {"input": 1.0, "output": 2.0},
+        "openai_compatible:novaroute:m": {"input": 10.0, "output": 20.0},
+    }
+    qualified = _rates_from_override(overrides, "m", "openai_compatible", "novaroute")
+    assert qualified == {"input_per_mtok": 10.0, "output_per_mtok": 20.0}
+
+    # A different backend falls through to the bare entry.
+    other = _rates_from_override(overrides, "m", "anthropic", None)
+    assert other == {"input_per_mtok": 1.0, "output_per_mtok": 2.0}
+
+
+def test_wildcard_override_covers_a_protocol():
+    from soctalk.core.pricing.resolve import _rates_from_override
+
+    overrides = {"openai_compatible:*:m": {"input": 5.0, "output": 6.0}}
+    got = _rates_from_override(overrides, "m", "openai_compatible", "some-gateway")
+    assert got == {"input_per_mtok": 5.0, "output_per_mtok": 6.0}
+
+
+def test_bare_overrides_keep_working():
+    """The original shape is still honoured; this is additive."""
+    from soctalk.core.pricing.resolve import _rates_from_override
+
+    assert _rates_from_override({"m": {"input": 1.0, "output": 2.0}}, "m") == {
+        "input_per_mtok": 1.0,
+        "output_per_mtok": 2.0,
+    }

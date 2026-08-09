@@ -338,9 +338,17 @@ def validate_llm_model_prices(
 ) -> dict[str, dict[str, float]] | None:
     """Validate an ``llm_model_prices`` payload, returning it normalized (or None).
 
-    Shape is ``{"model-prefix": {"input": x, "output": y}}`` in USD per million
-    tokens, matching what ``graph.budget`` parses out of ``SOCTALK_MODEL_PRICES``
-    so a value accepted here cannot be rejected by the worker at startup.
+    Two key shapes are accepted, in USD per million tokens:
+
+    * ``"model"`` — applies to that model wherever the tenant runs it.
+    * ``"<provider_kind>:<provider_id|*>:<model>"`` — qualified, so the same
+      model string can carry different prices at different backends (#141
+      phase 3). A tenant with per-tier providers genuinely has two prices for
+      one name, and the bare form collapsed them.
+
+    The bare form still matches what ``graph.budget`` parses out of
+    ``SOCTALK_MODEL_PRICES``, so a value accepted here cannot be rejected by
+    the worker at startup.
 
     Raises ``ValueError`` on a malformed entry rather than persisting it: a price
     that silently fails to parse leaves the tenant on the fail-expensive fallback,

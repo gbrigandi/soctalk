@@ -106,17 +106,45 @@ def provider_id_for(base_url: str | None) -> str | None:
     return None
 
 
-def _rates_from_override(
-    overrides: dict[str, Any] | None, model: str
-) -> dict[str, float] | None:
-    """A tenant's own price for this model, if they set one (#121).
+def override_key(provider_kind: str, provider_id: str | None, model: str) -> str:
+    """The qualified key for a tenant price override.
 
-    The override map is keyed by model string alone, which is well defined
-    within one tenant because a tenant carries one provider and base URL.
+    ``<provider_kind>:<provider_id or '*'>:<model>`` — the same triple the
+    catalog is keyed on, so an override can say what a model costs *at a
+    particular backend*.
+    """
+    return f"{provider_kind}:{provider_id or '*'}:{model}"
+
+
+def _rates_from_override(
+    overrides: dict[str, Any] | None,
+    model: str,
+    provider_kind: str | None = None,
+    provider_id: str | None = None,
+) -> dict[str, float] | None:
+    """A tenant's own price for this model at this backend, if they set one.
+
+    Two key shapes, most specific first:
+
+    * ``<provider_kind>:<provider_id>:<model>`` — qualified (#141 phase 3).
+    * ``<model>`` — the original shape, kept working.
+
+    The original docstring claimed a model string was "well defined within one
+    tenant because a tenant carries one provider and base URL". Per-tier
+    backends broke that: a tenant can point its fast and reasoning roles at the
+    same model string through different providers at different prices, and a
+    model-keyed map silently collapsed the two into one (Codex review of #140).
     """
     if not overrides:
         return None
-    entry = overrides.get(model)
+    entry: Any = None
+    if provider_kind:
+        entry = overrides.get(override_key(provider_kind, provider_id, model))
+        if not isinstance(entry, dict) and provider_id:
+            # A wildcard override covers every backend of this protocol.
+            entry = overrides.get(override_key(provider_kind, None, model))
+    if not isinstance(entry, dict):
+        entry = overrides.get(model)
     if not isinstance(entry, dict):
         return None
     try:
@@ -146,7 +174,7 @@ async def _resolve_one(
         "provider_id": provider_id,
     }
 
-    override = _rates_from_override(overrides, model)
+    override = _rates_from_override(overrides, model, provider_kind, provider_id)
     if override is not None:
         entry.update(override)
         entry["source"] = SOURCE_TENANT_OVERRIDE

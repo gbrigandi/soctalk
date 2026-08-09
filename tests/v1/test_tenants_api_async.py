@@ -1395,6 +1395,19 @@ async def _seed_llm_tenant(
         IntegrationConfig(
             tenant_id=tenant.id,
             llm_base_url="https://api.openai.com/v1",
+        # Cost accounting is ON in CI (#141 phase 3), and these tenants point at
+        # gateway endpoints whose (provider_kind, model) pairs are deliberately
+        # absent from the catalog — a gateway's price for a model is not the
+        # vendor's price for it. A tenant price override is exactly what a real
+        # operator sets in that situation, so the fixture sets one instead of
+        # the suite switching the feature off.
+        llm_model_prices={
+            m: {"input": 1.0, "output": 2.0}
+            for m in (
+                "gpt-4o", "gpt-4o-mini", "gpt-4", "o3",
+                "claude-3-5-haiku-latest", "claude-3-5-haiku",
+            )
+        },
         )
     )
     await mssp_session.commit()

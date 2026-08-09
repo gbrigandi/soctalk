@@ -313,6 +313,14 @@ class ModelPriceSuggestion(BaseModel):
     output_per_mtok: float | None = None
     source: str | None = None
     as_of: str | None = None
+    # False when the rates come from the VENDOR's own row rather than this
+    # backend's. Routing a well-known model through a gateway finds no catalog
+    # entry, by design — a gateway's price for a model is not the vendor's
+    # price for it. Rather than dead-ending the operator, offer the vendor
+    # number and say plainly it is not theirs, so accepting it is a decision
+    # rather than an accident (#141 phase 3).
+    exact: bool = True
+    note: str | None = None
 
 
 @router.get(
@@ -353,7 +361,34 @@ async def suggest_model_price(
         provider_id=provider_id_for(url),
     )
     if row is None:
-        return ModelPriceSuggestion(model=name, found=False)
+        # Second chance: the vendor's own row for this model, under whatever
+        # provider_kind it is catalogued at. Only offered as a suggestion —
+        # nothing is stored until the operator saves it.
+        vendor = None
+        for kind in ("anthropic", "openai", "openrouter", "openai_compatible"):
+            if kind == provider_kind_for(prov, url):
+                continue
+            vendor = await catalog.lookup(
+                session, provider_kind=kind, model=name, provider_id=None
+            )
+            if vendor is not None:
+                break
+        if vendor is None:
+            return ModelPriceSuggestion(model=name, found=False)
+        vdims = vendor.dimensions or {}
+        return ModelPriceSuggestion(
+            model=name,
+            found=True,
+            exact=False,
+            input_per_mtok=catalog.dollars_per_mtok(vdims, "input_per_mtok_microusd"),
+            output_per_mtok=catalog.dollars_per_mtok(vdims, "output_per_mtok_microusd"),
+            source=vendor.source,
+            as_of=vendor.as_of.isoformat() if vendor.as_of else None,
+            note=(
+                "This is the vendor's own list price. Your gateway may charge "
+                "something different — check and adjust before saving."
+            ),
+        )
 
     dims = row.dimensions or {}
     return ModelPriceSuggestion(

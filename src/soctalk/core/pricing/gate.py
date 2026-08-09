@@ -30,7 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.policies import resolve_cost_tracking
 from soctalk.core.pricing import catalog
-from soctalk.core.pricing.resolve import provider_id_for, provider_kind_for
+from soctalk.core.pricing.resolve import (
+    override_key,
+    provider_id_for,
+    provider_kind_for,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -67,7 +71,15 @@ async def unpriced_models(
         name = (model or "").strip()
         if not name:
             continue
-        if name in overlay:
+        # A qualified override counts, and so does a bare one: the resolver
+        # tries them in that order, so the gate must accept either (#141
+        # phase 3). Without this, setting a per-backend price still left the
+        # model looking unpriced and the save was refused.
+        if (
+            name in overlay
+            or override_key(kind, pid, name) in overlay
+            or override_key(kind, None, name) in overlay
+        ):
             continue
         try:
             row = await catalog.lookup(
