@@ -358,15 +358,30 @@ spec:
               Order matters: strip the path first, then userinfo, then port,
               then the root dot.
             */}}
+            {{- /*
+              Extracted by string handling rather than urlParse, which ABORTS
+              rendering on inputs values.schema.json accepts: a percent-escape
+              it dislikes (https://api%2eopenai%2ecom/v1) fails the whole
+              template (Codex review of #142, round 9).
+
+              The comparison must agree with what the RUNTIME resolves, because
+              a host the chart calls third-party but httpx resolves to a vendor
+              is how ANTHROPIC_BASE_URL ends up on an OpenAI host. httpx folds
+              percent-encoded and Unicode dot forms to ".", so fold them here
+              before comparing.
+            */}}
             {{- $host := "" }}
             {{- if $baseRaw }}
-            {{- $host = (urlParse (lower $baseRaw)).host }}
-            {{- if not $host }}
-            {{- $host = first (splitList "/" (lower $baseRaw)) }}
+            {{- $host = lower $baseRaw }}
+            {{- $host = replace "%2e" "." $host }}
+            {{- $host = regexReplaceAll "[。．｡]" $host "." }}
+            {{- if contains "://" $host }}
+            {{- $host = last (splitList "://" $host) }}
             {{- end }}
+            {{- $host = first (splitList "/" $host) }}
             {{- $host = last (splitList "@" $host) }}
             {{- $host = regexReplaceAll ":[0-9]+$" $host "" }}
-            {{- $host = trimSuffix "." $host }}
+            {{- $host = regexReplaceAll "[.]+$" $host "" }}
             {{- end }}
             {{- $isOpenAiHost := eq $host "api.openai.com" }}
             {{- $isAnthropicHost := eq $host "api.anthropic.com" }}
