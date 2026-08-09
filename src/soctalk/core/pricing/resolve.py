@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.policies import resolve_cost_tracking
+from soctalk.core.pricing.names import base_model_id
 from soctalk.core.pricing import catalog
 from soctalk.core.tenancy.models import IntegrationConfig
 
@@ -279,8 +280,14 @@ def roles_for_config(cfg: Any, tiers: dict[str, Any] | None = None) -> dict[str,
         # ambiguity rather than silently pick one. Suppressing them collapsed
         # reasoning onto fast's backend — a worse bug than the one being fixed
         # (Codex, round 2 of the chat-role change).
+        # Compared on the FAMILY id, not the exact string, because that is what
+        # _snapshot_rates matches on. With an exact comparison, fast=gpt-4o and
+        # chat=gpt-4o-2024-08-06 both got stamped and then both matched the same
+        # lookup — reintroducing the ambiguity this skip exists to prevent
+        # (Codex, round 3 of the chat-role change).
         if role == "chat" and any(
-            existing["model"] == model for existing in roles.values()
+            base_model_id(existing["model"]) == base_model_id(model)
+            for existing in roles.values()
         ):
             continue
 

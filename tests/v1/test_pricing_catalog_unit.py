@@ -795,3 +795,30 @@ def test_hybrid_roles_keep_both_backends_for_one_model_string():
     assert roles["reasoning"]["provider_kind"] == "anthropic"
     # Chat shares the string, so it is the one that collapses.
     assert "chat" not in roles
+
+
+def test_chat_dedupe_uses_the_same_normalisation_as_snapshot_matching():
+    """Comparing exact strings was not enough.
+
+    _snapshot_rates matches version-stripped model IDs, so fast=gpt-4o and
+    chat=gpt-4o-2024-08-06 were stamped as two entries that then both matched
+    the same lookup — reintroducing the ambiguity the skip exists to prevent
+    (Codex, round 3 of the chat-role change).
+    """
+    from types import SimpleNamespace
+
+    from soctalk.core.pricing.resolve import roles_for_config
+
+    dated = SimpleNamespace(
+        llm_model="gpt-4o-2024-08-06",
+        llm_fast_model="gpt-4o",
+        llm_reasoning_model="gpt-4o",
+        llm_provider="openai-compatible",
+        llm_base_url="https://api.openai.com/v1",
+        llm_tiers=None,
+    )
+    assert "chat" not in roles_for_config(dated)
+
+    # A genuinely different chat model still earns its own entry.
+    distinct = SimpleNamespace(**{**dated.__dict__, "llm_model": "claude-haiku-4-5"})
+    assert roles_for_config(distinct)["chat"]["model"] == "claude-haiku-4-5"
