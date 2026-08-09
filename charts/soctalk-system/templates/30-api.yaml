@@ -324,25 +324,34 @@ spec:
               When they disagree, emit nothing and let the code default apply.
             */}}
             {{- $model := .Values.defaults.llm.model | default "" }}
-            {{- $isClaude := hasPrefix "claude" (lower $model) }}
-            {{- $coherent := and $model (eq (eq $provider "anthropic") $isClaude) }}
+            {{- $hasModel := ne $model "" }}
             {{- /*
-              On a mismatch, emit the PROVIDER's default rather than nothing.
-              Emitting nothing fell through to the code default, which is
-              claude-sonnet-4-6 — so an openai install configured with a Claude
-              model still called the OpenAI client with a Claude model, the
-              exact failure the suppression was meant to prevent (Codex review
-              of #142, round 4).
+              The provider/model coherence rule applies ONLY to first-party
+              providers. A gateway (openai-compatible, azure, ollama) routes
+              opaque model or deployment ids that we cannot judge — one may
+              legitimately begin "claude" while being served over the OpenAI
+              protocol — so overriding it would replace the operator's
+              deliberate choice with gpt-4o (Codex review of #142, round 5).
+              $rawProvider, not the canonicalised $provider, precisely because
+              the canonicalisation erases that distinction.
+            */}}
+            {{- $firstParty := or (eq $rawProvider "anthropic") (eq $rawProvider "openai") }}
+            {{- $isClaude := hasPrefix "claude" (lower $model) }}
+            {{- $coherent := and $hasModel (eq (eq $provider "anthropic") $isClaude) }}
+            {{- if or (not $firstParty) $coherent }}
+            {{- if $hasModel }}
+            - name: SOCTALK_CHAT_MODEL
+              value: {{ $model | quote }}
+            {{- end }}
+            {{- else }}
+            {{- /*
+              First-party and mismatched: emit the PROVIDER's default. Emitting
+              nothing fell through to the code default (claude-sonnet-4-6), so
+              an openai install still called OpenAI with a Claude model.
             */}}
             - name: SOCTALK_CHAT_MODEL
-              value: {{ $coherent | ternary $model (ternary "claude-sonnet-4-6" "gpt-4o" (eq $provider "anthropic")) | quote }}
-            {{- /*
-              A served engine (vLLM, SGLang) speaks the OpenAI protocol on an
-              arbitrary host, so pricing cannot tell it from a gateway without
-              being told. Without this, a self-hosted primary priced as
-              openai_compatible and could never match the catalog's self_hosted
-              rows.
-            */}}
+              value: {{ ternary "claude-sonnet-4-6" "gpt-4o" (eq $provider "anthropic") | quote }}
+            {{- end }}
             {{- if .Values.defaults.llm.engine }}
             - name: SOCTALK_CHAT_ENGINE
               value: {{ .Values.defaults.llm.engine | quote }}
