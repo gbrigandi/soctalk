@@ -839,8 +839,15 @@ async def run_turn(
             # as a tier override, so pricing the default stamped a model the
             # turn never calls — and the turn's spend then fell through to the
             # built-in table or to `unknown` (Codex, round 4).
+            # `resolved.model`, not ctx.model_name. resolve_tier applies the
+            # tenant overlay and can swap the effective model for a
+            # cross-provider tenant, so ctx.model_name is what was REQUESTED
+            # and resolved.model is what create_chat_model was actually handed
+            # (Codex, round 5). Pricing the requested one would stamp a model
+            # the turn never calls, which is the bug this parameter exists to
+            # fix.
             chat_prices = await resolve_run_prices(
-                db, _price_tenant, chat_model=ctx.model_name
+                db, _price_tenant, chat_model=resolved.model
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat_price_resolution_failed error=%s", exc)

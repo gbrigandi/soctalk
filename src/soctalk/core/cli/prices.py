@@ -199,6 +199,10 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
                          SELECT 1
                            FROM jsonb_each(COALESCE(i.llm_tiers, '{}'::jsonb)) AS tier(k, v)
                           WHERE v->>'model' = :m
+                             OR regexp_replace(
+                                    COALESCE(v->>'model', ''),
+                                    '(-(\d{8}|\d{4}-\d{2}-\d{2})|-latest)$', ''
+                                ) = :mbase
                        )
                  ORDER BY t.slug
                 """
