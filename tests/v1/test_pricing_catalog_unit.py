@@ -911,3 +911,33 @@ async def test_backend_snapshot_carries_the_accounting_switch(monkeypatch):
         object(), model="m", provider="anthropic", base_url=None, cost_tracking=False
     )
     assert cost_tracking_off({"price_snapshot": snap}) is True
+
+
+def test_official_openai_with_no_base_url_is_classified_as_openai():
+    """An official-OpenAI install sets no base URL — the SDK defaults.
+
+    provider_kind_for reads the HOST, so a bare None classified as
+    openai_compatible and missed every seeded `openai` row, leaving fleet chat
+    unpriced on the most ordinary configuration there is (Codex review of
+    #142). The caller must name the host the call actually reaches.
+    """
+    from soctalk.core.pricing.resolve import provider_kind_for
+
+    # What the bug looked like:
+    assert provider_kind_for("openai", None) == "openai_compatible"
+    # What the caller now passes:
+    assert provider_kind_for("openai", "https://api.openai.com/v1") == "openai"
+
+
+def test_a_served_engine_prices_as_self_hosted():
+    """vLLM and SGLang speak the OpenAI protocol on an arbitrary host.
+
+    Without the engine, fleet chat on a served endpoint priced as a gateway and
+    could never match the catalog's self_hosted rows (Codex review of #142).
+    """
+    from soctalk.core.pricing.resolve import provider_kind_for
+
+    host = "http://gpu-1:8000/v1"
+    assert provider_kind_for("openai-compatible", host) == "openai_compatible"
+    assert provider_kind_for("openai-compatible", host, "vllm") == "self_hosted"
+    assert provider_kind_for("openai-compatible", host, "sglang") == "self_hosted"

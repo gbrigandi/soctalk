@@ -845,17 +845,28 @@ async def run_turn(
             from soctalk.core.pricing.resolve import resolve_prices_for_backend
 
             _cfg = resolved.llm_config
-            _provider = getattr(_cfg, "provider", None)
+            _provider = str(getattr(_cfg, "provider", "") or "")
             _base = (
                 getattr(_cfg, "anthropic_base_url", None)
-                if str(_provider) == "anthropic"
+                if _provider == "anthropic"
                 else getattr(_cfg, "openai_base_url", None)
             )
+            # An official-OpenAI install sets no base URL — the SDK defaults to
+            # api.openai.com — but provider_kind_for reads the HOST, so a bare
+            # None classified as openai_compatible and missed every seeded
+            # `openai` row (Codex review of #142). Name the host the call
+            # actually reaches.
+            if not _base and _provider in ("openai", "openai-compatible"):
+                _base = "https://api.openai.com/v1"
             chat_prices = await resolve_prices_for_backend(
                 db,
                 model=resolved.model,
-                provider=str(_provider) if _provider else None,
+                provider=_provider or None,
                 base_url=_base,
+                # A served engine (vLLM, SGLang) speaks the OpenAI protocol on
+                # an arbitrary host, so without this it prices as a gateway and
+                # can never match the catalog's self_hosted rows.
+                engine=getattr(resolved.engine, "value", None),
                 # No tenant, so no tenant policy to read — the install default
                 # is the only meaningful answer, matching how the fleet
                 # conversation gate already resolves it.
