@@ -834,7 +834,14 @@ async def run_turn(
     _price_tenant = ctx.focused_tenant_id or ctx.tenant_id
     if _price_tenant is not None:
         try:
-            chat_prices = await resolve_run_prices(db, _price_tenant)
+            # Price the model this CONVERSATION runs, not the tenant default.
+            # A conversation can be created with an explicit model and keeps it
+            # as a tier override, so pricing the default stamped a model the
+            # turn never calls — and the turn's spend then fell through to the
+            # built-in table or to `unknown` (Codex, round 4).
+            chat_prices = await resolve_run_prices(
+                db, _price_tenant, chat_model=ctx.model_name
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat_price_resolution_failed error=%s", exc)
 

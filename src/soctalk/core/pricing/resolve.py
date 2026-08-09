@@ -217,7 +217,11 @@ async def _resolve_one(
     return entry
 
 
-def roles_for_config(cfg: Any, tiers: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+def roles_for_config(
+    cfg: Any,
+    tiers: dict[str, Any] | None = None,
+    chat_model: str | None = None,
+) -> dict[str, dict[str, Any]]:
     """Each role with the backend it will ACTUALLY run on.
 
     Shared by run-time pricing and the config-time price gate. They used to
@@ -249,7 +253,12 @@ def roles_for_config(cfg: Any, tiers: dict[str, Any] | None = None) -> dict[str,
         # Found by driving the config form on the NUC. Adding it here fixes the
         # pricing, and the config-time gate gets the same coverage for free
         # because both read this function.
-        ("chat", cfg.llm_model),
+        # ``chat_model`` overrides the tenant default when the CALLER knows
+        # which model this conversation actually runs. A conversation can be
+        # created with an explicit model (chat.py accepts body.model) and keeps
+        # it as a tier override, so pricing the tenant default would stamp a
+        # model the turn never calls (Codex, round 4 of the chat-role change).
+        ("chat", chat_model or cfg.llm_model),
     ):
         tier = tiers.get(role) or {}
         provider = tier.get("provider") or cfg.llm_provider
@@ -313,6 +322,7 @@ async def resolve_run_prices(
     tenant_id: UUID,
     *,
     integration_config_id: UUID | None = None,
+    chat_model: str | None = None,
 ) -> dict[str, Any] | None:
     """The price snapshot to stamp on a new run, or None if unresolvable.
 
@@ -353,7 +363,7 @@ async def resolve_run_prices(
     #
     # NULL or empty falls back to the primary, matching how render.py resolves
     # fastModel / reasoningModel.
-    roles = roles_for_config(cfg, tiers)
+    roles = roles_for_config(cfg, tiers, chat_model=chat_model)
 
     models: dict[str, Any] = {}
     for role, spec in roles.items():

@@ -822,3 +822,35 @@ def test_chat_dedupe_uses_the_same_normalisation_as_snapshot_matching():
     # A genuinely different chat model still earns its own entry.
     distinct = SimpleNamespace(**{**dated.__dict__, "llm_model": "claude-haiku-4-5"})
     assert roles_for_config(distinct)["chat"]["model"] == "claude-haiku-4-5"
+
+
+def test_chat_prices_the_conversation_model_not_the_tenant_default():
+    """A conversation created with an explicit model must be priced on it.
+
+    chat.py accepts body.model and the agent keeps it as a tier override, so
+    pricing the tenant default stamped a model the turn never calls — and the
+    turn's spend fell through to the built-in table or to `unknown` (Codex,
+    round 4 of the chat-role change).
+    """
+    from types import SimpleNamespace
+
+    from soctalk.core.pricing.resolve import roles_for_config
+
+    cfg = SimpleNamespace(
+        llm_model="claude-opus-4",       # the tenant default
+        llm_fast_model="gpt-4o",
+        llm_reasoning_model="gpt-4o",
+        llm_provider="anthropic",
+        llm_base_url=None,
+        llm_tiers=None,
+    )
+    # No override: chat is priced on the tenant default.
+    assert roles_for_config(cfg)["chat"]["model"] == "claude-opus-4"
+
+    # This conversation actually runs Sonnet.
+    picked = roles_for_config(cfg, chat_model="claude-sonnet-4-6")
+    assert picked["chat"]["model"] == "claude-sonnet-4-6"
+
+    # And the dedupe still applies against the model in play, not the default.
+    same = roles_for_config(cfg, chat_model="gpt-4o")
+    assert "chat" not in same

@@ -39,6 +39,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from soctalk.core.pricing import catalog
+from soctalk.core.pricing.names import base_model_id
 
 # What an import file looks like. One list, one entry per priced model:
 #
@@ -158,11 +159,16 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
     rows = (
         await db.execute(
             text(
-                """
+                r"""
                 SELECT t.slug
                   FROM integration_configs i
                   JOIN tenants t ON t.id = i.tenant_id
                  WHERE :m IN (
+                         -- Compared on the FAMILY id as well, because runtime
+                         -- lookup tries exact then version-stripped. Without
+                         -- this, importing `gpt-4o` re-priced tenants pinned to
+                         -- `gpt-4o-2024-08-06` while reporting none affected
+                         -- (Codex, round 4).
                          COALESCE(i.llm_fast_model, i.llm_model),
                          COALESCE(i.llm_reasoning_model, i.llm_model),
                          -- The bare primary too: chat runs on it, and with both
@@ -172,6 +178,18 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
                          -- (Codex review of the chat-role change).
                          i.llm_model
                        )
+                    OR regexp_replace(
+                           COALESCE(i.llm_fast_model, i.llm_model, ''),
+                           '(-(\d{8}|\d{4}-\d{2}-\d{2})|-latest)$', ''
+                       ) = :mbase
+                    OR regexp_replace(
+                           COALESCE(i.llm_reasoning_model, i.llm_model, ''),
+                           '(-(\d{8}|\d{4}-\d{2}-\d{2})|-latest)$', ''
+                       ) = :mbase
+                    OR regexp_replace(
+                           COALESCE(i.llm_model, ''),
+                           '(-(\d{8}|\d{4}-\d{2}-\d{2})|-latest)$', ''
+                       ) = :mbase
                     OR EXISTS (
                          -- Per-tier models live in llm_tiers JSONB and are
                          -- consumed by render and runtime, but the scalar
@@ -185,7 +203,7 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
                  ORDER BY t.slug
                 """
             ),
-            {"m": model},
+            {"m": model, "mbase": base_model_id(model)},
         )
     ).scalars().all()
     return list(rows)
