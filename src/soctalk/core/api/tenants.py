@@ -535,16 +535,22 @@ async def onboard_tenant(
         # written, including any install-default fast tier injected above —
         # which the previous version ran before and therefore never checked
         # (Codex review of phase 3).
-        _cfg = (
-            await session.execute(
-                select(IntegrationConfig).where(
-                    IntegrationConfig.tenant_id == tenant.id
+        # Inside tenant_context: the prior transaction has committed, so its
+        # SET LOCAL app.current_tenant_id is gone. On the production app-role
+        # session RLS would then return nothing for integration_configs and the
+        # check would silently pass on an empty config. The tests use an MSSP
+        # session, which bypasses RLS and hid it (Codex phase-3 round 2).
+        async with tenant_context(session, tenant.id):
+            _cfg = (
+                await session.execute(
+                    select(IntegrationConfig).where(
+                        IntegrationConfig.tenant_id == tenant.id
+                    )
                 )
+            ).scalars().first()
+            _unpriced = (
+                await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
             )
-        ).scalars().first()
-        _unpriced = (
-            await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
-        )
         if _unpriced:
             structlog.get_logger().warning(
                 "tenant_onboarded_with_unpriced_model",
@@ -553,6 +559,10 @@ async def onboard_tenant(
                 hint="dollar ceilings will not be enforced for these models",
             )
     except Exception as exc:  # noqa: BLE001 - a warning must not fail onboarding
+        # A failed query leaves this post-commit transaction dirty, and the
+        # middleware still commits on a 2xx — which would turn a warning into a
+        # failed onboard. Roll it back (Codex phase-3 round 2).
+        await session.rollback()
         structlog.get_logger().warning("onboard_price_check_failed", error=str(exc))
 
     return _to_read(tenant)
@@ -740,16 +750,18 @@ async def create_tenant(
     # rule and the same reason as onboarding: there is no tenant yet to hold a
     # price override when the config is created.
     try:
-        _cfg = (
-            await session.execute(
-                select(IntegrationConfig).where(
-                    IntegrationConfig.tenant_id == tenant.id
+        # Same RLS and rollback reasoning as the onboard check above.
+        async with tenant_context(session, tenant.id):
+            _cfg = (
+                await session.execute(
+                    select(IntegrationConfig).where(
+                        IntegrationConfig.tenant_id == tenant.id
+                    )
                 )
+            ).scalars().first()
+            _unpriced = (
+                await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
             )
-        ).scalars().first()
-        _unpriced = (
-            await gate.unpriced_config(session, tenant.id, _cfg) if _cfg else []
-        )
         if _unpriced:
             structlog.get_logger().warning(
                 "tenant_created_with_unpriced_model",
@@ -758,6 +770,7 @@ async def create_tenant(
                 hint="dollar ceilings will not be enforced for these models",
             )
     except Exception as exc:  # noqa: BLE001 - a warning must not fail creation
+        await session.rollback()
         structlog.get_logger().warning("create_price_check_failed", error=str(exc))
 
     return _to_read(tenant)
