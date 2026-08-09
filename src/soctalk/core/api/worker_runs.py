@@ -232,6 +232,11 @@ class WorkerHeartbeatPayload(BaseModel):
     tokens_used: int = Field(ge=0)
     # ``None`` preserves the stored value (see CompletePayload).
     dollars_used: float | None = Field(default=None, ge=0.0)
+    # Provenance of the dollar figure above (#141 phase 1). Optional so a
+    # mixed-version rolling upgrade keeps working: an older worker simply does
+    # not send them and the ledger records NULL, which is the truth.
+    cost_basis: str | None = Field(default=None, max_length=32)
+    price_source: str | None = Field(default=None, max_length=32)
 
 
 class WorkerEventItem(BaseModel):
@@ -257,6 +262,11 @@ class ReleasePayload(BaseModel):
     error_category: str = Field(max_length=64)
     tokens_used: int = Field(default=0, ge=0)
     dollars_used: float | None = Field(default=None, ge=0.0)
+    # Provenance of the dollar figure above (#141 phase 1). Optional so a
+    # mixed-version rolling upgrade keeps working: an older worker simply does
+    # not send them and the ledger records NULL, which is the truth.
+    cost_basis: str | None = Field(default=None, max_length=32)
+    price_source: str | None = Field(default=None, max_length=32)
 
 
 class CompletePayload(BaseModel):
@@ -267,6 +277,11 @@ class CompletePayload(BaseModel):
     # whatever the DB has". Important during mixed-version rolling
     # upgrades where the prior heartbeat may have persisted real spend.
     dollars_used: float | None = Field(default=None, ge=0.0)
+    # Provenance of the dollar figure above (#141 phase 1). Optional so a
+    # mixed-version rolling upgrade keeps working: an older worker simply does
+    # not send them and the ledger records NULL, which is the truth.
+    cost_basis: str | None = Field(default=None, max_length=32)
+    price_source: str | None = Field(default=None, max_length=32)
     last_error: str | None = Field(default=None, max_length=4096)
     disposition: str | None = Field(
         default=None, pattern=r"^(close_fp|escalate|leave_open)$"
@@ -454,7 +469,13 @@ async def claim_run(request: Request) -> ClaimedRun | None:
 
 
 async def _record_spend_delta(
-    db: AsyncSession, tenant_id: UUID, run_id: UUID, tokens: int | None, dollars: float | None
+    db: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+    tokens: int | None,
+    dollars: float | None,
+    cost_basis: str | None = None,
+    price_source: str | None = None,
 ) -> None:
     """Ledger the spend reported since this run last reported (#129).
 
@@ -491,10 +512,21 @@ async def _record_spend_delta(
         await db.execute(
             text(
                 "INSERT INTO llm_spend_ledger "
-                "  (tenant_id, run_id, occurred_at, tokens_delta, dollars_delta) "
-                "VALUES (:t, :r, now(), :dt, :dd)"
+                "  (tenant_id, run_id, occurred_at, tokens_delta, dollars_delta, "
+                "   cost_basis, price_source) "
+                "VALUES (:t, :r, now(), :dt, :dd, :cb, :ps)"
             ),
-            {"t": str(tenant_id), "r": str(run_id), "dt": d_tokens, "dd": d_dollars},
+            {
+                "t": str(tenant_id),
+                "r": str(run_id),
+                "dt": d_tokens,
+                "dd": d_dollars,
+                # NULL when an older worker did not report them: "unknown
+                # provenance" is the truth for those rows, and inventing
+                # "estimated" would be the error these columns exist to expose.
+                "cb": cost_basis,
+                "ps": price_source,
+            },
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("spend_ledger_write_failed", run_id=str(run_id), error=str(exc))
@@ -519,7 +551,13 @@ async def heartbeat_run(
     )
     async with tenant_context(db, tenant_id):
         await _record_spend_delta(
-            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+            db,
+            tenant_id,
+            run_id,
+            payload.tokens_used,
+            payload.dollars_used,
+            cost_basis=payload.cost_basis,
+            price_source=payload.price_source,
         )
         result = await db.execute(
             text(
@@ -653,7 +691,13 @@ async def release_run(
     db = _db(request)
     async with tenant_context(db, tenant_id):
         await _record_spend_delta(
-            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+            db,
+            tenant_id,
+            run_id,
+            payload.tokens_used,
+            payload.dollars_used,
+            cost_basis=payload.cost_basis,
+            price_source=payload.price_source,
         )
         row = (
             await db.execute(
@@ -739,7 +783,13 @@ async def complete_run(
     case_changed = False
     async with tenant_context(db, tenant_id):
         await _record_spend_delta(
-            db, tenant_id, run_id, payload.tokens_used, payload.dollars_used
+            db,
+            tenant_id,
+            run_id,
+            payload.tokens_used,
+            payload.dollars_used,
+            cost_basis=payload.cost_basis,
+            price_source=payload.price_source,
         )
         row = (
             await db.execute(

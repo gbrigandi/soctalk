@@ -578,6 +578,10 @@ async def _heartbeat_loop(
                     "lease_id": lease_id,
                     "tokens_used": int(state.get("tokens_used", 0)),
                     "dollars_used": float(state.get("dollars_used", 0.0)),
+                    # Where the dollar figure came from, so the ledger row can
+                    # say whether it was measured or inferred (#141 phase 1).
+                    "cost_basis": state.get("cost_basis"),
+                    "price_source": state.get("price_source"),
                 },
                 timeout=10.0,
             )
@@ -647,6 +651,7 @@ def releasable_error_category(
 async def _post_release(
     client: httpx.AsyncClient, run_id: str, lease_id: str, category: str,
     tokens_used: int, dollars_used: float,
+    cost_basis: str | None = None, price_source: str | None = None,
 ) -> None:
     """POST a release-for-retry. Same transport tolerance as _post_complete:
     a 409 means we no longer own the run (benign), transport blips are retried
@@ -656,6 +661,7 @@ async def _post_release(
     body = json.dumps({
         "lease_id": lease_id, "error_category": category,
         "tokens_used": tokens_used, "dollars_used": dollars_used,
+        "cost_basis": cost_basis, "price_source": price_source,
     })
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     attempts = _post_attempts()
@@ -802,6 +808,7 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         logger.info("run_transient run=%s category=%s -> release", run_id, transient_category)
         await _post_release(
             client, run_id, lease_id, transient_category, used, dollars_used,
+            cost_basis=state.get("cost_basis"), price_source=state.get("price_source"),
         )
         return
 
@@ -910,6 +917,8 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         "status": status,
         "tokens_used": used,
         "dollars_used": dollars_used,
+        "cost_basis": state.get("cost_basis"),
+        "price_source": state.get("price_source"),
         "last_error": last_error,
         "disposition": disposition,
         "verdict_summary": verdict_summary,

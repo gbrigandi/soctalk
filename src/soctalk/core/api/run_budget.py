@@ -24,6 +24,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.cost import (
+    get_spend_provenance,
     DAILY_DOLLAR_CAP_KEY,
     DAILY_TOKEN_CAP_KEY,
     get_tenant_daily_status,
@@ -111,6 +112,12 @@ class RunBudgetView(BaseModel):
     # Cost accounting master switch. When off, every dollar ceiling above is
     # inert and an unpriced model may be used — the deliberate posture for
     # local inference, where the dollars would be fiction anyway.
+    # Today's spend split by how each figure was arrived at (#141 phase 1):
+    # {"estimated": {"dollars": x, "tokens": n}, ...}. Empty for installs whose
+    # ledger predates provenance. The point of surfacing it: almost no provider
+    # reports actual cost, so most of this is our arithmetic, and an operator
+    # reading a dollar total deserves to know that.
+    spend_provenance: dict[str, dict[str, float]] = {}
     cost_tracking_enabled: bool = True
     cost_tracking_install_default: bool = True
     cost_tracking_override: bool | None = None
@@ -231,6 +238,7 @@ async def _view(db: AsyncSession, tenant_id: UUID) -> RunBudgetView:
         daily_dollar_max=tenant_daily_dollar_cap_max(),
         daily_token_override=daily_tok,
         daily_dollar_override=daily_dol,
+        spend_provenance=await get_spend_provenance(db, tenant_id),
         cost_tracking_enabled=cost_tracking,
         cost_tracking_install_default=cost_tracking_install_default(),
         cost_tracking_override=cost_track_override,

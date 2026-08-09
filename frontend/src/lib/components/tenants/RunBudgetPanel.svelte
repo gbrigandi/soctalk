@@ -378,6 +378,27 @@
 					/>
 				</label>
 			</div>
+			{#if budget.spend_provenance && Object.keys(budget.spend_provenance).length}
+				<div class="mt-3 text-sm" data-testid="run-budget-provenance">
+					<span class="opacity-70">Today's spend by basis:</span>
+					{#each Object.entries(budget.spend_provenance) as [basis, v]}
+						<span class="ml-2 font-mono" data-testid="provenance-{basis}">
+							{basis === 'provider_reported'
+								? 'billed by provider'
+								: basis === 'estimated'
+									? 'our estimate'
+									: 'unknown basis'}
+							{money(v.dollars)}
+						</span>
+					{/each}
+					{#if budget.spend_provenance.estimated || budget.spend_provenance.unknown}
+						<p class="opacity-60 text-xs mt-1">
+							Most providers do not report what a call cost, so those figures are
+							calculated from the configured rates rather than billed amounts.
+						</p>
+					{/if}
+				</div>
+			{/if}
 			<div class="mt-4 pt-3 border-t border-surface-500/20">
 				<label class="flex items-start gap-3 cursor-pointer">
 					<input

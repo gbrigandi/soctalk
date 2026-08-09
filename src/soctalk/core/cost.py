@@ -232,6 +232,48 @@ _DAILY_SPEND_SQL = """
 """
 
 
+# How much of today's spend is a guess (#141 phase 1). Kept separate from the
+# cap query on purpose: the cap must stay a hot, narrow read, and this is only
+# consulted when someone is looking at the figures.
+_SPEND_PROVENANCE_SQL = """
+    SELECT COALESCE(cost_basis, 'unknown')          AS basis,
+           COALESCE(SUM(dollars_delta), 0.0)::float AS dollars,
+           COALESCE(SUM(tokens_delta), 0)::bigint   AS tokens
+      FROM llm_spend_ledger
+     WHERE tenant_id = :t
+       AND occurred_at
+           >= (date_trunc('day', now() AT TIME ZONE :tz) AT TIME ZONE :tz)
+     GROUP BY 1
+"""
+
+
+async def get_spend_provenance(
+    db: AsyncSession, tenant_id: UUID
+) -> dict[str, dict[str, float]]:
+    """Today's spend broken down by how the figure was arrived at.
+
+    Returns ``{basis: {"dollars": x, "tokens": n}}`` where basis is
+    ``provider_reported``, ``estimated`` or ``unknown``. Rows written before
+    provenance was recorded report ``unknown``, which is honest: nobody knows
+    what produced them.
+
+    Never raises. This is a reporting read; a failure here must not take down
+    the budget view it decorates.
+    """
+    try:
+        tz = await resolve_budget_day_timezone(db, tenant_id)
+        rows = (
+            await db.execute(text(_SPEND_PROVENANCE_SQL), {"t": str(tenant_id), "tz": tz})
+        ).mappings().all()
+    except Exception:  # noqa: BLE001
+        logger.warning("spend_provenance_unavailable", tenant_id=str(tenant_id))
+        return {}
+    return {
+        r["basis"]: {"dollars": float(r["dollars"]), "tokens": int(r["tokens"])}
+        for r in rows
+    }
+
+
 async def get_tenant_daily_spend(
     db: AsyncSession, tenant_id: UUID
 ) -> TenantDailySpend:

@@ -123,6 +123,10 @@ export interface RunBudget {
 	daily_dollar_override: number | null;
 	/** Cost accounting master switch. Off => dollar ceilings inert, unpriced
 	 *  models allowed. */
+	/** Today's spend by how each figure was arrived at: provider_reported |
+	 *  estimated | unknown. Most providers never report cost, so most spend is
+	 *  our own arithmetic — this is what says so. */
+	spend_provenance: Record<string, { dollars: number; tokens: number }>;
 	cost_tracking_enabled: boolean;
 	cost_tracking_install_default: boolean;
 	cost_tracking_override: boolean | null;

@@ -603,3 +603,80 @@ def test_a_snapshot_without_the_flag_still_enforces_dollars():
         "dollars_used": 5.0, "dollars_budget": 5.0,
     }
     assert over_budget(st) is True
+
+
+# --- phase 1: the number says where it came from ---------------------------
+#
+# Only OpenRouter reports an actual cost (llm.py:194). Everything else is our
+# arithmetic against our own rate card, while being authoritative for
+# enforcement. cost_basis/price_source were computed and then only logged, so
+# after the fact a measured dollar was indistinguishable from an inferred one.
+
+
+def _track_state(snapshot=None):
+    return {
+        "tokens_used": 0, "tokens_budget": 10**9,
+        "dollars_used": 0.0, "dollars_budget": 10**6,
+        "price_snapshot": snapshot,
+    }
+
+
+def test_a_provider_reported_cost_is_marked_as_such(monkeypatch):
+    """When the provider says what it charged, no rate card is consulted."""
+    from soctalk.core.pricing.usage import CanonicalUsage
+    from soctalk.graph import budget
+
+    st = _track_state()
+    usage = CanonicalUsage(input_tokens=100, output_tokens=50)
+    usage.actual_cost_usd = 0.25
+
+    monkeypatch.setattr(budget, "canonical_usage", lambda _r: usage)
+    monkeypatch.setattr(budget, "_model_name", lambda _r: "some-model")
+    budget.track(st, object())
+
+    assert st["cost_basis"] == "provider_reported"
+    assert st["price_source"] == "provider"
+    assert st["dollars_used"] == 0.25
+
+
+def test_an_estimate_records_which_rate_card_produced_it(monkeypatch):
+    from soctalk.core.pricing.usage import CanonicalUsage
+    from soctalk.graph import budget
+
+    snapshot = {
+        "version": 1,
+        "models": {
+            "fast": {
+                "model": "claude-haiku-4-5",
+                "input_per_mtok": 1.0,
+                "output_per_mtok": 5.0,
+                "source": "catalog",
+            }
+        },
+    }
+    st = _track_state(snapshot)
+    usage = CanonicalUsage(input_tokens=1_000_000, output_tokens=0)
+
+    monkeypatch.setattr(budget, "canonical_usage", lambda _r: usage)
+    monkeypatch.setattr(budget, "_model_name", lambda _r: "claude-haiku-4-5")
+    budget.track(st, object())
+
+    assert st["cost_basis"] == "estimated"
+    assert st["price_source"] == "catalog"
+    assert round(st["dollars_used"], 6) == 1.0
+
+
+def test_an_unpriced_model_is_recorded_as_unknown_not_silently_estimated(monkeypatch):
+    """The case that over-billed 16x. It must be nameable after the fact."""
+    from soctalk.core.pricing.usage import CanonicalUsage
+    from soctalk.graph import budget
+
+    st = _track_state({"version": 1, "models": {}})
+    usage = CanonicalUsage(input_tokens=1000, output_tokens=1000)
+
+    monkeypatch.setattr(budget, "canonical_usage", lambda _r: usage)
+    monkeypatch.setattr(budget, "_model_name", lambda _r: "totally-unknown-model")
+    budget.track(st, object())
+
+    assert st["cost_basis"] == "estimated"
+    assert st["price_source"] == "unknown"

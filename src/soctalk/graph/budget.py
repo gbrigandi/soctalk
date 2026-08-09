@@ -491,6 +491,15 @@ def track(state: dict[str, Any], response: Any) -> int:
             rates=_snapshot_rates(state, model),
         )
         state.setdefault("cost_basis", "estimated")
+    # Which rate card produced the number. Kept on state rather than computed
+    # only for the log line, so the worker can report it and the ledger can
+    # store it — "a figure nobody can attribute" was the problem, and a value
+    # that exists for one log call and then vanishes does not fix it.
+    if usage.actual_cost_usd is not None:
+        # No rate card was consulted: the provider said what it charged.
+        state["price_source"] = "provider"
+    else:
+        state["price_source"] = _snapshot_source(state, model) or "unknown"
 
     state["tokens_used"] = int(state["tokens_used"]) + delta_tokens
     state["dollars_used"] = float(state["dollars_used"]) + delta_dollars
@@ -512,7 +521,7 @@ def track(state: dict[str, Any], response: Any) -> int:
             # from. Recording the basis is the point of the whole exercise: a
             # figure nobody can attribute is the state we started in.
             cost_basis=state.get("cost_basis"),
-            price_source=_snapshot_source(state, model),
+            price_source=state.get("price_source"),
             delta_dollars=round(delta_dollars, 6),
             tokens_used=state["tokens_used"],
             tokens_budget=state["tokens_budget"],
