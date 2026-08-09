@@ -330,7 +330,14 @@ spec:
               called Anthropic with an OpenAI model (Codex review of #142).
               When they disagree, emit nothing and let the code default apply.
             */}}
-            {{- $model := .Values.defaults.llm.model | default "" }}
+            {{- /*
+              Trimmed for the same reason as baseUrl: pricing strips model
+              names before resolving, so an untrimmed " gpt-4o " was CALLED
+              with spaces and PRICED without them — the called model and the
+              priced model diverged, which is the gap #142 exists to close
+              (Codex review of #142, round 12).
+            */}}
+            {{- $model := .Values.defaults.llm.model | default "" | trim }}
             {{- $hasModel := ne $model "" }}
             {{- /*
               The provider/model coherence rule applies ONLY to first-party
@@ -396,11 +403,22 @@ spec:
               URL. Reject it rather than guess.
             */}}
             {{- $host := "" }}
+            {{- $hasUsableBase := false }}
             {{- if $baseRaw }}
-            {{- if not (regexMatch "^[a-zA-Z][a-zA-Z0-9+.-]*://" $baseRaw) }}
-            {{- fail (printf "defaults.llm.baseUrl must be an absolute URL including a scheme (for example https://); got %q" $baseRaw) }}
-            {{- end }}
+            {{- /*
+              No scheme means no authority for httpx to resolve, so the value
+              cannot be classified AND cannot work as a base URL. Earlier this
+              called `fail`, but values.schema.json accepts the value, so that
+              aborted a legal install (Codex review of #142, round 12). Treat
+              it as unusable instead: no host, and $hasUsableBase suppresses
+              the base-URL env below so the SDK default applies rather than a
+              string that would point at the wrong vendor.
+            */}}
+            {{- if regexMatch "^[a-zA-Z][a-zA-Z0-9+.-]*://" $baseRaw }}
+            {{- $hasUsableBase = true }}
             {{- $host = regexReplaceAll "^[a-z][a-z0-9+.-]*://" (lower $baseRaw) "" }}
+            {{- end }}
+            {{- if $hasUsableBase }}
             {{- $host = regexReplaceAll "[。．｡]" $host "." }}
             {{- $host = first (splitList "/" $host) }}
             {{- $host = first (splitList "?" $host) }}
@@ -409,25 +427,31 @@ spec:
             {{- $host = regexReplaceAll ":[0-9]+$" $host "" }}
             {{- $host = regexReplaceAll "[.]+$" $host "" }}
             {{- end }}
+            {{- end }}
             {{- $isOpenAiHost := eq $host "api.openai.com" }}
             {{- $isAnthropicHost := eq $host "api.anthropic.com" }}
             {{- $firstPartyHost := or $isOpenAiHost $isAnthropicHost }}
             {{- $firstParty := or (eq $rawProvider "anthropic") (eq $rawProvider "openai") $firstPartyHost }}
             {{- $isClaude := hasPrefix "claude" (lower $model) }}
             {{- $coherent := and $hasModel (eq (eq $provider "anthropic") $isClaude) }}
-            {{- if or (not $firstParty) $coherent }}
-            {{- if $hasModel }}
-            - name: SOCTALK_CHAT_MODEL
-              value: {{ $model | quote }}
-            {{- end }}
-            {{- else }}
             {{- /*
-              First-party and mismatched: emit the PROVIDER's default. Emitting
+              Resolved ONCE into $chatModel so the runtime env and the tenant
+              seed default below cannot disagree — they did, and that is the
+              chat-model gap one level down (Codex review of #142, round 12).
+
+              First-party and mismatched: use the PROVIDER's default. Emitting
               nothing fell through to the code default (claude-sonnet-4-6), so
               an openai install still called OpenAI with a Claude model.
             */}}
+            {{- $chatModel := "" }}
+            {{- if or (not $firstParty) $coherent }}
+            {{- $chatModel = $model }}
+            {{- else }}
+            {{- $chatModel = ternary "claude-sonnet-4-6" "gpt-4o" (eq $provider "anthropic") }}
+            {{- end }}
+            {{- if $chatModel }}
             - name: SOCTALK_CHAT_MODEL
-              value: {{ ternary "claude-sonnet-4-6" "gpt-4o" (eq $provider "anthropic") | quote }}
+              value: {{ $chatModel | quote }}
             {{- end }}
             {{- if .Values.defaults.llm.engine }}
             - name: SOCTALK_CHAT_ENGINE
@@ -442,7 +466,7 @@ spec:
             */}}
             {{- /* $isOpenAiHost/$isAnthropicHost are the exact-host checks computed above. */}}
             {{- $base := $baseRaw }}
-            {{- if $base }}
+            {{- if and $base $hasUsableBase }}
             {{- if eq $provider "anthropic" }}
             {{- if not $isOpenAiHost }}
             - name: ANTHROPIC_BASE_URL
@@ -464,12 +488,33 @@ spec:
               schema validation (Codex review of #142, round 6). Pre-existing,
               not introduced here.
             */}}
+            {{- /*
+              These seed every newly onboarded tenant, so they must be the same
+              coherent values the API pod itself runs on. Emitting the RAW
+              values handed tenants provider=openai-compatible with an
+              Anthropic base URL and a Claude model while the pod ran
+              openai/gpt-4o — the chat-model gap #142 is about, one level down
+              (Codex review of #142, round 12).
+
+              $chatModel is the corrected model resolved above; $base/
+              $hasUsableBase carry the same suppression rules as the runtime
+              envs, so a base URL belonging to the other vendor is not seeded
+              into tenants either.
+            */}}
             - name: SOCTALK_LLM_PROVIDER_DEFAULT
               value: {{ ternary "anthropic" "openai-compatible" (eq $rawProvider "anthropic") | quote }}
+            {{- $seedBase := "" }}
+            {{- if and $base $hasUsableBase }}
+            {{- if eq $provider "anthropic" }}
+            {{- if not $isOpenAiHost }}{{ $seedBase = $base }}{{ end }}
+            {{- else }}
+            {{- if not $isAnthropicHost }}{{ $seedBase = $base }}{{ end }}
+            {{- end }}
+            {{- end }}
             - name: SOCTALK_LLM_BASE_URL_DEFAULT
-              value: {{ .Values.defaults.llm.baseUrl | quote }}
+              value: {{ $seedBase | quote }}
             - name: SOCTALK_LLM_MODEL_DEFAULT
-              value: {{ .Values.defaults.llm.model | quote }}
+              value: {{ $chatModel | quote }}
             {{- /*
               Install-wide default FAST (router) tier — every newly onboarded
               tenant routes its high-volume supervisor loop to this backend
