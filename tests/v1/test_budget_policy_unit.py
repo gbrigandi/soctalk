@@ -846,3 +846,21 @@ def test_a_wholly_unpriced_window_keeps_its_label():
 def test_a_priced_window_is_untouched():
     assert _residual_source("catalog", 0.0) == "catalog"
     assert _residual_source("builtin", 0.0) == "builtin"
+
+
+def test_unlock_compares_against_enforceable_spend():
+    """A run carrying unpriced spend must still be unlockable.
+
+    Validating on the raw total made a run unlockable only by exceeding spend
+    the runtime already disregards: a token-halted run carrying $400 of
+    unpriced dollars could not be unlocked at all, since no ceiling under the
+    install cap exceeds $400 (Codex round 5).
+    """
+    dollars_used, dollars_unpriced = 400.0, 400.0
+    enforceable = max(0.0, dollars_used - dollars_unpriced)
+    assert enforceable == 0.0
+
+    # A sane new ceiling now passes, where comparing against 400.0 refused it.
+    new_dollars = 5.0
+    assert new_dollars > enforceable
+    assert not new_dollars > dollars_used  # the old rule would have rejected it

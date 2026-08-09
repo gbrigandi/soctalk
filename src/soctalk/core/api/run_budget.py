@@ -511,6 +511,12 @@ async def unlock_run(
                     """
                     SELECT r.id, r.status, r.tokens_used, r.tokens_budget,
                            r.dollars_used, r.dollars_budget, r.investigation_id,
+                           COALESCE((
+                               SELECT SUM(l.dollars_delta)
+                                 FROM llm_spend_ledger l
+                                WHERE l.run_id = r.id
+                                  AND l.price_source = 'unknown'
+                           ), 0)::float AS dollars_unpriced,
                            i.status AS investigation_status
                       FROM investigation_runs r
                       JOIN investigations i ON i.id = r.investigation_id
@@ -539,6 +545,13 @@ async def unlock_run(
             )
 
         dollars_used = float(row["dollars_used"] or 0.0)
+        dollars_unpriced = float(row["dollars_unpriced"] or 0.0)
+        # What runtime will actually compare the new ceiling against. Validating
+        # on the raw total made a run unlockable only by clearing spend the
+        # runtime already disregards: a run halted on TOKENS while carrying
+        # $400 of unpriced dollars could not be unlocked at all, because no
+        # ceiling under the install cap exceeds $400 (Codex round 5).
+        dollars_enforceable = max(0.0, dollars_used - dollars_unpriced)
         tokens_used = int(row["tokens_used"] or 0)
         dollar_cap = run_dollar_budget_max()
         token_cap = run_token_budget_max()
@@ -571,11 +584,18 @@ async def unlock_run(
             )
         # Strictly greater: ``over_budget`` halts at >=, so an equal ceiling
         # re-halts immediately.
-        if new_dollars <= dollars_used:
+        if new_dollars <= dollars_enforceable:
             raise HTTPException(
                 422,
-                f"dollar_budget must exceed the ${dollars_used:.6f} already spent, "
-                "or the run halts again on its first budget check",
+                f"dollar_budget must exceed the ${dollars_enforceable:.6f} already "
+                "spent on priced models, or the run halts again on its first "
+                "budget check"
+                + (
+                    f" (${dollars_unpriced:.6f} more was spent on unpriced models "
+                    "and is not enforced)"
+                    if dollars_unpriced
+                    else ""
+                ),
             )
         if new_tokens <= tokens_used:
             raise HTTPException(
