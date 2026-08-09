@@ -30,12 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.policies import resolve_cost_tracking
 from soctalk.core.pricing import catalog
-from soctalk.core.pricing.resolve import (
-    override_key,
-    provider_id_for,
-    provider_kind_for,
-    roles_for_config,
-)
+from soctalk.core.pricing.resolve import override_key, roles_for_config
 
 logger = structlog.get_logger(__name__)
 
@@ -65,29 +60,9 @@ async def unpriced_config(
 
     overlay = getattr(cfg, "llm_model_prices", None) or {}
 
-    roles = dict(roles_for_config(cfg, tiers))
-
-    # The CHAT model as well as the triage roles. roles_for_config is
-    # triage-centric: it falls back to llm_model only when a role has no model
-    # of its own, so a tenant with explicit fast AND reasoning models never
-    # exercises the primary — and the gate happily accepted an unpriced one.
-    # But chat resolves its model as `integ.llm_model or ...`
-    # (chat/agent.py:677), so that unpriced model did run, and its spend was
-    # silently unenforceable.
-    #
-    # Found by driving the config form end to end on the NUC, not by reading:
-    # the UI said "no price is known" and the save succeeded anyway.
-    primary = (getattr(cfg, "llm_model", None) or "").strip()
-    if primary and not any(
-        (spec.get("model") or "") == primary for spec in roles.values()
-    ):
-        roles["chat"] = {
-            "model": primary,
-            "provider_kind": provider_kind_for(
-                getattr(cfg, "llm_provider", None), getattr(cfg, "llm_base_url", None)
-            ),
-            "provider_id": provider_id_for(getattr(cfg, "llm_base_url", None)),
-        }
+    # roles_for_config now includes chat, so the gate covers every model the
+    # tenant actually runs without a special case here.
+    roles = roles_for_config(cfg, tiers)
 
     missing: list[str] = []
     for role, spec in roles.items():

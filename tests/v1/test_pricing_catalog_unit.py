@@ -710,3 +710,53 @@ def test_anthropic_host_is_recognised_like_openais():
         provider_kind_for("openai-compatible", "https://novarouteai.com/v1")
         == "openai_compatible"
     )
+
+
+def test_chat_is_a_first_class_pricing_role():
+    """Chat's model must appear in the snapshot, not just pass the gate.
+
+    Chat calls `integ.llm_model` (chat/agent.py), so a tenant with explicit
+    fast AND reasoning models ran chat on a model that appeared in NO role —
+    and therefore in no price snapshot. Its spend fell through to the built-in
+    table or to `unknown` even when the catalog priced it perfectly well.
+
+    Closing this in roles_for_config fixes the PRICING; the config-time gate
+    gets the same coverage for free, because both read this function.
+    """
+    from types import SimpleNamespace
+
+    from soctalk.core.pricing.resolve import roles_for_config
+
+    cfg = SimpleNamespace(
+        llm_model="chat-only-model",
+        llm_fast_model="fast-model",
+        llm_reasoning_model="reasoning-model",
+        llm_provider="openai-compatible",
+        llm_base_url="https://novarouteai.com/v1",
+        llm_tiers=None,
+    )
+    roles = roles_for_config(cfg)
+
+    assert set(roles) == {"fast", "reasoning", "chat"}
+    assert roles["chat"]["model"] == "chat-only-model"
+    # Priced against its own backend, like every other role.
+    assert roles["chat"]["provider_kind"] == "openai_compatible"
+    assert roles["chat"]["provider_id"] == "novaroute"
+
+
+def test_chat_role_collapses_when_it_shares_the_primary_model():
+    """No duplicate work when the tenant has one model for everything."""
+    from types import SimpleNamespace
+
+    from soctalk.core.pricing.resolve import roles_for_config
+
+    cfg = SimpleNamespace(
+        llm_model="one-model",
+        llm_fast_model=None,
+        llm_reasoning_model=None,
+        llm_provider="anthropic",
+        llm_base_url=None,
+        llm_tiers=None,
+    )
+    roles = roles_for_config(cfg)
+    assert {r["model"] for r in roles.values()} == {"one-model"}

@@ -238,6 +238,17 @@ def roles_for_config(cfg: Any, tiers: dict[str, Any] | None = None) -> dict[str,
     for role, fallback_model in (
         ("fast", cfg.llm_fast_model or cfg.llm_model),
         ("reasoning", cfg.llm_reasoning_model or cfg.llm_model),
+        # Chat is a first-class role, not an afterthought. It calls
+        # ``integ.llm_model`` (chat/agent.py), so a tenant with explicit fast
+        # AND reasoning models runs chat on a model that appeared in NO role —
+        # and therefore in no price snapshot. Its spend then fell through to
+        # the built-in table or to `unknown`, even when the catalog priced it
+        # perfectly well.
+        #
+        # Found by driving the config form on the NUC. Adding it here fixes the
+        # pricing, and the config-time gate gets the same coverage for free
+        # because both read this function.
+        ("chat", cfg.llm_model),
     ):
         tier = tiers.get(role) or {}
         provider = tier.get("provider") or cfg.llm_provider
