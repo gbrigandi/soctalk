@@ -183,6 +183,46 @@ async def lookup(
     for candidate in candidates:
         if not candidate:
             continue
+
+        # OpenRouter namespaced ids are resolved by (kind, model) FIRST, before
+        # the exact/NULL sequence below.
+        #
+        # Their rows are seeded with provider_id set to the upstream vendor
+        # ("deepseek"), while provider_id_for() returns "openrouter" from the
+        # host, so the exact match never hits. Running the NULL lookup before
+        # the uniqueness check meant a catalog holding BOTH a NULL row and an
+        # upstream row returned the NULL one silently, with no ambiguity
+        # warning — the schema permits that pair because the NULL and non-NULL
+        # unique indexes are separate (Codex phase-3 round 4).
+        #
+        # Deciding uniqueness up front removes the preemption: one row is
+        # returned, two or more are refused loudly rather than resolved
+        # arbitrarily.
+        if provider_kind == "openrouter" and "/" in candidate:
+            rows = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT * FROM model_prices
+                         WHERE provider_kind = :kind
+                           AND model = :model
+                         LIMIT 2
+                        """
+                    ),
+                    {"kind": provider_kind, "model": candidate},
+                )
+            ).mappings().all()
+            if len(rows) == 1:
+                return ModelPrice(**dict(rows[0]))
+            if len(rows) > 1:
+                logger.warning(
+                    "price_catalog_ambiguous_namespaced_model",
+                    model=candidate,
+                    provider_kind=provider_kind,
+                    hint="two rows share this (provider_kind, model); set a "
+                    "tenant price override to say which rate applies",
+                )
+            continue
         if provider_id:
             row = (
                 await db.execute(
@@ -217,52 +257,5 @@ async def lookup(
         ).mappings().first()
         if row is not None:
             return ModelPrice(**dict(row))
-
-        # Last resort, and ONLY for a namespaced model id ("vendor/model").
-        #
-        # OpenRouter rows are seeded with provider_id set to the UPSTREAM vendor
-        # ("deepseek", "zhipu"), while provider_id_for() returns "openrouter"
-        # from the host — so neither the exact nor the NULL lookup above could
-        # ever reach them, and every OpenRouter tenant read as unpriced despite
-        # shipped rows (Codex phase-3 round 2).
-        #
-        # Safe here precisely because the model string carries the vendor
-        # itself: "deepseek/deepseek-v4-flash" identifies one row regardless of
-        # which provider_id was recorded. NOT done for bare model names, where
-        # the same string legitimately costs different amounts at different
-        # gateways and ignoring provider_id would pick one arbitrarily.
-        if provider_kind == "openrouter" and "/" in candidate:
-            # Restricted to openrouter, not every namespaced id (Codex phase-3
-            # round 3). A namespaced model names its UPSTREAM vendor, not the
-            # gateway doing the billing, so applying this to
-            # ``openai_compatible`` would let one gateway's row answer for
-            # another's — the distinction this layer exists to preserve.
-            #
-            # LIMIT 2 and a uniqueness check: if two rows exist for the same
-            # (kind, model), there is no principled way to choose, and silently
-            # picking one is how a tenant gets billed at another's rate.
-            rows = (
-                await db.execute(
-                    text(
-                        """
-                        SELECT * FROM model_prices
-                         WHERE provider_kind = :kind
-                           AND model = :model
-                         LIMIT 2
-                        """
-                    ),
-                    {"kind": provider_kind, "model": candidate},
-                )
-            ).mappings().all()
-            if len(rows) == 1:
-                return ModelPrice(**dict(rows[0]))
-            if len(rows) > 1:
-                logger.warning(
-                    "price_catalog_ambiguous_namespaced_model",
-                    model=candidate,
-                    provider_kind=provider_kind,
-                    hint="two rows share this (provider_kind, model); set a "
-                    "tenant price override to say which rate applies",
-                )
 
     return None
