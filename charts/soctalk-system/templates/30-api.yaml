@@ -293,6 +293,29 @@ spec:
             - name: SOCTALK_BUDGET_DAY_TIMEZONE
               value: {{ .Values.defaults.budgetDayTimezone | quote }}
             {{- end }}
+            {{- /*
+              The install's LLM defaults, for the API pod's OWN runtime — which
+              is what fleet chat uses. The _DEFAULT vars below are consumed by
+              tenant ONBOARDING; nothing was giving load_config() the provider,
+              model or base URL, so a charted install ran (and priced) fleet
+              chat on the hardcoded fallback rather than defaults.llm.model
+              (#142, Codex review).
+
+              Deliberately not set when a value is empty, so an operator's own
+              env override still wins.
+            */}}
+            {{- if .Values.defaults.llm.provider }}
+            - name: SOCTALK_LLM_PROVIDER
+              value: {{ .Values.defaults.llm.provider | lower | replace "openai-compatible" "openai" | quote }}
+            {{- end }}
+            {{- if .Values.defaults.llm.model }}
+            - name: SOCTALK_CHAT_MODEL
+              value: {{ .Values.defaults.llm.model | quote }}
+            {{- end }}
+            {{- if and .Values.defaults.llm.baseUrl (ne (.Values.defaults.llm.provider | lower) "anthropic") }}
+            - name: OPENAI_BASE_URL
+              value: {{ .Values.defaults.llm.baseUrl | quote }}
+            {{- end }}
             - name: SOCTALK_LLM_PROVIDER_DEFAULT
               value: {{ .Values.defaults.llm.provider | quote }}
             - name: SOCTALK_LLM_BASE_URL_DEFAULT
