@@ -482,6 +482,16 @@ class IntegrationConfig(SQLModel, table=True):
     llm_model: str = Field(default="gpt-4o", max_length=255)
     llm_fast_model: str | None = Field(default=None, max_length=255)
     llm_reasoning_model: str | None = Field(default=None, max_length=255)
+    # Serving engine behind llm_base_url, when it is one SocTalk prices
+    # separately ("vllm"/"sglang"). NULL = a hosted vendor or a generic
+    # gateway, which is today's behaviour.
+    #
+    # Pricing cannot tell a served endpoint from a gateway by host alone, so
+    # without this a self-hosted install seeded tenants that priced as
+    # openai_compatible and missed their own self_hosted catalog entry — the
+    # model was called but never priced (#142, Codex round 13). Tiers already
+    # carried an engine; the primary config had no equivalent field.
+    llm_engine: str | None = Field(default=None, max_length=32)
     # Optional per-tier LLM backends for a hybrid tenant (issue #12). NULL =
     # single-provider (today's behaviour, unchanged). Shape:
     # ``{"fast": {provider, base_url, model, engine?, api_key_plain?}, "reasoning": {...}}``

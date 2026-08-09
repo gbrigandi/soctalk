@@ -516,6 +516,14 @@ spec:
             - name: SOCTALK_LLM_MODEL_DEFAULT
               value: {{ $chatModel | quote }}
             {{- /*
+              Seeded too, or a tenant onboarded from a self-hosted install
+              stores the same backend with no engine and prices it as
+              openai_compatible, missing its own self_hosted catalog entry
+              (Codex review of #142, round 13).
+            */}}
+            - name: SOCTALK_LLM_ENGINE_DEFAULT
+              value: {{ .Values.defaults.llm.engine | default "" | quote }}
+            {{- /*
               Install-wide default FAST (router) tier — every newly onboarded
               tenant routes its high-volume supervisor loop to this backend
               (e.g. a self-hosted Qwen on Modal/sglang) while the reasoning

@@ -264,10 +264,11 @@ def roles_for_config(
         provider = tier.get("provider") or cfg.llm_provider
         base_url = tier.get("base_url") or cfg.llm_base_url
         model = tier.get("model") or fallback_model
-        # Only tiers carry an engine; the primary config has no equivalent
-        # field, so a single-provider self-hosted tenant still resolves by
-        # host and stays openai_compatible.
-        engine = tier.get("engine")
+        # The primary config carries an engine too now (#142, Codex round 13):
+        # without it a single-provider self-hosted tenant resolved by host and
+        # stayed openai_compatible, missing its own self_hosted price. A tier's
+        # engine still wins, since it describes that tier's own backend.
+        engine = tier.get("engine") or getattr(cfg, "llm_engine", None)
         if not model:
             continue
         entry = {

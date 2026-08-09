@@ -140,6 +140,14 @@ class TenantOnboard(BaseModel):
         default=None,
         pattern=r"^(openai|anthropic|openai-compatible)$",
     )
+    # Serving engine behind ``llm_base_url`` when it is one SocTalk prices
+    # separately. Omitted = a hosted vendor or a generic gateway; the install
+    # default (SOCTALK_LLM_ENGINE_DEFAULT) applies when this and the provider
+    # are both omitted.
+    llm_engine: str | None = Field(
+        default=None,
+        pattern=r"^(frontier|openai_compatible|vllm|sglang)$",
+    )
     # External SIEM connection — only meaningful for the ``provided`` profile.
     # Required for ``provided`` (enforced server-side with a 422 in
     # :func:`_validate_external_siem`); ignored entirely for poc/persistent so
@@ -370,6 +378,7 @@ async def onboard_tenant(
     # sk-ant- onboard never renders SOCTALK_FAST_MODEL=gpt-4o on the
     # runs-worker. The raw key is NEVER logged or echoed in any response.
     llm_provider = payload.llm_provider  # already normalized by the validator
+    llm_engine = payload.llm_engine
     llm_model: str = payload.llm_model
     llm_base_url: str = payload.llm_base_url
     # Optional per-tenant overrides (blank already normalized to None by the
@@ -411,6 +420,14 @@ async def onboard_tenant(
                 env_base_url = os.getenv("SOCTALK_LLM_BASE_URL_DEFAULT", "").strip()
                 if env_base_url:
                     llm_base_url = env_base_url
+            # The engine rides with the endpoint it describes. Without it the
+            # tenant stores a self-hosted backend that its own price gate
+            # classifies as a generic gateway, so the model is called and never
+            # priced (#142, Codex round 13).
+            if llm_engine is None:
+                env_engine = os.getenv("SOCTALK_LLM_ENGINE_DEFAULT", "").strip()
+                if env_engine:
+                    llm_engine = env_engine
     if llm_provider is not None:
         llm_model = reconcile_provider_model(llm_provider, llm_model) or llm_model
         # Keep the endpoint consistent with the resolved provider. The env
@@ -442,6 +459,8 @@ async def onboard_tenant(
         llm_kwargs["llm_fast_model"] = llm_fast_model
     if llm_reasoning_model is not None:
         llm_kwargs["llm_reasoning_model"] = llm_reasoning_model
+    if llm_engine is not None:
+        llm_kwargs["llm_engine"] = llm_engine
     # Install-wide default per-tier backend (issue #4/#12): when the install
     # configures a default FAST tier (SOCTALK_DEFAULT_FAST_TIER_* env) and the
     # onboard didn't specify its own tiers, every new tenant's router loop runs
