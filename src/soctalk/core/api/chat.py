@@ -638,24 +638,37 @@ async def post_message(
                 )
             except Exception:  # noqa: BLE001
                 summary = None
+
+        # Resolved INSIDE the session block: for an MSSP tenant-scoped chat the
+        # prelude session is committed and closing by the time control leaves,
+        # so reading policy afterwards silently fell back to "on" (Codex round
+        # 7, P2).
+        #
+        # A tenant conversation honours its tenant's switch. A fleet
+        # conversation spans tenants and has no single policy to read, so it
+        # takes the INSTALL default — which still respects
+        # SOCTALK_COST_TRACKING=off rather than ignoring it outright.
+        from soctalk.core.ir.policies import (
+            cost_tracking_install_default,
+            resolve_cost_tracking,
+        )
+
+        cost_tracking = cost_tracking_install_default()
+        _ct_tenant = conv.get("tenant_id")
+        if _ct_tenant:
+            try:
+                cost_tracking = await resolve_cost_tracking(
+                    db, UUID(str(_ct_tenant))
+                )
+            except Exception:  # noqa: BLE001 - policy must not break chat
+                cost_tracking = cost_tracking_install_default()
+
     # Prelude session has committed (MSSP) / will be committed by
     # middleware (tenant). Stream session below opens fresh.
 
     # Capture pre-stream context (the agent only needs values, not the
     # request session itself — by the time _stream() runs the
     # middleware has already committed and the session is closing).
-    from soctalk.core.ir.policies import resolve_cost_tracking
-
-    # Tenant-scoped conversations honour the tenant's switch; a fleet
-    # conversation spans tenants, so it keeps accounting on.
-    cost_tracking = True
-    _ct_tenant = conv.get("tenant_id")
-    if _ct_tenant:
-        try:
-            cost_tracking = await resolve_cost_tracking(db, UUID(str(_ct_tenant)))
-        except Exception:  # noqa: BLE001 - a policy read must not break chat
-            cost_tracking = True
-
     ctx = TurnContext(
         conversation_id=conv_uuid,
         tenant_id=tenant_id,

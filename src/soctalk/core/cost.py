@@ -393,6 +393,13 @@ class MsspUserDailySpend:
 
     @property
     def dollar_cap_hit(self) -> bool:
+        # Fleet chat spans tenants, so there is no tenant policy to read — but
+        # an install that has switched dollar accounting off means it here too,
+        # and this was the last path still enforcing through it (Codex round 7).
+        from soctalk.core.ir.policies import cost_tracking_install_default
+
+        if not cost_tracking_install_default():
+            return False
         return self.dollars >= mssp_user_daily_dollar_cap()
 
     @property

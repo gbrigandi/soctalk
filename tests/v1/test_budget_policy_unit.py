@@ -902,3 +902,22 @@ def test_tokens_still_cap_when_cost_tracking_is_off():
     )
     assert st.token_cap_hit is True
     assert st.cap_hit is True
+
+
+def test_fleet_daily_cap_honours_the_install_switch(monkeypatch):
+    """Fleet chat has no tenant policy, but an install-wide off still means off.
+
+    It was the last path enforcing dollars through the switch (Codex round 7).
+    """
+    from soctalk.core.cost import MsspUserDailySpend
+
+    monkeypatch.delenv("SOCTALK_COST_TRACKING", raising=False)
+    monkeypatch.delenv("SOCTALK_UNKNOWN_MODEL_COST", raising=False)
+    huge = MsspUserDailySpend(tokens=0, dollars=10**6)
+    assert huge.dollar_cap_hit is True
+
+    monkeypatch.setenv("SOCTALK_COST_TRACKING", "off")
+    assert huge.dollar_cap_hit is False
+    # Tokens are unaffected: they are counted, not inferred.
+    tokens_over = MsspUserDailySpend(tokens=10**12, dollars=0.0)
+    assert tokens_over.token_cap_hit is True
