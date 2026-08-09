@@ -363,6 +363,11 @@ _RESERVED_SQL = """
           SELECT run_id, SUM(dollars_delta) AS unpriced
             FROM llm_spend_ledger
            WHERE price_source = 'unknown'
+             -- Scoped to the tenant as defence in depth. Run IDs are globally
+             -- unique so this is not load-bearing today, but it keeps the
+             -- subquery from scanning other tenants' rows on a BYPASSRLS
+             -- session (Codex review of phases 4-5, round 4).
+             AND tenant_id = :t
            GROUP BY run_id
       ) u ON u.run_id = r.id
      WHERE r.tenant_id = :t
