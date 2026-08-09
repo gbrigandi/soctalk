@@ -812,3 +812,37 @@ def test_only_a_genuine_fallback_is_unknown(monkeypatch):
     assert st["price_source"] == "unknown"
     assert st["dollars_unpriced"] == st["dollars_used"] > 0
     assert budget.enforceable_dollars(st) == 0.0
+
+
+# --- Codex round 2: the residual row must not inherit 'unknown' -------------
+
+
+def _residual_source(price_source: str | None, d_unpriced: float) -> str | None:
+    """Mirror of the label chosen for the priced remainder in
+    ``_record_spend_delta``. Kept as a pure function so the rule can be pinned
+    without a database."""
+    return "mixed" if price_source == "unknown" and d_unpriced > 0.0 else price_source
+
+
+def test_priced_remainder_is_not_labelled_unknown():
+    """A window of catalog $1 then unpriced $9, with no heartbeat between.
+
+    The unpriced $9 splits off as its own row. What remains is $1 of genuinely
+    priced spend — but the report's price_source is 'unknown', because that is
+    what the LAST call used. Inheriting it would exempt the $1 from the daily
+    ceiling too, under-enforcing by the priced amount (Codex round 2, P0).
+    """
+    assert _residual_source("unknown", 9.0) == "mixed"
+    # And 'mixed' must not be excluded by the daily-cap rule, which keys on
+    # 'unknown' exactly.
+    assert _residual_source("unknown", 9.0) != "unknown"
+
+
+def test_a_wholly_unpriced_window_keeps_its_label():
+    """Nothing was split off, so there is no priced remainder to protect."""
+    assert _residual_source("unknown", 0.0) == "unknown"
+
+
+def test_a_priced_window_is_untouched():
+    assert _residual_source("catalog", 0.0) == "catalog"
+    assert _residual_source("builtin", 0.0) == "builtin"

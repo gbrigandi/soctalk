@@ -528,6 +528,7 @@ async def claim_run(request: Request) -> ClaimedRun | ClaimDenied | None:
         tokens_used=row["tokens_used"],
         tokens_budget=row["tokens_budget"],
         dollars_used=float(row["dollars_used"] or 0.0),
+        dollars_unpriced=float(row["dollars_unpriced"] or 0.0),
         dollars_budget=float(row["dollars_budget"] or 0.0),
         lease_id=lease_id,
         lease_expires_at=lease_expires,
@@ -623,7 +624,9 @@ async def _record_spend_delta(
                     "t": str(tenant_id),
                     "r": str(run_id),
                     "dd": d_unpriced,
-                    "cb": cost_basis,
+                    # A fallback figure is never provider-reported, whatever the
+                    # last call in the window was (Codex round 2, P2).
+                    "cb": "estimated",
                 },
             )
             d_dollars = max(0.0, d_dollars - d_unpriced)
@@ -645,7 +648,12 @@ async def _record_spend_delta(
                 # provenance" is the truth for those rows, and inventing
                 # "estimated" would be the error these columns exist to expose.
                 "cb": cost_basis,
-                "ps": price_source,
+                # This row is what is LEFT after the unpriced portion was split
+                # out, so it is priced by construction. Inheriting 'unknown'
+                # from whichever call happened to be last would have exempted
+                # genuinely priced dollars from the ceiling (Codex round 2, P0).
+                "ps": ("mixed" if price_source == "unknown" and d_unpriced > 0.0
+                       else price_source),
             },
         )
     except Exception as exc:  # noqa: BLE001

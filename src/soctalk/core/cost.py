@@ -244,12 +244,12 @@ _DAILY_SPEND_SQL = """
 # consulted when someone is looking at the figures.
 _SPEND_PROVENANCE_SQL = """
     SELECT CASE
-             WHEN cost_basis = 'provider_reported' THEN 'provider_reported'
-             -- Unpriced spend is an ESTIMATE too, so grouping on cost_basis
-             -- alone merged it with catalog-priced estimates and hid the
-             -- exempt portion the operator most needs to see (Codex review,
-             -- phases 1-2, P2).
+             -- Unpriced FIRST. A row can carry cost_basis='provider_reported'
+             -- inherited from another call in the same window, and bucketing on
+             -- that would file exempt fallback dollars as billed-by-provider —
+             -- the opposite of what this breakdown is for (Codex round 2, P2).
              WHEN price_source = 'unknown'         THEN 'unpriced'
+             WHEN cost_basis = 'provider_reported' THEN 'provider_reported''
              WHEN cost_basis IS NULL               THEN 'unknown_provenance'
              ELSE cost_basis
            END                                      AS basis,

@@ -791,6 +791,9 @@ async def run_turn(
     total_tokens_in = 0
     total_tokens_out = 0
     total_turn_dollars = 0.0
+    # What the budget check may act on: total minus spend priced by guesswork
+    # (#124). Kept apart from total_turn_dollars, which is what gets recorded.
+    total_turn_enforceable = 0.0
     iterations = 0
     stop_reason = "end_turn"
     # Hoisted above the loop: the model calls propose_action on one iteration
@@ -839,10 +842,15 @@ async def run_turn(
             # which gates the worker's claim loop too — so an unpriced chat
             # session could stop triage (Codex review, phases 1-2, P1).
             #
-            # The full amount is still recorded on the message row, so nothing
-            # is hidden; it just does not get to close a ceiling.
-            turn_dollars_this_call = token_budget.enforceable_dollars(state)
-            total_turn_dollars += turn_dollars_this_call
+            # Two accumulators, because they answer different questions. The
+            # message row and the conversation total must show what was ACTUALLY
+            # spent — an operator reading a bill wants the money, not the
+            # enforceable subset — while the budget check may only act on spend
+            # it can attribute. Collapsing them into one figure understated the
+            # recorded cost, which my first attempt did (Codex round 2, P1).
+            total_turn_dollars += float(state["dollars_used"])
+            total_turn_enforceable += token_budget.enforceable_dollars(state)
+            turn_dollars_this_call = float(state["dollars_used"])
 
             # Anthropic-via-LangChain returns ``response.content`` as
             # *either* a plain string (text-only turn) or a list of
@@ -940,7 +948,7 @@ async def run_turn(
                 break
 
             # Budget check between iterations.
-            if ctx.total_dollars + total_turn_dollars >= ctx.budget_dollars:
+            if ctx.total_dollars + total_turn_enforceable >= ctx.budget_dollars:
                 stop_reason = "budget_exhausted"
                 break
 
