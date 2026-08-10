@@ -1794,6 +1794,59 @@ async def test_patch_llm_anthropic_served_engine_rejected(
     assert "not valid with provider 'anthropic'" in str(exc_info.value.detail)
 
 
+async def test_patch_llm_tier_served_engine_hosted_openai_base_url_rejected(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """A tier PATCH must not persist a served engine on hosted OpenAI.
+
+    That persisted JSONB would render SOCTALK_FAST_BASE_URL +
+    SOCTALK_FAST_ENGINE and make the tenant worker fail load_config().
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    tenant_id = tenant.id
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_tenant_llm(
+            tenant.id,
+            LlmConfigUpdate(
+                tiers={
+                    "fast": {
+                        "provider": "openai-compatible",
+                        "base_url": "https://api.openai.com/v1",
+                        "model": "qwen3-32b",
+                        "engine": "sglang",
+                    }
+                }
+            ),
+            FakeRequest(),
+        )
+    assert exc_info.value.status_code == 422
+    assert "requires a custom base_url" in str(exc_info.value.detail)
+
+    await mssp_session.rollback()
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one()
+    assert cfg.llm_tiers is None
+    assert await _llm_jobs_by_kind(mssp_session, tenant_id) == {}
+
+
 # ---------------------------------------------------------------------------
 # Onboard-time per-tenant model overrides (tenant.llm.models.onboard-api)
 # ---------------------------------------------------------------------------

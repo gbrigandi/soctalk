@@ -259,15 +259,18 @@ async def _build_install_helm_release_spec(
     except ValueError as exc:
         raise HTTPException(422, f"invalid tenant LLM config: {exc}") from exc
 
-    values = render_tenant_values(
-        tenant=tenant,
-        integration=integration,
-        branding=branding,
-        mssp_id=str(organization.mssp_id),
-        install_id=str(organization.install_id),
-        llm_secret_name=llm_secret_name,
-        profile=tenant.profile,  # 'poc' | 'persistent' | 'legacy'
-    )
+    try:
+        values = render_tenant_values(
+            tenant=tenant,
+            integration=integration,
+            branding=branding,
+            mssp_id=str(organization.mssp_id),
+            install_id=str(organization.install_id),
+            llm_secret_name=llm_secret_name,
+            profile=tenant.profile,  # 'poc' | 'persistent' | 'legacy'
+        )
+    except ValueError as exc:
+        raise HTTPException(422, f"invalid tenant LLM config: {exc}") from exc
 
     # Cross-cluster: tell the adapter how to reach L1 + pass its JWT.
     # Chart-side TODO: consume these values and materialize a Secret

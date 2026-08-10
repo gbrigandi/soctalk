@@ -245,6 +245,16 @@ def test_served_engine_with_base_url_ok(clean_env):
     assert cfg.tiers["router"]["engine"] == "sglang"
 
 
+def test_served_engine_with_whitespace_padded_custom_base_url_ok(clean_env):
+    cfg = clean_env(
+        SOCTALK_FAST_ENGINE="sglang",
+        SOCTALK_FAST_PROVIDER="openai",
+        SOCTALK_FAST_BASE_URL=" http://sglang:8000/v1 ",
+        ANTHROPIC_API_KEY="a",
+    )
+    assert cfg.tiers["router"]["base_url"] == "http://sglang:8000/v1"
+
+
 def test_served_engine_accepts_global_openai_base_url(clean_env):
     # A served tier can reuse the global OPENAI_BASE_URL the resolver inherits —
     # no per-tier base_url required (Codex #4 review).
@@ -253,12 +263,21 @@ def test_served_engine_accepts_global_openai_base_url(clean_env):
     assert cfg.tiers["router"]["engine"] == "vllm"
 
 
-def test_primary_served_engine_rejects_openai_sentinel_base_url(clean_env):
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        OPENAI_SENTINEL_BASE_URL,
+        " https://api.openai.com/v1 ",
+        "https://api.openai.com/v1/",
+        "https://api.openai.com:443/v1",
+    ),
+)
+def test_primary_served_engine_rejects_hosted_openai_base_url(clean_env, base_url):
     with pytest.raises(ValueError, match="requires OPENAI_BASE_URL"):
         clean_env(
             SOCTALK_LLM_PROVIDER="openai",
             SOCTALK_LLM_ENGINE="sglang",
-            OPENAI_BASE_URL=OPENAI_SENTINEL_BASE_URL,
+            OPENAI_BASE_URL=base_url,
             OPENAI_API_KEY="o",
         )
 

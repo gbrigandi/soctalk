@@ -8,11 +8,14 @@ provider↔model consistency rules that previously lived in two places —
 (onboard + PATCH /llm) and the provisioning controller import from here so
 the two cannot drift.
 
-No soctalk imports — this module must stay dependency-free to avoid
-circular imports between ``core.api`` and ``core.provisioning``.
+Keep any heavier soctalk imports lazy: ``core.tenancy.models`` imports this
+module, while the pricing classifier imports tenancy models for its runtime
+paths. A top-level import would create a cycle.
 """
 
 from __future__ import annotations
+
+from urllib.parse import urlparse
 
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6"
 OPENAI_DEFAULT_MODEL = "gpt-4o"
@@ -33,9 +36,25 @@ DEFAULT_PROVIDER = "openai-compatible"
 
 
 def has_usable_served_base_url(base_url: str | None) -> bool:
-    """Return true only for a non-empty custom served-engine endpoint."""
+    """Return true only for a non-empty custom served-engine endpoint.
+
+    Hosted first-party vendor authorities are not usable for vLLM/SGLang: the
+    request would still go to the vendor API while pricing calls it self-hosted.
+    Reuse pricing's authority classifier so the hosted-OpenAI decision has one
+    definition across runtime validation and cost classification.
+    """
     normalized = (base_url or "").strip()
-    return bool(normalized) and normalized != OPENAI_SENTINEL_BASE_URL
+    if not normalized:
+        return False
+    if not urlparse(normalized).hostname:
+        return False
+
+    from soctalk.core.pricing.resolve import provider_kind_for
+
+    return provider_kind_for(DEFAULT_PROVIDER, normalized) not in {
+        "openai",
+        "anthropic",
+    }
 
 
 def normalize_provider(provider: str | None) -> str | None:

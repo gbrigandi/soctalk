@@ -344,15 +344,24 @@ class LLMTierConfig(BaseModel):
             raise ValueError("must be a number, not a boolean")
         return v
 
+    @field_validator("engine", mode="before")
+    @classmethod
+    def _normalize_engine(cls, v: str | None) -> str | None:
+        return normalize_llm_engine(v)
+
+    @field_validator("base_url")
+    @classmethod
+    def _trim_base_url(cls, v: str) -> str:
+        return v.strip()
+
     @model_validator(mode="after")
     def _check_combo(self) -> LLMTierConfig:
         # Match the env resolver's rules so the UI can't persist a combo the
         # runtime would reject (or silently mishandle) at call time.
         if not self.base_url.startswith(("http://", "https://")):
             raise ValueError("base_url must start with http:// or https://")
-        served = {"openai_compatible", "vllm", "sglang"}
         if self.provider == "anthropic":
-            if self.engine in served:
+            if self.engine in SERVED_ENGINES:
                 raise ValueError(f"engine {self.engine!r} is OpenAI-compatible; "
                                  "not valid with provider 'anthropic'")
             # Anthropic has no JSON-mode response_format, so json_object can't be
@@ -371,6 +380,13 @@ class LLMTierConfig(BaseModel):
                 self.engine not in ("vllm", "sglang"):
             raise ValueError(f"decoding_mode {self.decoding_mode!r} needs a served "
                              f"engine (vllm/sglang), not {self.engine or 'unset'!r}")
+        if self.engine in SERVED_ENGINES and not has_usable_served_base_url(
+            self.base_url
+        ):
+            raise ValueError(
+                f"engine {self.engine!r} requires a custom base_url; hosted "
+                "vendor API endpoints are not valid served/gateway backends"
+            )
         return self
 
 

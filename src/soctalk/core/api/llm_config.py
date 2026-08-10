@@ -284,9 +284,12 @@ class LlmConfigUpdate(BaseModel):
     @field_validator("base_url")
     @classmethod
     def _validate_url(cls, v):
-        if v is not None and not v.startswith(("http://", "https://")):
+        if v is None:
+            return v
+        normalized = v.strip()
+        if not normalized.startswith(("http://", "https://")):
             raise ValueError("base_url must start with http(s)://")
-        return v
+        return normalized
 
     @field_validator("engine")
     @classmethod

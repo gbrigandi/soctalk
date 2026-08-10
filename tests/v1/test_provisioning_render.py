@@ -264,6 +264,73 @@ def test_tenant_chart_schema_rejects_anthropic_primary_served_engine():
         jsonschema.validate(instance=v, schema=_tenant_values_schema())
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        OPENAI_SENTINEL_BASE_URL,
+        " https://api.openai.com/v1 ",
+        "https://api.openai.com/v1/",
+        "https://api.openai.com:443/v1",
+    ),
+)
+def test_tenant_chart_schema_rejects_primary_served_engine_hosted_openai_base_url(
+    base_url: str,
+):
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    v["llm"]["baseUrl"] = base_url
+    v["llm"]["engine"] = "sglang"
+
+    jsonschema = pytest.importorskip("jsonschema")
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=v, schema=_tenant_values_schema())
+
+
+@pytest.mark.parametrize("tier", ("fast", "reasoning"))
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        OPENAI_SENTINEL_BASE_URL,
+        " https://api.openai.com/v1 ",
+        "https://api.openai.com/v1/",
+        "https://api.openai.com:443/v1",
+    ),
+)
+def test_tenant_chart_schema_rejects_tier_served_engine_hosted_openai_base_url(
+    tier: str, base_url: str,
+):
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    v["llm"]["tiers"] = {
+        tier: {
+            "provider": "openai",
+            "baseUrl": base_url,
+            "model": "qwen3-32b",
+            "engine": "sglang",
+        }
+    }
+
+    jsonschema = pytest.importorskip("jsonschema")
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=v, schema=_tenant_values_schema())
+
+
 def test_system_chart_schema_rejects_contradictory_llm_defaults():
     jsonschema = pytest.importorskip("jsonschema")
     for engine in ("openai_compatible", "vllm", "sglang"):
@@ -282,7 +349,17 @@ def test_system_chart_schema_rejects_contradictory_llm_defaults():
 
 
 @pytest.mark.parametrize("engine", ("openai_compatible", "vllm", "sglang"))
-@pytest.mark.parametrize("base_url", (None, "", OPENAI_SENTINEL_BASE_URL))
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        None,
+        "",
+        OPENAI_SENTINEL_BASE_URL,
+        " https://api.openai.com/v1 ",
+        "https://api.openai.com/v1/",
+        "https://api.openai.com:443/v1",
+    ),
+)
 def test_system_chart_schema_rejects_served_engine_without_custom_base_url(
     engine: str, base_url: str | None
 ):
@@ -293,6 +370,35 @@ def test_system_chart_schema_rejects_served_engine_without_custom_base_url(
         values["defaults"]["llm"].pop("baseUrl", None)
     else:
         values["defaults"]["llm"]["baseUrl"] = base_url
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=values, schema=_system_values_schema())
+
+
+@pytest.mark.parametrize("engine", ("openai_compatible", "vllm", "sglang"))
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        None,
+        "",
+        OPENAI_SENTINEL_BASE_URL,
+        " https://api.openai.com/v1 ",
+        "https://api.openai.com/v1/",
+        "https://api.openai.com:443/v1",
+    ),
+)
+def test_system_chart_schema_rejects_default_fast_tier_served_engine_hosted_base_url(
+    engine: str, base_url: str | None
+):
+    jsonschema = pytest.importorskip("jsonschema")
+    values = _system_default_values()
+    values["defaults"]["llm"]["fastTier"] = {
+        "provider": "openai-compatible",
+        "model": "qwen3-32b",
+        "engine": engine,
+    }
+    if base_url is not None:
+        values["defaults"]["llm"]["fastTier"]["baseUrl"] = base_url
 
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(instance=values, schema=_system_values_schema())
@@ -318,6 +424,16 @@ def test_system_chart_schema_rejects_served_engine_without_custom_base_url(
                 "model": "gpt-4o",
             },
             ("engine",),
+        ),
+        (
+            "gateway engine custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "https://llm-gateway.example/v1",
+                "model": "qwen3-32b",
+                "engine": "openai_compatible",
+            },
+            (),
         ),
         (
             "anthropic provider no base URL",
@@ -354,6 +470,16 @@ def test_system_chart_schema_rejects_served_engine_without_custom_base_url(
             },
             (),
         ),
+        (
+            "served engine whitespace custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": " http://sglang.internal:8000/v1 ",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+            (),
+        ),
     ],
 )
 def test_system_chart_schema_accepts_legitimate_llm_default_shapes(
@@ -369,6 +495,262 @@ def test_system_chart_schema_accepts_legitimate_llm_default_shapes(
         jsonschema.validate(instance=values, schema=_system_values_schema())
     except jsonschema.ValidationError as exc:
         pytest.fail(f"{label} should validate: {exc.message}")
+
+
+@pytest.mark.parametrize(
+    "label,fast_tier",
+    [
+        (
+            "hosted default no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+            },
+        ),
+        (
+            "gateway engine custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "https://llm-gateway.example/v1",
+                "model": "qwen3-32b",
+                "engine": "openai_compatible",
+            },
+        ),
+        (
+            "anthropic no engine",
+            {
+                "provider": "anthropic",
+                "baseUrl": "https://api.anthropic.com",
+                "model": "claude-sonnet-4-6",
+            },
+        ),
+        (
+            "frontier engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "frontier",
+            },
+        ),
+        (
+            "empty engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "",
+            },
+        ),
+        (
+            "served engine custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "http://sglang.internal:8000/v1",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+        ),
+        (
+            "served engine whitespace custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": " http://sglang.internal:8000/v1 ",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+        ),
+    ],
+)
+def test_system_chart_schema_accepts_legitimate_default_fast_tier_shapes(
+    label: str, fast_tier: dict,
+):
+    jsonschema = pytest.importorskip("jsonschema")
+    values = _system_default_values()
+    values["defaults"]["llm"]["fastTier"] = fast_tier
+
+    try:
+        jsonschema.validate(instance=values, schema=_system_values_schema())
+    except jsonschema.ValidationError as exc:
+        pytest.fail(f"{label} should validate: {exc.message}")
+
+
+@pytest.mark.parametrize(
+    "label,llm_patch",
+    [
+        (
+            "hosted default no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+            },
+        ),
+        (
+            "gateway engine custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "https://llm-gateway.example/v1",
+                "model": "qwen3-32b",
+                "engine": "openai_compatible",
+            },
+        ),
+        (
+            "anthropic no engine",
+            {
+                "provider": "anthropic",
+                "baseUrl": "https://api.anthropic.com",
+                "model": "claude-sonnet-4-6",
+            },
+        ),
+        (
+            "frontier engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "frontier",
+            },
+        ),
+        (
+            "empty engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "",
+            },
+        ),
+        (
+            "served engine custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "http://sglang.internal:8000/v1",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+        ),
+        (
+            "served engine whitespace custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": " http://sglang.internal:8000/v1 ",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+        ),
+    ],
+)
+def test_tenant_chart_schema_accepts_legitimate_primary_llm_shapes(
+    label: str, llm_patch: dict,
+):
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    v["llm"].update(llm_patch)
+
+    jsonschema = pytest.importorskip("jsonschema")
+    try:
+        jsonschema.validate(instance=v, schema=_tenant_values_schema())
+    except jsonschema.ValidationError as exc:
+        pytest.fail(f"{label} should validate: {exc.message}")
+
+
+@pytest.mark.parametrize("tier", ("fast", "reasoning"))
+@pytest.mark.parametrize(
+    "label,tier_block",
+    [
+        (
+            "hosted default no engine",
+            {
+                "provider": "openai",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+            },
+        ),
+        (
+            "gateway engine custom base URL",
+            {
+                "provider": "openai",
+                "baseUrl": "https://llm-gateway.example/v1",
+                "model": "qwen3-32b",
+                "engine": "openai_compatible",
+            },
+        ),
+        (
+            "anthropic no engine",
+            {
+                "provider": "anthropic",
+                "baseUrl": "https://api.anthropic.com",
+                "model": "claude-sonnet-4-6",
+            },
+        ),
+        (
+            "frontier engine",
+            {
+                "provider": "openai",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "frontier",
+            },
+        ),
+        (
+            "empty engine",
+            {
+                "provider": "openai",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "",
+            },
+        ),
+        (
+            "served engine custom base URL",
+            {
+                "provider": "openai",
+                "baseUrl": "http://sglang.internal:8000/v1",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+        ),
+        (
+            "served engine whitespace custom base URL",
+            {
+                "provider": "openai",
+                "baseUrl": " http://sglang.internal:8000/v1 ",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+        ),
+    ],
+)
+def test_tenant_chart_schema_accepts_legitimate_tier_llm_shapes(
+    tier: str, label: str, tier_block: dict,
+):
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    v["llm"]["tiers"] = {tier: tier_block}
+
+    jsonschema = pytest.importorskip("jsonschema")
+    try:
+        jsonschema.validate(instance=v, schema=_tenant_values_schema())
+    except jsonschema.ValidationError as exc:
+        pytest.fail(f"{tier} {label} should validate: {exc.message}")
 
 
 def test_render_provided_profile():

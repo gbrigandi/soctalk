@@ -270,7 +270,7 @@ spec:
                   default-OpenAI ``baseUrl`` doesn't redirect Claude
                   calls to OpenAI's API.
             */}}
-            {{- $bu := .Values.llm.baseUrl | default "" }}
+            {{- $bu := .Values.llm.baseUrl | default "" | trim }}
             {{- if eq $prov "openai" }}
             - name: OPENAI_API_KEY
               valueFrom:

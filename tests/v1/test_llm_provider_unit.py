@@ -9,6 +9,7 @@ the runs-worker egress NetworkPolicy opens the host the client actually calls).
 from soctalk.core.llm_provider import (
     ANTHROPIC_DEFAULT_BASE_URL,
     OPENAI_SENTINEL_BASE_URL,
+    has_usable_served_base_url,
     infer_provider_from_key,
     reconcile_provider_base_url,
     reconcile_provider_model,
@@ -59,3 +60,32 @@ def test_non_ant_key_keeps_openai_compatible_and_endpoint():
         reconcile_provider_base_url(provider, OPENAI_SENTINEL_BASE_URL)
         == OPENAI_SENTINEL_BASE_URL
     )
+
+
+def test_served_base_url_rejects_hosted_openai_equivalent_urls():
+    # Same hosted authority as the sentinel, despite path slash / explicit port
+    # / surrounding whitespace. A served engine would still call OpenAI here.
+    for url in (
+        " https://api.openai.com/v1 ",
+        "https://api.openai.com/v1/",
+        "https://api.openai.com:443/v1",
+    ):
+        assert has_usable_served_base_url(url) is False
+
+
+def test_served_base_url_rejects_other_first_party_vendor_authority():
+    assert has_usable_served_base_url("https://api.anthropic.com") is False
+
+
+def test_served_base_url_rejects_values_without_url_authority():
+    for url in ("api.openai.com/v1", "/v1"):
+        assert has_usable_served_base_url(url) is False
+
+
+def test_served_base_url_accepts_genuine_custom_and_gateway_authorities():
+    for url in (
+        " http://sglang.internal:8000/v1 ",
+        "https://api.openai.com.evil.example/v1",
+        "https://openrouter.ai/api/v1",
+    ):
+        assert has_usable_served_base_url(url) is True

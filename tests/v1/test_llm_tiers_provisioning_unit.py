@@ -82,6 +82,22 @@ def test_install_default_fast_tier_from_env(monkeypatch):
     assert _install_default_llm_tiers() is None
 
 
+def test_install_default_fast_tier_rejects_hosted_openai_served_engine(monkeypatch):
+    from soctalk.core.api.tenants import _install_default_llm_tiers
+
+    for k in ("PROVIDER", "BASE_URL", "MODEL", "ENGINE", "DECODING_MODE", "API_KEY"):
+        monkeypatch.delenv(f"SOCTALK_DEFAULT_FAST_TIER_{k}", raising=False)
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_PROVIDER", "openai-compatible")
+    monkeypatch.setenv(
+        "SOCTALK_DEFAULT_FAST_TIER_BASE_URL", " https://api.openai.com/v1 "
+    )
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_MODEL", "Qwen/Qwen3-32B")
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_ENGINE", "sglang")
+
+    with pytest.raises(ValueError, match="requires a custom base_url"):
+        _install_default_llm_tiers()
+
+
 def test_validate_llm_tiers_ok_normalizes():
     out = validate_llm_tiers({"fast": _FAST})
     assert out["fast"]["provider"] == "openai-compatible"
@@ -91,6 +107,8 @@ def test_validate_llm_tiers_ok_normalizes():
                                              "base_url": "https://api.anthropic.com",
                                              "model": "claude-sonnet-4-6"}})
     assert "engine" not in out2["reasoning"]
+    out3 = validate_llm_tiers({"fast": {**_FAST, "engine": ""}})
+    assert "engine" not in out3["fast"]
 
 
 def test_validate_llm_tiers_none_and_empty():
@@ -162,6 +180,24 @@ def test_validate_llm_tiers_guided_requires_served_engine():
 def test_validate_llm_tiers_bad_base_url_rejected():
     with pytest.raises(ValueError, match="http"):
         validate_llm_tiers({"fast": {**_FAST, "base_url": "sglang.internal:8000"}})
+
+
+def test_validate_llm_tiers_rejects_served_engine_hosted_openai_base_url():
+    for base_url in (
+        "https://api.openai.com/v1",
+        " https://api.openai.com/v1 ",
+        "https://api.openai.com/v1/",
+        "https://api.openai.com:443/v1",
+    ):
+        with pytest.raises(ValueError, match="requires a custom base_url"):
+            validate_llm_tiers({"fast": {**_FAST, "base_url": base_url}})
+
+
+def test_validate_llm_tiers_accepts_served_engine_whitespace_custom_base_url():
+    out = validate_llm_tiers(
+        {"fast": {**_FAST, "base_url": " http://sglang.internal:8000/v1 "}}
+    )
+    assert out["fast"]["base_url"] == "http://sglang.internal:8000/v1"
 
 
 def test_validate_llm_tiers_error_never_leaks_key():
@@ -239,6 +275,24 @@ def test_hybrid_render_tiers_and_ports():
     assert v["llm"]["tierKeys"]["fast"] == "sk-served"
     # sglang :8000 is distinct from the primary anthropic :443 → port union.
     assert v["networkPolicies"]["extraLlmEgressPorts"] == [8000]
+
+
+def test_render_rejects_bad_stored_tier_served_engine_hosted_openai_base_url():
+    # Simulates a historical/manual JSONB write that bypassed LLMTierConfig.
+    integ = _integration(
+        uuid4(),
+        llm_tiers={
+            "fast": {
+                "provider": "openai-compatible",
+                "base_url": "https://api.openai.com/v1",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="requires a custom base_url"):
+        _render(integ)
 
 
 def test_hybrid_render_emits_decoding_mode():

@@ -344,6 +344,45 @@ async def test_provision_rejects_stored_served_engine_with_sentinel_base_url(
     assert seeded_tenant.state == TenantState.DEGRADED.value
 
 
+async def test_provision_rejects_stored_tier_served_engine_with_hosted_base_url(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm
+):
+    cfg = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_tiers = {
+        "fast": {
+            "provider": "openai-compatible",
+            "base_url": "https://api.openai.com/v1",
+            "model": "qwen3-32b",
+            "engine": "sglang",
+        }
+    }
+    await session.commit()
+
+    controller = TenantController(
+        session,
+        k8s=FakeK8s(),
+        settings=ControllerSettings(
+            wazuh_chart_path="charts/wazuh",
+            readiness_poll_interval_seconds=0.01,
+            readiness_timeout_seconds=5.0,
+        ),
+    )
+
+    with pytest.raises(ProvisionError) as exc_info:
+        await controller.provision(seeded_tenant.id, actor_id="test")
+
+    assert exc_info.value.step == "helm_apply_tenant"
+    assert "requires a custom base_url" in str(exc_info.value)
+    await session.refresh(seeded_tenant)
+    assert seeded_tenant.state == TenantState.DEGRADED.value
+
+
 async def test_provision_resume_after_crash_is_idempotent(
     session: AsyncSession, seeded_tenant: Tenant, patched_helm
 ):

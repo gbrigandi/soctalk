@@ -28,6 +28,7 @@ from soctalk.core.tenancy.models import (
     IntegrationConfig,
     normalize_llm_engine,
     Tenant,
+    validate_llm_tiers,
 )
 
 Profile = Literal["poc", "persistent", "provided", "legacy"]
@@ -224,6 +225,7 @@ def _render_llm_tiers(
     raw = integration.llm_tiers
     if not raw:
         return {}, {}, []
+    raw = validate_llm_tiers(raw) or {}
     from urllib.parse import urlparse
 
     tiers: dict[str, Any] = {}

@@ -268,14 +268,27 @@
                       "vllm",
                       "sglang"
                     ]
-                  },
-                  "baseUrl": {
-                    "enum": [
-                      "",
-                      "https://api.openai.com/v1"
-                    ]
                   }
-                }
+                },
+                "anyOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "baseUrl"
+                      ]
+                    }
+                  },
+                  {
+                    "required": [
+                      "baseUrl"
+                    ],
+                    "properties": {
+                      "baseUrl": {
+                        "pattern": "^\\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\\s]+@)?api\\.(?:openai|anthropic)\\.com(?::[0-9]+)?(?:[/\\?#].*)?)\\s*$"
+                      }
+                    }
+                  }
+                ]
               }
             }
           ],
@@ -292,7 +305,8 @@
             },
             "baseUrl": {
               "type": "string",
-              "format": "uri"
+              "format": "uri",
+              "description": "Install-wide default LLM base URL. For served/gateway engines, the schema rejects common hosted OpenAI/Anthropic API forms after trimming whitespace as a fail-fast approximation; the API/Python invariant is authoritative."
             },
             "model": {
               "type": "string"
@@ -300,7 +314,64 @@
             "fastTier": {
               "type": "object",
               "additionalProperties": false,
-              "description": "Optional install-wide default FAST (router) tier injected into every newly onboarded tenant's llm_tiers (hybrid: router on this backend, reasoning on the primary provider). Consumed by tenants.py::_install_default_llm_tiers. The API key rides an out-of-band Secret via apiKeySecret \u2014 never put it in values.",
+              "description": "Optional install-wide default FAST (router) tier injected into every newly onboarded tenant's llm_tiers (hybrid: router on this backend, reasoning on the primary provider). Consumed by tenants.py::_install_default_llm_tiers. The API key rides an out-of-band Secret via apiKeySecret \u2014 never put it in values. Served/gateway engine baseUrl checks here are pattern-based fail-fast guards; the API/Python invariant is authoritative.",
+              "allOf": [
+                {
+                  "not": {
+                    "required": [
+                      "provider",
+                      "engine"
+                    ],
+                    "properties": {
+                      "provider": {
+                        "const": "anthropic"
+                      },
+                      "engine": {
+                        "enum": [
+                          "openai_compatible",
+                          "vllm",
+                          "sglang"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "engine"
+                    ],
+                    "properties": {
+                      "engine": {
+                        "enum": [
+                          "openai_compatible",
+                          "vllm",
+                          "sglang"
+                        ]
+                      }
+                    },
+                    "anyOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "baseUrl"
+                          ]
+                        }
+                      },
+                      {
+                        "required": [
+                          "baseUrl"
+                        ],
+                        "properties": {
+                          "baseUrl": {
+                            "pattern": "^\\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\\s]+@)?api\\.(?:openai|anthropic)\\.com(?::[0-9]+)?(?:[/\\?#].*)?)\\s*$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
               "properties": {
                 "provider": {
                   "enum": [
@@ -310,13 +381,15 @@
                 },
                 "baseUrl": {
                   "type": "string",
-                  "format": "uri"
+                  "format": "uri",
+                  "description": "FAST tier base URL. For served/gateway engines, the schema rejects common hosted OpenAI/Anthropic API forms after trimming whitespace as a fail-fast approximation; the API/Python invariant is authoritative."
                 },
                 "model": {
                   "type": "string"
                 },
                 "engine": {
                   "enum": [
+                    "",
                     "frontier",
                     "openai_compatible",
                     "vllm",

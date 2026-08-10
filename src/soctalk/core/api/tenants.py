@@ -75,6 +75,11 @@ class TenantCreate(BaseModel):
     branding_primary_color: str | None = None
     branding_secondary_color: str | None = None
 
+    @field_validator("llm_base_url")
+    @classmethod
+    def _trim_llm_base_url(cls, v: str) -> str:
+        return v.strip()
+
 
 class TenantRead(BaseModel):
     id: UUID
@@ -165,6 +170,11 @@ class TenantOnboard(BaseModel):
         # storage must only ever see ``openai-compatible`` / ``anthropic``
         # so chart values.schema.json validation never fails on render.
         return normalize_provider(v)
+
+    @field_validator("llm_base_url")
+    @classmethod
+    def _trim_llm_base_url(cls, v: str) -> str:
+        return v.strip()
 
     @field_validator("llm_engine")
     @classmethod
@@ -523,7 +533,12 @@ async def onboard_tenant(
     # reasoning verdict stays on the primary frontier provider. Injected into the
     # DB llm_tiers so the provisioning controller materializes the tier's own key
     # into tenant-llm-key/fast_api_key.
-    default_tiers = _install_default_llm_tiers()
+    try:
+        default_tiers = _install_default_llm_tiers()
+    except ValueError as exc:
+        raise HTTPException(
+            422, f"invalid install default llm fastTier: {exc}"
+        ) from exc
     if default_tiers is not None:
         llm_kwargs["llm_tiers"] = default_tiers
 
