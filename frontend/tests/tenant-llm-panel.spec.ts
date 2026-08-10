@@ -340,6 +340,22 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		expect(handles.patchCount()).toBe(0);
 	});
 
+	test('clearing the base URL blocks the PATCH with a designed error', async ({ page }) => {
+		// The API's tri-state PATCH rejects "" and treats null as unchanged, so
+		// a cleared field cannot express "no base URL" — without the client-side
+		// gate the raw pydantic 422 reached the operator (#142 matrix finding).
+		const handles = await mockApi(page);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		await page.fill('input[name="base_url"]', '');
+		await page.getByTestId('llm-save').click();
+
+		await expect(page.getByTestId('llm-form-error')).toContainText('cannot be cleared');
+		expect(handles.patchCount()).toBe(0);
+	});
+
 	test('the deprecated dollar-budget control is gone from this panel', async ({ page }) => {
 		// It moved to the run-budget resource (#128). It used to render to worker
 		// env, so changing it needed a rollout and the value never reached the run

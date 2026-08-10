@@ -325,6 +325,14 @@
 			formError = m.ten_llm_err_base_url();
 			return;
 		}
+		// The API's PATCH is tri-state (null = unchanged) and rejects "", so a
+		// cleared field cannot express "no base URL" — without this check the
+		// raw pydantic 422 reached the operator. Hosted defaults are written as
+		// their explicit URL (e.g. https://api.anthropic.com).
+		if (!baseUrl && read?.base_url) {
+			formError = m.ten_llm_err_base_url_clear();
+			return;
+		}
 		// Tenant-global sampling bounds (mirror the backend + chart schema). Both
 		// fields are required — they always carry a value (the read seeds the
 		// current setting), so a blank is an explicit clear with no meaning; treat

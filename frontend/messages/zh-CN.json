@@ -948,6 +948,7 @@
 	"ten_llm_dollar_placeholder": "默认（$5）",
 	"ten_llm_engine": "引擎",
 	"ten_llm_err_base_url": "基础 URL 必须以 http:// 或 https:// 开头",
+	"ten_llm_err_base_url_clear": "基础 URL 不能清空——请输入提供商的完整端点 URL（托管 Anthropic 为 https://api.anthropic.com）",
 	"ten_llm_err_dollar_budget": "美元预算必须至少为 0.10 且不超过 10000",
 	"ten_llm_err_max_tokens_range": "最大 token 数必须是 1 到 8192 之间的整数",
 	"ten_llm_err_max_tokens_required": "最大 token 数为必填项（1–8192）",

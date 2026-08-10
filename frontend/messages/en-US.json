@@ -850,6 +850,7 @@
 	"ten_llm_dollar_placeholder": "default ($5)",
 	"ten_llm_engine": "Engine",
 	"ten_llm_err_base_url": "Base URL must start with http:// or https://",
+	"ten_llm_err_base_url_clear": "The base URL cannot be cleared — enter the provider's full endpoint URL (for hosted Anthropic, https://api.anthropic.com)",
 	"ten_llm_err_dollar_budget": "Dollar budget must be at least 0.10 and at most 10000",
 	"ten_llm_err_max_tokens_range": "Max tokens must be a whole number between 1 and 8192",
 	"ten_llm_err_max_tokens_required": "Max tokens is required (1–8192)",

@@ -850,6 +850,7 @@
 	"ten_llm_dollar_placeholder": "padrão ($5)",
 	"ten_llm_engine": "Engine",
 	"ten_llm_err_base_url": "A URL base deve começar com http:// ou https://",
+	"ten_llm_err_base_url_clear": "A URL base não pode ser apagada — informe a URL completa do endpoint do provedor (para Anthropic hospedado, https://api.anthropic.com)",
 	"ten_llm_err_dollar_budget": "O orçamento em dólares deve ser de no mínimo 0.10 e no máximo 10000",
 	"ten_llm_err_max_tokens_range": "O máximo de tokens deve ser um número inteiro entre 1 e 8192",
 	"ten_llm_err_max_tokens_required": "O máximo de tokens é obrigatório (1–8192)",
