@@ -445,7 +445,22 @@ async def suggest_model_price(
 
     prov = provider if provider is not None else (cfg.llm_provider if cfg else None)
     url = base_url if base_url is not None else (cfg.llm_base_url if cfg else None)
-    eng = engine if engine is not None else (cfg.llm_engine if cfg else None)
+    if engine is not None:
+        eng = engine
+    else:
+        # The form binds ``engine`` from the sanitized read view. Once a raw
+        # hosted-authority engine was inert there, an omitted query param must
+        # not resurrect it while pricing an unsaved base_url edit.
+        stored_effective = (
+            effective_llm_engine(
+                cfg.llm_provider,
+                cfg.llm_engine,
+                cfg.llm_base_url,
+            )
+            if cfg
+            else None
+        )
+        eng = effective_llm_engine(prov, stored_effective, url)
     try:
         engine_norm = normalize_llm_engine(eng)
         check_engine_provider_combo(prov, engine_norm)

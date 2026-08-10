@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -856,7 +856,7 @@ class _FakeAdapterHttpClient:
         self._payload = payload
         self._exc = exc
 
-    async def __aenter__(self) -> "_FakeAdapterHttpClient":
+    async def __aenter__(self) -> _FakeAdapterHttpClient:
         return self
 
     async def __aexit__(self, *_a) -> bool:
@@ -1745,6 +1745,87 @@ async def test_patch_llm_innocuous_edits_ignore_stale_hosted_engine_and_clear(
     assert result.engine_stale is False
     await mssp_session.refresh(cfg)
     assert cfg.llm_engine is None
+
+
+async def test_price_suggestion_uses_effective_stored_engine_when_query_omits_engine(
+    mssp_session: AsyncSession, admin_session: AsyncSession, seeded_org: Organization
+):
+    from soctalk.core.api.llm_config import suggest_model_price
+    from soctalk.core.pricing.catalog import ModelPrice, dimensions_from_dollars
+
+    model = f"round24-{uuid4().hex}"
+    now = datetime.now(UTC)
+    admin_session.add_all(
+        [
+            ModelPrice(
+                provider_kind="openai_compatible",
+                model=model,
+                dimensions=dimensions_from_dollars(12.0, 24.0),
+                provenance="curated",
+                source="gateway-row",
+                as_of=date(2026, 8, 9),
+                created_at=now,
+                updated_at=now,
+            ),
+            ModelPrice(
+                provider_kind="self_hosted",
+                model=model,
+                dimensions=dimensions_from_dollars(0.0, 0.0),
+                provenance="curated",
+                source="self-hosted-row",
+                as_of=date(2026, 8, 9),
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    await admin_session.commit()
+
+    tenant = await _seed_llm_tenant(
+        mssp_session,
+        seeded_org,
+        state=TenantState.ACTIVE.value,
+        llm_base_url="https://openrouter.ai/api/v1",
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_provider = "openai-compatible"
+    cfg.llm_model = model
+    cfg.llm_engine = "sglang"
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    edited_gateway_url = "https://llm-gateway.corp.example/v1"
+    omitted = await suggest_model_price(
+        tenant.id,
+        FakeRequest(),
+        model=model,
+        provider="openai-compatible",
+        base_url=edited_gateway_url,
+    )
+    assert omitted.source == "gateway-row"
+    assert omitted.input_per_mtok == 12.0
+
+    explicit = await suggest_model_price(
+        tenant.id,
+        FakeRequest(),
+        model=model,
+        provider="openai-compatible",
+        base_url=edited_gateway_url,
+        engine="sglang",
+    )
+    assert explicit.source == "self-hosted-row"
+    assert explicit.input_per_mtok == 0.0
 
 
 async def test_patch_llm_unknown_engine_rejected_at_payload_boundary():
