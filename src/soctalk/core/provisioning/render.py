@@ -38,6 +38,8 @@ from soctalk.core.tenancy.models import (
 
 Profile = Literal["poc", "persistent", "provided", "legacy"]
 
+_ENGINE_NATIVE_DECODING_MODES = frozenset({"guided_json", "guided_grammar"})
+
 
 def _profile_tenant_overrides(profile: Profile) -> dict[str, Any]:
     """Layer profile-specific defaults over the shared base values.
@@ -226,7 +228,10 @@ def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[s
         if total + size > _TRIAGE_POLICIES_TOTAL_BUDGET:
             log.error(
                 "tenant_triage_policy_rejected", file=str(path),
-                error=f"per-tenant triage policy budget ({_TRIAGE_POLICIES_TOTAL_BUDGET}B) exceeded",
+                error=(
+                    "per-tenant triage policy budget "
+                    f"({_TRIAGE_POLICIES_TOTAL_BUDGET}B) exceeded"
+                ),
             )
             continue
         total += size
@@ -264,7 +269,34 @@ def _render_llm_tiers(
     raw = integration.llm_tiers
     if not raw:
         return {}, {}, []
-    raw = validate_llm_tiers(raw) or {}
+    renderable_raw: dict[str, Any] = {}
+    for tier_name, block in raw.items():
+        block = dict(block or {})
+        normalized = normalize_llm_engine(block.get("engine"))
+        effective = effective_llm_engine(
+            block.get("provider"), normalized, block.get("base_url")
+        )
+        if normalized in SERVED_ENGINES and effective is None:
+            hosted_kind = hosted_provider_kind_for_base_url(block.get("base_url"))
+            if hosted_kind is not None:
+                import structlog
+
+                structlog.get_logger(__name__).warning(
+                    "tenant_llm_tier_engine_ignored_for_hosted_authority",
+                    tier=tier_name,
+                    provider=block.get("provider"),
+                    engine=normalized,
+                    hosted_provider_kind=hosted_kind,
+                )
+                block.pop("engine", None)
+                if block.get("decoding_mode") in _ENGINE_NATIVE_DECODING_MODES:
+                    block.pop("decoding_mode", None)
+        elif effective is None:
+            block.pop("engine", None)
+        else:
+            block["engine"] = effective
+        renderable_raw[tier_name] = block
+    raw = validate_llm_tiers(renderable_raw) or {}
     from urllib.parse import urlparse
 
     tiers: dict[str, Any] = {}

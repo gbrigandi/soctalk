@@ -36,6 +36,7 @@
 	// Inline confirm step for the destructive clear-key action.
 	let confirmingClear = false;
 	let clearing = false;
+	let clearingEngine = false;
 
 	interface LlmForm {
 		provider: string;
@@ -503,6 +504,27 @@
 		}
 	}
 
+	async function clearStaleEngine(): Promise<void> {
+		if (!read?.engine_stale) return;
+		clearingEngine = true;
+		try {
+			read = await tenantsApi.updateLlm(tenantId, { engine: '' });
+			addToast({
+				type: 'success',
+				title: m.ten_llm_toast_title(),
+				message: m.ten_llm_updated()
+			});
+		} catch (e) {
+			addToast({
+				type: 'error',
+				title: m.ten_llm_toast_title(),
+				message: e instanceof Error ? e.message : String(e)
+			});
+		} finally {
+			clearingEngine = false;
+		}
+	}
+
 	onMount(() => {
 		void loadRead();
 	});
@@ -864,8 +886,27 @@
 					</div>
 					<div class="flex justify-between gap-3">
 						<dt class="opacity-60">{m.ten_llm_engine()}</dt>
-						<dd class="font-mono text-xs" data-testid="llm-engine">
-							{read.engine ?? m.ten_llm_auto()}
+						<dd class="font-mono text-xs text-right" data-testid="llm-engine">
+							<span>{read.engine ?? m.ten_llm_auto()}</span>
+							{#if read.engine_stale && read.engine_raw}
+								<span
+									class="ml-2 opacity-50 line-through"
+									data-testid="llm-engine-raw-stale"
+									title={`Stored engine ignored for ${read.base_url}`}
+								>
+									{read.engine_raw}
+								</span>
+								<button
+									type="button"
+									class="btn btn-xs variant-ghost-surface ml-2"
+									data-testid="llm-clear-stale-engine"
+									on:click={clearStaleEngine}
+									disabled={clearingEngine}
+									title={`Clear stored engine ${read.engine_raw}`}
+								>
+									{m.chip_clear()}
+								</button>
+							{/if}
 						</dd>
 					</div>
 					<!-- Per-tier overrides — when unset (null) the effective model is the
@@ -918,7 +959,19 @@
 									<div class="font-medium opacity-80">{TIER_LABELS[tk]()}</div>
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 mt-1 font-mono">
 										<div><span class="opacity-60">{m.ten_llm_chain_provider_label()}</span> {read.tiers[tk].provider ?? '—'}</div>
-										<div><span class="opacity-60">{m.ten_llm_chain_engine_label()}</span> {read.tiers[tk].engine ?? m.ten_llm_auto()}</div>
+										<div>
+											<span class="opacity-60">{m.ten_llm_chain_engine_label()}</span>
+											{read.tiers[tk].engine ?? m.ten_llm_auto()}
+											{#if read.tiers[tk].engine_stale && read.tiers[tk].engine_raw}
+												<span
+													class="ml-1 opacity-50 line-through"
+													data-testid={`llm-tier-${tk}-engine-raw-stale`}
+													title={`Stored engine ignored for ${read.tiers[tk].base_url}`}
+												>
+													{read.tiers[tk].engine_raw}
+												</span>
+											{/if}
+										</div>
 										<div class="md:col-span-2 break-all"><span class="opacity-60">{m.ten_llm_chain_base_label()}</span> {read.tiers[tk].base_url ?? '—'}</div>
 										<div><span class="opacity-60">{m.ten_llm_chain_model_label()}</span> {read.tiers[tk].model ?? '—'}</div>
 										<div><span class="opacity-60">{m.ten_llm_chain_decoding_label()}</span> {read.tiers[tk].decoding_mode ?? m.ten_llm_auto()}</div>

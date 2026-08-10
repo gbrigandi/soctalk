@@ -27,18 +27,14 @@ import os
 from typing import Any
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from soctalk.core.llm_provider import normalize_provider
+from soctalk.core.llm_provider import effective_llm_engine, normalize_provider
 from soctalk.core.pricing import catalog, gate
-from soctalk.core.tenancy.models import (
-    check_engine_provider_combo,
-    check_primary_llm_engine_config,
-    normalize_llm_engine,
-)
 from soctalk.core.pricing.resolve import (
     provider_id_for,
     provider_kind_for,
@@ -48,9 +44,13 @@ from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role, require_tenant_role
-import structlog
-
-from soctalk.core.tenancy.models import IntegrationConfig, Role
+from soctalk.core.tenancy.models import (
+    IntegrationConfig,
+    Role,
+    check_engine_provider_combo,
+    check_primary_llm_engine_config,
+    normalize_llm_engine,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -73,6 +73,12 @@ class LlmConfigRead(BaseModel):
     # backend prices as self_hosted, and clear it when moving to a gateway
     # (#142, Codex round 14).
     engine: str | None = None
+    # Raw stored value and whether it was suppressed from ``engine`` because
+    # the hosted request authority wins. ``engine`` is the value the UI should
+    # bind/resubmit; ``engine_raw`` exists so a stale stored value remains
+    # visible and explicitly clearable.
+    engine_raw: str | None = None
+    engine_stale: bool = False
     # Per-role model overrides. ``None`` means "no override — falls
     # back to ``model``" (render.py resolves override-or-llm_model
     # into runsWorker.fastModel / reasoningModel).
@@ -124,8 +130,10 @@ def _cross_provider_tiers_without_key(
 
     primary = _canon(primary_provider)
     return [
-        tier for tier, block in (llm_tiers or {}).items()
-        if _canon((block or {}).get("provider")) != primary and not (block or {}).get("api_key_plain")
+        tier
+        for tier, block in (llm_tiers or {}).items()
+        if _canon((block or {}).get("provider")) != primary
+        and not (block or {}).get("api_key_plain")
     ]
 
 
@@ -164,6 +172,52 @@ def _merge_tier_keys(
     return merged
 
 
+_ENGINE_NATIVE_DECODING_MODES = frozenset({"guided_json", "guided_grammar"})
+
+
+def _engine_read_state(
+    provider: str | None, engine: str | None, base_url: str | None
+) -> dict[str, Any]:
+    raw = (engine or "").strip().lower() or None
+    effective = effective_llm_engine(provider, raw, base_url)
+    return {
+        "engine": effective,
+        "engine_raw": raw,
+        "engine_stale": raw is not None and effective != raw,
+    }
+
+
+def _read_decoding_mode(decoding_mode: str | None, *, engine_stale: bool) -> str | None:
+    # Engine-native guided modes are inert when their served engine was inert;
+    # do not seed the UI with a mode a later tier write would reject.
+    if engine_stale and decoding_mode in _ENGINE_NATIVE_DECODING_MODES:
+        return None
+    return decoding_mode
+
+
+def _llm_config_read(
+    cfg: IntegrationConfig, *, effective_prices: dict[str, Any] | None = None
+) -> LlmConfigRead:
+    engine_state = _engine_read_state(
+        cfg.llm_provider, cfg.llm_engine, cfg.llm_base_url
+    )
+    return LlmConfigRead(
+        provider=cfg.llm_provider,
+        base_url=cfg.llm_base_url,
+        model=cfg.llm_model,
+        **engine_state,
+        fast_model=cfg.llm_fast_model,
+        reasoning_model=cfg.llm_reasoning_model,
+        temperature=cfg.llm_temperature,
+        max_tokens=cfg.llm_max_tokens,
+        model_prices=cfg.llm_model_prices,
+        effective_prices=effective_prices,
+        has_api_key=bool(cfg.llm_api_key_plain),
+        api_key_preview=_mask_key(cfg.llm_api_key_plain),
+        tiers=_sanitize_tiers(cfg.llm_tiers),
+    )
+
+
 def _sanitize_tiers(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     """Read-safe view of ``llm_tiers`` — strips per-tier plaintext keys."""
     if not raw:
@@ -171,12 +225,18 @@ def _sanitize_tiers(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     out: dict[str, Any] = {}
     for tier, block in raw.items():
         block = block or {}
+        engine_state = _engine_read_state(
+            block.get("provider"), block.get("engine"), block.get("base_url")
+        )
         out[tier] = {
             "provider": block.get("provider"),
             "base_url": block.get("base_url"),
             "model": block.get("model"),
-            "engine": block.get("engine"),
-            "decoding_mode": block.get("decoding_mode"),
+            **engine_state,
+            "decoding_mode": _read_decoding_mode(
+                block.get("decoding_mode"),
+                engine_stale=engine_state["engine_stale"],
+            ),
             "temperature": block.get("temperature"),
             "max_tokens": block.get("max_tokens"),
             "has_api_key": bool(block.get("api_key_plain")),
@@ -469,21 +529,7 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         logger.warning("effective_prices_unresolved", error=str(exc))
         effective = None
 
-    return LlmConfigRead(
-        provider=cfg.llm_provider,
-        base_url=cfg.llm_base_url,
-        model=cfg.llm_model,
-        engine=cfg.llm_engine,
-        fast_model=cfg.llm_fast_model,
-        reasoning_model=cfg.llm_reasoning_model,
-        temperature=cfg.llm_temperature,
-        max_tokens=cfg.llm_max_tokens,
-        model_prices=cfg.llm_model_prices,
-        effective_prices=effective,
-        has_api_key=bool(cfg.llm_api_key_plain),
-        api_key_preview=_mask_key(cfg.llm_api_key_plain),
-        tiers=_sanitize_tiers(cfg.llm_tiers),
-    )
+    return _llm_config_read(cfg, effective_prices=effective)
 
 
 @router.patch(
@@ -556,14 +602,20 @@ async def update_tenant_llm(
         next_engine = cfg.llm_engine
         if payload.engine is not None:
             next_engine = payload.engine or None
-        # Validate the RESULT, not the payload: provider, base_url, and engine
-        # can arrive in separate PATCHes, and only the merged render is wrong.
-        try:
-            check_primary_llm_engine_config(
-                next_provider, next_engine, next_base_url
-            )
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
+        # Validate operator intent. New writes that touch provider/base_url/
+        # engine remain fail-closed, but unrelated edits must not be blocked by
+        # a historical served engine already inert on a hosted authority.
+        if (
+            payload.provider is not None
+            or payload.base_url is not None
+            or payload.engine is not None
+        ):
+            try:
+                check_primary_llm_engine_config(
+                    next_provider, next_engine, next_base_url
+                )
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         cfg.llm_provider = next_provider
         cfg.llm_base_url = next_base_url
         cfg.llm_model = next_model
@@ -581,9 +633,6 @@ async def update_tenant_llm(
             cfg.llm_temperature = payload.temperature
         if payload.max_tokens is not None:
             cfg.llm_max_tokens = payload.max_tokens
-        # Budget caps are nullable, so use model_fields_set to tell "unchanged"
-        # (field absent) from "clear to the default" (field sent as null).
-        fields_set = payload.model_fields_set
         # Price overlay (#121): None = unchanged; {} = clear to NULL (back to the
         # fail-expensive fallback); a map = validate + replace. Replacement
         # assignment (not in-place) so the JSONB column is marked dirty.
@@ -743,21 +792,7 @@ async def update_tenant_llm(
         effective = None
 
     # Same Postgres-authoritative contract as GET — see get_tenant_llm.
-    return LlmConfigRead(
-        provider=cfg.llm_provider,
-        base_url=cfg.llm_base_url,
-        model=cfg.llm_model,
-        engine=cfg.llm_engine,
-        fast_model=cfg.llm_fast_model,
-        reasoning_model=cfg.llm_reasoning_model,
-        temperature=cfg.llm_temperature,
-        max_tokens=cfg.llm_max_tokens,
-        model_prices=cfg.llm_model_prices,
-        effective_prices=effective,
-        has_api_key=bool(cfg.llm_api_key_plain),
-        api_key_preview=_mask_key(cfg.llm_api_key_plain),
-        tiers=_sanitize_tiers(cfg.llm_tiers),
-    )
+    return _llm_config_read(cfg, effective_prices=effective)
 
 
 async def _write_api_key(tenant_id: UUID, api_key: str, tenant_slug: str | None = None) -> None:
@@ -1108,20 +1143,7 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         )).scalar_one_or_none()
     if cfg is None:
         raise HTTPException(404, "tenant has no integration config")
-    return LlmConfigRead(
-        provider=cfg.llm_provider,
-        base_url=cfg.llm_base_url,
-        model=cfg.llm_model,
-        engine=cfg.llm_engine,
-        fast_model=cfg.llm_fast_model,
-        reasoning_model=cfg.llm_reasoning_model,
-        temperature=cfg.llm_temperature,
-        max_tokens=cfg.llm_max_tokens,
-        model_prices=cfg.llm_model_prices,
-        has_api_key=bool(cfg.llm_api_key_plain),
-        api_key_preview=_mask_key(cfg.llm_api_key_plain),
-        tiers=_sanitize_tiers(cfg.llm_tiers),
-    )
+    return _llm_config_read(cfg)
 
 
 @tenant_router.put(
@@ -1175,18 +1197,7 @@ async def tenant_put_llm_key(
             tenant_id=str(tenant_id),
             error=str(exc),
         )
-    return LlmConfigRead(
-        provider=cfg.llm_provider,
-        base_url=cfg.llm_base_url,
-        model=cfg.llm_model,
-        engine=cfg.llm_engine,
-        fast_model=cfg.llm_fast_model,
-        reasoning_model=cfg.llm_reasoning_model,
-        temperature=cfg.llm_temperature,
-        max_tokens=cfg.llm_max_tokens,
-        has_api_key=True,
-        api_key_preview=_mask_key(payload.api_key),
-    )
+    return _llm_config_read(cfg)
 
 
 @tenant_router.delete(
@@ -1246,15 +1257,4 @@ async def tenant_clear_llm_key(request: Request) -> LlmConfigRead:
             tenant_id=str(tenant_id),
             error=str(exc),
         )
-    return LlmConfigRead(
-        provider=cfg.llm_provider,
-        base_url=cfg.llm_base_url,
-        model=cfg.llm_model,
-        engine=cfg.llm_engine,
-        fast_model=cfg.llm_fast_model,
-        reasoning_model=cfg.llm_reasoning_model,
-        temperature=cfg.llm_temperature,
-        max_tokens=cfg.llm_max_tokens,
-        has_api_key=False,
-        api_key_preview="",
-    )
+    return _llm_config_read(cfg)

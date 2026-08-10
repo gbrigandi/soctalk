@@ -221,6 +221,8 @@ export interface TenantLlmTierRead {
 	base_url: string | null;
 	model: string | null;
 	engine: LlmEngine | null;
+	engine_raw?: LlmEngine | null;
+	engine_stale?: boolean;
 	decoding_mode: LlmDecodingMode | null;
 	// Per-tier sampling override — null means the tier inherits its caller
 	// default (router → tenant-global sampling; reasoning → tuned constants).
@@ -269,7 +271,11 @@ export interface TenantLlmRead {
 	provider: string;
 	base_url: string;
 	model: string;
+	// Effective engine. Historical served-engine values on hosted authorities
+	// are returned as null here and exposed via engine_raw/engine_stale.
 	engine: LlmEngine | null;
+	engine_raw?: LlmEngine | null;
+	engine_stale?: boolean;
 	// Per-tier model overrides — ``null`` means no override is set and the
 	// tier falls back to ``model``.
 	fast_model: string | null;

@@ -285,7 +285,11 @@ def roles_for_config(
         # without it a single-provider self-hosted tenant resolved by host and
         # stayed openai_compatible, missing its own self_hosted price. A tier's
         # engine still wins, since it describes that tier's own backend.
-        engine = tier.get("engine") or primary_engine
+        engine = (
+            effective_llm_engine(provider, tier.get("engine"), base_url)
+            if tier.get("engine")
+            else primary_engine
+        )
         if not model:
             continue
         entry = {

@@ -1670,6 +1670,83 @@ async def test_patch_llm_key_only_enqueues_no_job(
     assert kinds == {}, f"key-only PATCH must not enqueue jobs, got {kinds}"
 
 
+async def test_patch_llm_innocuous_edits_ignore_stale_hosted_engine_and_clear(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    import soctalk.core.api.llm_config as llm_mod
+    from soctalk.core.api.llm_config import (
+        LlmConfigUpdate,
+        get_tenant_llm,
+        update_tenant_llm,
+    )
+
+    async def _noop_write(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(llm_mod, "_write_api_key", _noop_write)
+
+    tenant = await _seed_llm_tenant(
+        mssp_session,
+        seeded_org,
+        state=TenantState.ACTIVE.value,
+        llm_base_url="https://openrouter.ai/api/v1",
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_provider = "openai-compatible"
+    cfg.llm_engine = "sglang"
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    read = await get_tenant_llm(tenant.id, FakeRequest())
+    assert read.engine is None
+    assert read.engine_raw == "sglang"
+    assert read.engine_stale is True
+
+    for payload in (
+        LlmConfigUpdate(api_key="sk-rotated-" + uuid4().hex),
+        LlmConfigUpdate(model="gpt-4o-mini"),
+        LlmConfigUpdate(temperature=0.2, max_tokens=1024),
+        LlmConfigUpdate(
+            tiers={
+                "reasoning": {
+                    "provider": "openai-compatible",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "model": "gpt-4o",
+                }
+            }
+        ),
+    ):
+        result = await update_tenant_llm(tenant.id, payload, FakeRequest())
+        assert result.engine is None
+        assert result.engine_raw == "sglang"
+        assert result.engine_stale is True
+        await mssp_session.refresh(cfg)
+        assert cfg.llm_base_url == "https://openrouter.ai/api/v1"
+        assert cfg.llm_engine == "sglang"
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(engine=""),
+        FakeRequest(),
+    )
+    assert result.engine is None
+    assert result.engine_raw is None
+    assert result.engine_stale is False
+    await mssp_session.refresh(cfg)
+    assert cfg.llm_engine is None
+
+
 async def test_patch_llm_unknown_engine_rejected_at_payload_boundary():
     """Unknown primary engines must 422 instead of being stored."""
     from pydantic import ValidationError

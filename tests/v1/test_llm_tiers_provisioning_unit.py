@@ -285,8 +285,31 @@ def test_sanitize_tiers_strips_plaintext():
                                      "engine": "sglang", "decoding_mode": "json_object",
                                      "api_key_plain": "sk-secret"}})
     assert sane["fast"]["has_api_key"] is True
+    assert sane["fast"]["engine"] == "sglang"
+    assert sane["fast"]["engine_raw"] == "sglang"
+    assert sane["fast"]["engine_stale"] is False
     assert sane["fast"]["decoding_mode"] == "json_object"
     assert "api_key_plain" not in sane["fast"]
+
+
+def test_sanitize_tiers_returns_effective_engine_for_stale_hosted_authority():
+    sane = _sanitize_tiers({
+        "fast": {
+            "provider": "openai-compatible",
+            "base_url": "https://openrouter.ai/api/v1",
+            "model": "qwen3-32b",
+            "engine": "sglang",
+            "decoding_mode": "guided_json",
+            "api_key_plain": "sk-secret",
+        }
+    })
+    fast = sane["fast"]
+    assert fast["engine"] is None
+    assert fast["engine_raw"] == "sglang"
+    assert fast["engine_stale"] is True
+    assert fast["decoding_mode"] is None
+    assert fast["has_api_key"] is True
+    assert "api_key_plain" not in fast
 
 
 # -------------------------------------------------------- byte-identical guard
@@ -316,22 +339,29 @@ def test_hybrid_render_tiers_and_ports():
     assert v["networkPolicies"]["extraLlmEgressPorts"] == [8000]
 
 
-def test_render_rejects_bad_stored_tier_served_engine_hosted_base_url():
+def test_render_ignores_stale_stored_tier_served_engine_hosted_base_url():
     # Simulates a historical/manual JSONB write that bypassed LLMTierConfig.
     integ = _integration(
         uuid4(),
         llm_tiers={
             "fast": {
                 "provider": "openai-compatible",
-                "base_url": "https://api.openai.com/v1",
+                "base_url": "https://openrouter.ai/api/v1",
                 "model": "qwen3-32b",
                 "engine": "sglang",
+                "decoding_mode": "guided_json",
             }
         },
     )
 
-    with pytest.raises(ValueError, match="requires a custom base_url"):
-        _render(integ)
+    v = _render(integ)
+    fast = v["llm"]["tiers"]["fast"]
+    assert fast["provider"] == "openai"
+    assert fast["baseUrl"] == "https://openrouter.ai/api/v1"
+    assert fast["model"] == "qwen3-32b"
+    assert "engine" not in fast
+    assert "decodingMode" not in fast
+    assert "extraLlmEgressPorts" not in v["networkPolicies"]
 
 
 def test_hybrid_render_emits_decoding_mode():

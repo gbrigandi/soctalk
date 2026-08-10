@@ -341,7 +341,7 @@ async def test_provision_ignores_stale_primary_served_engine_with_sentinel_base_
     assert seeded_tenant.state == TenantState.ACTIVE.value
 
 
-async def test_provision_rejects_stored_tier_served_engine_with_hosted_base_url(
+async def test_provision_ignores_stale_tier_served_engine_with_hosted_base_url(
     session: AsyncSession, seeded_tenant: Tenant, patched_helm
 ):
     cfg = (
@@ -371,13 +371,10 @@ async def test_provision_rejects_stored_tier_served_engine_with_hosted_base_url(
         ),
     )
 
-    with pytest.raises(ProvisionError) as exc_info:
-        await controller.provision(seeded_tenant.id, actor_id="test")
+    await controller.provision(seeded_tenant.id, actor_id="test")
 
-    assert exc_info.value.step == "helm_apply_tenant"
-    assert "requires a custom base_url" in str(exc_info.value)
     await session.refresh(seeded_tenant)
-    assert seeded_tenant.state == TenantState.DEGRADED.value
+    assert seeded_tenant.state == TenantState.ACTIVE.value
 
 
 async def test_provision_resume_after_crash_is_idempotent(
@@ -1191,6 +1188,51 @@ async def test_reconcile_active_rerenders_values_and_helm_upgrades(
             f"reconcile must not transition state: {e.event_type} "
             f"{e.from_state} -> {e.to_state}"
         )
+
+
+async def test_reconcile_ignores_stale_tier_served_engine_with_hosted_base_url(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    fake_k8s = FakeK8s()
+    controller = TenantController(session, k8s=fake_k8s, settings=_quick_settings())
+
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    integ.llm_tiers = {
+        "fast": {
+            "provider": "openai-compatible",
+            "base_url": "https://openrouter.ai/api/v1",
+            "model": "qwen3-32b",
+            "engine": "sglang",
+        }
+    }
+    await session.commit()
+
+    upgrade_calls: list[dict] = []
+
+    async def rec_upgrade(*_a, **kw):
+        upgrade_calls.append(kw)
+        return type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True}
+        )()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_upgrade)
+
+    result = await controller.reconcile(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+    assert len(upgrade_calls) == 1
+    fast = upgrade_calls[0]["values"]["llm"]["tiers"]["fast"]
+    assert fast["baseUrl"] == "https://openrouter.ai/api/v1"
+    assert fast["model"] == "qwen3-32b"
+    assert "engine" not in fast
 
 
 async def test_reconcile_failure_degrades_with_reconcile_failed_event(
