@@ -310,7 +310,7 @@ async def test_provision_rejects_stored_anthropic_served_engine(
     assert seeded_tenant.state == TenantState.DEGRADED.value
 
 
-async def test_provision_rejects_stored_served_engine_with_sentinel_base_url(
+async def test_provision_ignores_stale_primary_served_engine_with_sentinel_base_url(
     session: AsyncSession, seeded_tenant: Tenant, patched_helm
 ):
     cfg = (
@@ -335,13 +335,10 @@ async def test_provision_rejects_stored_served_engine_with_sentinel_base_url(
         ),
     )
 
-    with pytest.raises(ProvisionError) as exc_info:
-        await controller.provision(seeded_tenant.id, actor_id="test")
+    await controller.provision(seeded_tenant.id, actor_id="test")
 
-    assert exc_info.value.step == "helm_apply_tenant"
-    assert "requires a custom llm_base_url" in str(exc_info.value)
     await session.refresh(seeded_tenant)
-    assert seeded_tenant.state == TenantState.DEGRADED.value
+    assert seeded_tenant.state == TenantState.ACTIVE.value
 
 
 async def test_provision_rejects_stored_tier_served_engine_with_hosted_base_url(

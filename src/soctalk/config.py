@@ -7,10 +7,13 @@ from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import urlsplit
 
+import structlog
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from soctalk.core.llm_provider import has_usable_served_base_url
+
+logger = structlog.get_logger(__name__)
 
 
 class MCPServerConfig(BaseModel):
@@ -309,6 +312,7 @@ def load_config(env_file: Optional[Path] = None) -> Config:
             f"Invalid SOCTALK_LLM_PROVIDER={provider_preference!r}. Expected 'anthropic' or 'openai'."
         )
     primary_engine = _optional_env("SOCTALK_LLM_ENGINE")
+    primary_engine_is_served = False
     if primary_engine:
         from soctalk.inference import ProviderEngine
         try:
@@ -323,12 +327,7 @@ def load_config(env_file: Optional[Path] = None) -> Config:
             ProviderEngine.SGLANG,
             ProviderEngine.OPENAI_COMPATIBLE,
         }
-        if parsed_engine in served and not has_usable_served_base_url(openai_base_url):
-            raise ValueError(
-                f"SOCTALK_LLM_ENGINE={primary_engine} requires OPENAI_BASE_URL "
-                "(or OPENAI_API_BASE) set to a custom endpoint — a served/gateway "
-                "engine cannot use the hosted OpenAI default endpoint."
-            )
+        primary_engine_is_served = parsed_engine in served
 
     # Per-tier provider overlay (issue #4). When present, the deployment has
     # opted into mixed-provider triage (e.g. self-hosted router + frontier
@@ -374,11 +373,30 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         if provider == "openai" and not openai_api_key and anthropic_api_key:
             provider = "anthropic"
 
-    if primary_engine in {"openai_compatible", "vllm", "sglang"} and provider == "anthropic":
-        raise ValueError(
-            f"SOCTALK_LLM_ENGINE={primary_engine!r} is OpenAI-compatible; "
-            "not valid with SOCTALK_LLM_PROVIDER='anthropic'."
-        )
+    if primary_engine in {"openai_compatible", "vllm", "sglang"}:
+        if provider == "anthropic":
+            raise ValueError(
+                f"SOCTALK_LLM_ENGINE={primary_engine!r} is OpenAI-compatible; "
+                "not valid with SOCTALK_LLM_PROVIDER='anthropic'."
+            )
+        hosted_kind = None
+        if openai_base_url:
+            from soctalk.core.pricing.resolve import hosted_provider_kind_for_base_url
+
+            hosted_kind = hosted_provider_kind_for_base_url(openai_base_url)
+        if provider == "openai" and (hosted_kind is not None or not openai_base_url):
+            logger.warning(
+                "llm_engine_ignored_for_hosted_authority",
+                engine=primary_engine,
+                hosted_provider_kind=hosted_kind or "openai",
+            )
+            primary_engine = None
+        elif primary_engine_is_served and not has_usable_served_base_url(openai_base_url):
+            raise ValueError(
+                f"SOCTALK_LLM_ENGINE={primary_engine} requires OPENAI_BASE_URL "
+                "(or OPENAI_API_BASE) set to a custom endpoint — a served/gateway "
+                "engine cannot use the hosted OpenAI default endpoint."
+            )
 
     # The global-provider key is the fallback for tiers without their own
     # credential. When per-tier providers are configured (mixed intent, #4) the

@@ -629,7 +629,7 @@
   },
   "$defs": {
     "hostedVendorServedBaseUrl": {
-      "pattern": "^\\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\\s]+@)?[aA][pP][iI][.\u3002\uff0e\uff61](?:[oO][pP][eE][nN][aA][iI]|[aA][nN][tT][hH][rR][oO][pP][iI][cC])[.\u3002\uff0e\uff61][cC][oO][mM](?::[0-9]+)?(?:[/\\?#].*)?)\\s*$"
+      "pattern": "^\\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\\s]+@)?(?:[A-Za-z0-9-]+[.\u3002\uff0e\uff61])*[aA][pP][iI][.\u3002\uff0e\uff61](?:[oO][pP][eE][nN][aA][iI]|[aA][nN][tT][hH][rR][oO][pP][iI][cC])[.\u3002\uff0e\uff61][cC][oO][mM](?:[.\u3002\uff0e\uff61])?(?::[0-9]+)?(?:[/\\?#].*)?)\\s*$"
     },
     "resources": {
       "type": "object",

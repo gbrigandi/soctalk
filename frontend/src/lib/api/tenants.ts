@@ -158,6 +158,60 @@ export type LlmDecodingMode =
 
 export type LlmEngine = 'frontier' | 'openai_compatible' | 'vllm' | 'sglang';
 
+const LLM_DOT_FOLD_RE = /[\u3002\uff0e\uff61]/g;
+const SELF_HOSTED_LLM_ENGINES = new Set(['vllm', 'sglang']);
+
+function llmHostMatchesDomain(host: string, domain: string): boolean {
+	return host === domain || host.endsWith(`.${domain}`);
+}
+
+export function authorityHostForLlmBaseUrl(baseUrl: string | null | undefined): string {
+	const raw = (baseUrl ?? '').trim();
+	const scheme = raw.match(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//);
+	if (!scheme) return '';
+	let authority = raw.slice(scheme[0].length).split(/[/?#]/, 1)[0] ?? '';
+	const userinfo = authority.lastIndexOf('@');
+	if (userinfo >= 0) authority = authority.slice(userinfo + 1);
+	if (!authority) return '';
+	if (authority.startsWith('[')) {
+		const close = authority.indexOf(']');
+		if (close < 0) return '';
+		return authority.slice(1, close).replace(LLM_DOT_FOLD_RE, '.').toLowerCase();
+	}
+	let host = authority.split(':', 1)[0]?.replace(LLM_DOT_FOLD_RE, '.').toLowerCase() ?? '';
+	if (!host || /\s/.test(host)) return '';
+	if (host.endsWith('.')) host = host.slice(0, -1);
+	return host;
+}
+
+export function providerKindForPriceOverride(
+	provider: string | null | undefined,
+	baseUrl: string | null | undefined,
+	engine: '' | LlmEngine | null | undefined
+): string {
+	const p = (provider ?? '').trim().toLowerCase();
+	if (p === 'anthropic') return 'anthropic';
+
+	const host = authorityHostForLlmBaseUrl(baseUrl);
+	if (llmHostMatchesDomain(host, 'openrouter.ai')) return 'openrouter';
+	if (llmHostMatchesDomain(host, 'api.openai.com')) return 'openai';
+	if (llmHostMatchesDomain(host, 'api.anthropic.com')) return 'anthropic';
+	if (SELF_HOSTED_LLM_ENGINES.has((engine ?? '').trim().toLowerCase())) {
+		return 'self_hosted';
+	}
+	if (p === 'openai' || p === 'openai-compatible') return 'openai_compatible';
+	return 'openai_compatible';
+}
+
+export function priceOverrideKey(
+	provider: string | null | undefined,
+	baseUrl: string | null | undefined,
+	engine: '' | LlmEngine | null | undefined,
+	model: string
+): string {
+	return `${providerKindForPriceOverride(provider, baseUrl, engine)}:*:${model}`;
+}
+
 // Sanitized read view of one per-tier LLM backend (the "chain" of a hybrid
 // tenant). The plaintext key is NEVER returned — ``has_api_key`` signals its
 // presence, matching the top-level ``TenantLlmRead`` convention. Mirrors the

@@ -66,12 +66,18 @@ _HOSTED_VENDOR_SERVED_BASE_URL_REF = "#/$defs/hostedVendorServedBaseUrl"
 _HOSTED_VENDOR_DOT = "[.\u3002\uff0e\uff61]"
 _HOSTED_VENDOR_SERVED_BASE_URL_PATTERN = (
     r"^\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\s]+@)?"
+    r"(?:[A-Za-z0-9-]+"
+    + _HOSTED_VENDOR_DOT
+    + r")*"
     r"[aA][pP][iI]"
     + _HOSTED_VENDOR_DOT
     + r"(?:[oO][pP][eE][nN][aA][iI]|"
     r"[aA][nN][tT][hH][rR][oO][pP][iI][cC])"
     + _HOSTED_VENDOR_DOT
     + r"[cC][oO][mM]"
+    r"(?:"
+    + _HOSTED_VENDOR_DOT
+    + r")?"
     r"(?::[0-9]+)?(?:[/\?#].*)?)\s*$"
 )
 _HOSTED_UNICODE_DOT_BASE_URLS = (
@@ -87,6 +93,12 @@ _HOSTED_VENDOR_REJECT_BASE_URLS = (
     " https://api.openai.com/v1 ",
     "https://api.openai.com/v1/",
     "https://api.openai.com:443/v1",
+    "https://api.openai.com./v1",
+    "https://api.openai.com\u3002/v1",
+    "https://api.openai.com\uff0e/v1",
+    "https://api.openai.com\uff61/v1",
+    "https://gateway.api.openai.com/v1",
+    "https://gateway.api.anthropic.com",
     "https://API.OPENAI.COM/v1",
     "https://API.OPENAI.COM/V1",
     " https://Api.OpenAI.Com:443/v1 ",
@@ -317,8 +329,14 @@ def test_chart_schemas_share_hosted_vendor_served_base_url_guard():
         "https://API.OPENAI.COM/v1",
         "https://API.OPENAI.COM/V1",
         " https://Api.OpenAI.Com:443/v1 ",
+        "https://api.openai.com./v1",
+        "https://api.openai.com\u3002/v1",
+        "https://gateway.api.openai.com/v1",
+        "https://gateway.api.anthropic.com",
         "https://API.ANTHROPIC.COM",
         _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
+        "https://evilapi.openai.com/v1",
+        "https://notapi.anthropic.com",
         "https://gateway.example/API.OPENAI.COM/v1",
         " http://SGLANG.INTERNAL:8000/V1 ",
         *_HOSTED_UNICODE_DOT_BASE_URLS,
@@ -408,23 +426,34 @@ def test_render_tenant_values_rejects_bad_stored_primary_engine():
         )
 
 
-def test_render_tenant_values_rejects_served_engine_with_suppressed_base_url():
+def test_render_tenant_values_ignores_stale_served_engine_on_hosted_openai():
+    from soctalk.core.pricing.resolve import provider_kind_for
+
     t = _make_tenant("poc")
     integration = _make_integration(t.id)
     integration.llm_provider = "openai-compatible"
     integration.llm_base_url = "https://api.openai.com/v1"
     integration.llm_engine = "sglang"
 
-    with pytest.raises(ValueError, match="requires a custom llm_base_url"):
-        render_tenant_values(
-            tenant=t,
-            integration=integration,
-            branding=_make_branding(t.id),
-            mssp_id=str(uuid4()),
-            install_id=str(uuid4()),
-            llm_secret_name="tenant-x-llm",
-            profile="poc",
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+
+    assert "engine" not in v["llm"]
+    assert (
+        provider_kind_for(v["llm"]["provider"], v["llm"]["baseUrl"], v["llm"].get("engine"))
+        == provider_kind_for(
+            integration.llm_provider, integration.llm_base_url, integration.llm_engine
         )
+        == "openai"
+    )
+    _assert_validates_against_tenant_schema(v)
 
 
 def test_tenant_chart_schema_rejects_anthropic_primary_served_engine():

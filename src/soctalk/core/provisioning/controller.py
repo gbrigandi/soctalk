@@ -43,6 +43,7 @@ from soctalk.core.provisioning.helm import (
 from soctalk.core.provisioning.k8s import K8sClient, new_k8s_client
 from soctalk.core.provisioning.render import (
     Profile,
+    primary_llm_engine_for_render,
     render_tenant_values,
     render_wazuh_values,
 )
@@ -53,7 +54,6 @@ from soctalk.core.provisioning.secrets_gen import (
 )
 from soctalk.core.tenancy.models import (
     BrandingConfig,
-    check_primary_llm_engine_config,
     IntegrationConfig,
     Organization,
     Tenant,
@@ -1232,7 +1232,7 @@ class TenantController:
             f"{self.settings.soctalk_system_namespace}.svc.cluster.local"
         )
         try:
-            check_primary_llm_engine_config(
+            primary_llm_engine_for_render(
                 ctx.integration.llm_provider,
                 ctx.integration.llm_engine,
                 ctx.integration.llm_base_url,

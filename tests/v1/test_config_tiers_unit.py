@@ -225,6 +225,10 @@ def test_served_engine_without_base_url_rejected(clean_env):
         OPENAI_SENTINEL_BASE_URL,
         "https://API.OPENAI.COM/v1",
         "https://API.OPENAI.COM/V1",
+        "https://api.openai.com./v1",
+        "https://api.openai.com\u3002/v1",
+        "https://api.openai.com\uff0e/v1",
+        "https://api.openai.com\uff61/v1",
     ),
 )
 def test_chat_served_engine_rejects_global_openai_sentinel_base_url(
@@ -246,6 +250,10 @@ def test_chat_served_engine_rejects_global_openai_sentinel_base_url(
         OPENAI_SENTINEL_BASE_URL,
         "https://API.OPENAI.COM/v1",
         "https://API.OPENAI.COM/V1",
+        "https://api.openai.com./v1",
+        "https://api.openai.com\u3002/v1",
+        "https://api.openai.com\uff0e/v1",
+        "https://api.openai.com\uff61/v1",
     ),
 )
 def test_served_engine_rejects_tier_openai_sentinel_base_url(clean_env, base_url):
@@ -288,6 +296,10 @@ def test_served_engine_accepts_global_openai_base_url(clean_env):
         " https://api.openai.com/v1 ",
         "https://api.openai.com/v1/",
         "https://api.openai.com:443/v1",
+        "https://api.openai.com./v1",
+        "https://api.openai.com\u3002/v1",
+        "https://api.openai.com\uff0e/v1",
+        "https://api.openai.com\uff61/v1",
         "https://API.OPENAI.COM/v1",
         "https://API.OPENAI.COM/V1",
         " https://Api.OpenAI.Com:443/v1 ",
@@ -296,14 +308,25 @@ def test_served_engine_accepts_global_openai_base_url(clean_env):
         "https://api\uff61openai\uff61com/v1",
     ),
 )
-def test_primary_served_engine_rejects_hosted_openai_base_url(clean_env, base_url):
-    with pytest.raises(ValueError, match="requires OPENAI_BASE_URL"):
-        clean_env(
-            SOCTALK_LLM_PROVIDER="openai",
-            SOCTALK_LLM_ENGINE="sglang",
-            OPENAI_BASE_URL=base_url,
-            OPENAI_API_KEY="o",
-        )
+def test_primary_served_engine_ignored_for_hosted_openai_base_url(clean_env, base_url):
+    cfg = clean_env(
+        SOCTALK_LLM_PROVIDER="openai",
+        SOCTALK_LLM_ENGINE="sglang",
+        OPENAI_BASE_URL=base_url,
+        OPENAI_API_KEY="o",
+    )
+
+    assert cfg.engine is None
+
+
+def test_primary_served_engine_without_base_url_uses_hosted_openai_default(clean_env):
+    cfg = clean_env(
+        SOCTALK_LLM_PROVIDER="openai",
+        SOCTALK_LLM_ENGINE="sglang",
+        OPENAI_API_KEY="o",
+    )
+
+    assert cfg.engine is None
 
 
 def test_primary_served_engine_accepts_percent_encoded_dot_base_url(clean_env):

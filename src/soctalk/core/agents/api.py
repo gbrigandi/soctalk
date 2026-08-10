@@ -210,13 +210,13 @@ async def _build_install_helm_release_spec(
     import os
 
     from soctalk.core.provisioning.render import (
+        primary_llm_engine_for_render,
         render_tenant_values,
         render_wazuh_values,
     )
     from soctalk.core.tenancy.auth import mint_adapter_token
     from soctalk.core.tenancy.models import (
         BrandingConfig,
-        check_primary_llm_engine_config,
         IntegrationConfig,
         Organization,
     )
@@ -251,7 +251,7 @@ async def _build_install_helm_release_spec(
 
     llm_secret_name = f"tenant-{tenant.id}-llm"
     try:
-        check_primary_llm_engine_config(
+        primary_llm_engine_for_render(
             integration.llm_provider,
             integration.llm_engine,
             integration.llm_base_url,

@@ -1711,8 +1711,12 @@ async def test_patch_llm_engine_only_persists_with_custom_base_url(
     assert cfg.llm_engine is None
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    ("https://api.openai.com/v1", "https://api.openai.com./v1"),
+)
 async def test_patch_llm_base_url_to_sentinel_rejected_when_engine_set(
-    mssp_session: AsyncSession, seeded_org: Organization
+    mssp_session: AsyncSession, seeded_org: Organization, base_url: str
 ):
     """A base-url-only PATCH is also validated after merge: an existing served
     engine cannot be moved back to the suppressed hosted sentinel.
@@ -1747,7 +1751,7 @@ async def test_patch_llm_base_url_to_sentinel_rejected_when_engine_set(
     with pytest.raises(HTTPException) as exc_info:
         await update_tenant_llm(
             tenant.id,
-            LlmConfigUpdate(base_url="https://api.openai.com/v1"),
+            LlmConfigUpdate(base_url=base_url),
             FakeRequest(),
         )
     assert exc_info.value.status_code == 422

@@ -69,6 +69,11 @@ def test_served_base_url_rejects_hosted_openai_equivalent_urls():
         " https://api.openai.com/v1 ",
         "https://api.openai.com/v1/",
         "https://api.openai.com:443/v1",
+        "https://api.openai.com./v1",
+        "https://api.openai.com\u3002/v1",
+        "https://api.openai.com\uff0e/v1",
+        "https://api.openai.com\uff61/v1",
+        "https://gateway.api.openai.com/v1",
         "https://API.OPENAI.COM/v1",
         "https://API.OPENAI.COM/V1",
         " https://Api.OpenAI.Com:443/v1 ",
@@ -82,6 +87,8 @@ def test_served_base_url_rejects_hosted_openai_equivalent_urls():
 def test_served_base_url_rejects_other_first_party_vendor_authority():
     assert has_usable_served_base_url("https://api.anthropic.com") is False
     assert has_usable_served_base_url("https://API.ANTHROPIC.COM") is False
+    assert has_usable_served_base_url("https://api.anthropic.com.") is False
+    assert has_usable_served_base_url("https://gateway.api.anthropic.com") is False
     assert has_usable_served_base_url(
         "https://api\u3002anthropic\u3002com"
     ) is False
@@ -103,6 +110,8 @@ def test_served_base_url_accepts_genuine_custom_and_gateway_authorities():
         " http://sglang.internal:8000/v1 ",
         "https://api.openai.com.evil.example/v1",
         "https://API.OPENAI.COM.gateway.example:8443/V1",
+        "https://evilapi.openai.com/v1",
+        "https://notapi.anthropic.com",
         "https://openrouter.ai/api/v1",
         "https://api%2eopenai%2ecom/v1",
         "https://api%2eanthropic%2ecom",

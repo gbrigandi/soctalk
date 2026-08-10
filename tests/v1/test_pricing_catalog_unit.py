@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 
 from soctalk.core.pricing import catalog
-from soctalk.core.pricing.resolve import provider_id_for, provider_kind_for
+from soctalk.core.pricing.resolve import (
+    authority_host_for_base_url,
+    provider_id_for,
+    provider_kind_for,
+)
 from soctalk.graph import budget
 
 
@@ -68,6 +72,102 @@ def test_provider_kind_reads_the_host_not_just_the_provider_string():
     # wrong would price against another vendor's rate card.
     assert provider_id_for("https://api.deepseek.com/v1") == "deepseek"
     assert provider_id_for("https://gateway.example/v1") is None
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "https://api.openai.com./v1",
+        "https://api.openai.com\u3002/v1",
+        "https://api.openai.com\uff0e/v1",
+        "https://api.openai.com\uff61/v1",
+    ),
+)
+def test_provider_kind_strips_one_trailing_root_dot(base_url: str):
+    assert authority_host_for_base_url(base_url) == "api.openai.com"
+    assert provider_kind_for("openai-compatible", base_url, "sglang") == "openai"
+
+
+def test_provider_kind_strips_only_one_trailing_root_dot():
+    base_url = "https://api.openai.com../v1"
+
+    assert authority_host_for_base_url(base_url) == "api.openai.com."
+    assert provider_kind_for("openai-compatible", base_url, "sglang") == "self_hosted"
+
+
+@pytest.mark.parametrize(
+    "domain,slug,exact,subdomain,evil",
+    (
+        (
+            "api.deepseek.com",
+            "deepseek",
+            "https://api.deepseek.com/v1",
+            "https://tenant.api.deepseek.com/v1",
+            "https://evilapi.deepseek.com/v1",
+        ),
+        (
+            "novarouteai.com",
+            "novaroute",
+            "https://novarouteai.com/v1",
+            "https://gateway.novarouteai.com/v1",
+            "https://evilnovarouteai.com/v1",
+        ),
+        (
+            "api.moonshot.cn",
+            "moonshot",
+            "https://api.moonshot.cn/v1",
+            "https://proxy.api.moonshot.cn/v1",
+            "https://evilapi.moonshot.cn/v1",
+        ),
+        (
+            "api.mistral.ai",
+            "mistral",
+            "https://api.mistral.ai/v1",
+            "https://proxy.api.mistral.ai/v1",
+            "https://evilapi.mistral.ai/v1",
+        ),
+        (
+            "openrouter.ai",
+            "openrouter",
+            "https://openrouter.ai/api/v1",
+            "https://gateway.openrouter.ai/v1",
+            "https://evilopenrouter.ai/v1",
+        ),
+        (
+            "dashscope.aliyuncs.com",
+            "dashscope",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://tenant.dashscope.aliyuncs.com/v1",
+            "https://evildashscope.aliyuncs.com/v1",
+        ),
+    ),
+)
+def test_provider_id_vendor_suffixes_are_label_boundary_matches(
+    domain: str, slug: str, exact: str, subdomain: str, evil: str
+):
+    assert provider_id_for(exact) == slug, domain
+    assert provider_id_for(subdomain) == slug, domain
+    assert provider_id_for(evil) is None, domain
+
+
+@pytest.mark.parametrize(
+    "base_url,expected",
+    (
+        ("https://openrouter.ai/api/v1", "openrouter"),
+        ("https://gateway.openrouter.ai/api/v1", "openrouter"),
+        ("https://evilopenrouter.ai/api/v1", "self_hosted"),
+        ("https://api.openai.com/v1", "openai"),
+        ("https://gateway.api.openai.com/v1", "openai"),
+        ("https://evilapi.openai.com/v1", "self_hosted"),
+        ("https://api.anthropic.com", "anthropic"),
+        ("https://gateway.api.anthropic.com", "anthropic"),
+        ("https://notapi.anthropic.com", "self_hosted"),
+    ),
+)
+def test_provider_kind_vendor_suffixes_are_label_boundary_matches(
+    base_url: str, expected: str
+):
+    assert provider_kind_for("openai-compatible", base_url, "sglang") == expected
 
 
 # ---------------------------------------------------------------- pricing
@@ -670,18 +770,25 @@ def test_form_kind_mapping_matches_the_backend():
 
     def form_kind(provider: str, base_url: str) -> str:
         host = base_url.split("//")[-1].split("/")[0].lower() if base_url else ""
+        host = host[:-1] if host.endswith(".") else host
+        matches = lambda domain: host == domain or host.endswith("." + domain)
         if provider == "anthropic":
             return "anthropic"
-        if host.endswith("openrouter.ai"):
+        if matches("openrouter.ai"):
             return "openrouter"
-        if host.endswith("api.openai.com"):
+        if matches("api.openai.com"):
             return "openai"
         return "openai_compatible"
 
     cases = [
         ("anthropic", ""),
         ("openai-compatible", "https://api.openai.com/v1"),
+        ("openai-compatible", "https://api.openai.com./v1"),
+        ("openai-compatible", "https://gateway.api.openai.com/v1"),
+        ("openai-compatible", "https://evilapi.openai.com/v1"),
         ("openai-compatible", "https://openrouter.ai/api/v1"),
+        ("openai-compatible", "https://gateway.openrouter.ai/api/v1"),
+        ("openai-compatible", "https://evilopenrouter.ai/api/v1"),
         ("openai-compatible", "https://novarouteai.com/v1"),
         ("openai-compatible", ""),
     ]

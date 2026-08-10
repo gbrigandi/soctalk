@@ -77,19 +77,29 @@ def authority_host_for_base_url(base_url: str | None) -> str:
 
     ``httpx`` folds the IDNA dot characters U+3002, U+FF0E, and U+FF61 to
     ``.`` before connecting, but it does not decode ``%2e`` inside the
-    authority. Keep that exact boundary so hosted-vendor checks agree with the
-    actual request destination.
+    authority. DNS treats one trailing root dot as the same absolute host, so
+    strip exactly one after folding. Keep that exact boundary so hosted-vendor
+    checks agree with the actual request destination.
     """
     host = urlparse(base_url or "").hostname or ""
-    return host.translate(_HTTPX_DOT_FOLD).lower()
+    host = host.translate(_HTTPX_DOT_FOLD).lower()
+    return host[:-1] if host.endswith(".") else host
+
+
+def _host_matches_domain(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def hosted_provider_kind_for_base_url(base_url: str | None) -> str | None:
+    return _provider_kind_from_authority(authority_host_for_base_url(base_url))
 
 
 def _provider_kind_from_authority(host: str) -> str | None:
-    if host.endswith("openrouter.ai"):
+    if _host_matches_domain(host, "openrouter.ai"):
         return "openrouter"
-    if host.endswith("api.openai.com"):
+    if _host_matches_domain(host, "api.openai.com"):
         return "openai"
-    if host.endswith("api.anthropic.com"):
+    if _host_matches_domain(host, "api.anthropic.com"):
         return "anthropic"
     return None
 
@@ -130,7 +140,7 @@ def provider_id_for(base_url: str | None) -> str | None:
     """The vendor slug a base URL identifies, or None when it does not."""
     host = authority_host_for_base_url(base_url)
     for known, slug in _HOST_VENDORS.items():
-        if host == known or host.endswith("." + known):
+        if _host_matches_domain(host, known):
             return slug
     return None
 

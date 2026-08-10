@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import {
+	authorityHostForLlmBaseUrl,
+	priceOverrideKey,
+	providerKindForPriceOverride
+} from '../api/tenants';
 import { detectSlugFromHostname } from './index';
 
 describe('detectSlugFromHostname', () => {
@@ -38,5 +43,113 @@ describe('detectSlugFromHostname', () => {
 	it('still accepts a slug that merely contains digits', () => {
 		expect(detectSlugFromHostname('tenant1.soctalk.ai')).toBe('tenant1');
 		expect(detectSlugFromHostname('a1b2.soctalk.ai')).toBe('a1b2');
+	});
+});
+
+const LLM_PRICE_KEY_CASES = [
+	[
+		'openrouter hosted authority wins over served engine',
+		'openai-compatible',
+		'https://openrouter.ai/api/v1',
+		'sglang',
+		'openrouter:*:deepseek/deepseek-chat'
+	],
+	[
+		'openrouter subdomain is label-bound',
+		'openai-compatible',
+		'https://gateway.openrouter.ai/api/v1',
+		'sglang',
+		'openrouter:*:deepseek/deepseek-chat'
+	],
+	[
+		'hosted OpenAI wins over served engine',
+		'openai-compatible',
+		'https://api.openai.com/v1',
+		'sglang',
+		'openai:*:gpt-4o'
+	],
+	[
+		'hosted OpenAI trailing root dot wins over served engine',
+		'openai-compatible',
+		'https://api.openai.com./v1',
+		'sglang',
+		'openai:*:gpt-4o'
+	],
+	[
+		'hosted OpenAI unicode trailing root dot wins over served engine',
+		'openai-compatible',
+		'https://api.openai.com\u3002/v1',
+		'sglang',
+		'openai:*:gpt-4o'
+	],
+	[
+		'hosted Anthropic authority wins under OpenAI-compatible protocol',
+		'openai-compatible',
+		'https://api.anthropic.com',
+		'sglang',
+		'anthropic:*:claude-sonnet-4-6'
+	],
+	[
+		'self-hosted engine on custom host',
+		'openai-compatible',
+		'http://sglang.internal:8000/v1',
+		'sglang',
+		'self_hosted:*:qwen3-32b'
+	],
+	[
+		'generic gateway without hosted authority',
+		'openai-compatible',
+		'https://novarouteai.com/v1',
+		'',
+		'openai_compatible:*:deepseek-v4-flash'
+	],
+	[
+		'evil OpenRouter prefix is not hosted',
+		'openai-compatible',
+		'https://evilopenrouter.ai/api/v1',
+		'sglang',
+		'self_hosted:*:model-x'
+	],
+	[
+		'evil OpenAI prefix is not hosted',
+		'openai-compatible',
+		'https://evilapi.openai.com/v1',
+		'sglang',
+		'self_hosted:*:model-x'
+	],
+	[
+		'evil Anthropic prefix is not hosted',
+		'openai-compatible',
+		'https://notapi.anthropic.com',
+		'sglang',
+		'self_hosted:*:model-x'
+	],
+	[
+		'percent encoded dots stay inert',
+		'openai-compatible',
+		'https://api%2eopenai%2ecom/v1',
+		'sglang',
+		'self_hosted:*:model-x'
+	]
+] as const;
+
+describe('LLM price override key derivation', () => {
+	it.each(LLM_PRICE_KEY_CASES)('%s', (_label, provider, baseUrl, engine, expected) => {
+		const model = expected.split(':').slice(2).join(':');
+		expect(priceOverrideKey(provider, baseUrl, engine, model)).toBe(expected);
+	});
+
+	it('folds exactly one trailing root dot in the authority', () => {
+		expect(authorityHostForLlmBaseUrl('https://api.openai.com./v1')).toBe('api.openai.com');
+		expect(authorityHostForLlmBaseUrl('https://api.openai.com../v1')).toBe(
+			'api.openai.com.'
+		);
+		expect(
+			providerKindForPriceOverride(
+				'openai-compatible',
+				'https://api.openai.com../v1',
+				'sglang'
+			)
+		).toBe('self_hosted');
 	});
 });

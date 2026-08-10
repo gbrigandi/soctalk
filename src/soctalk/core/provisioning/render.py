@@ -27,6 +27,7 @@ from soctalk.core.tenancy.models import (
     check_primary_llm_engine_config,
     IntegrationConfig,
     normalize_llm_engine,
+    SERVED_ENGINES,
     Tenant,
     validate_llm_tiers,
 )
@@ -131,6 +132,41 @@ _TRIAGE_POLICY_FILENAME_RE = re.compile(r"[A-Za-z0-9._-]{1,247}\.ya?ml")
 # Total payload budget across all files for one tenant — a ConfigMap tops out
 # around 1MiB including metadata, so the sum must stay well under it.
 _TRIAGE_POLICIES_TOTAL_BUDGET = 800 * 1024
+
+
+def primary_llm_engine_for_render(
+    provider: str | None, engine: str | None, base_url: str | None
+) -> str | None:
+    """Engine value to render for the primary LLM block.
+
+    Stale rows can carry a served-engine claim together with a hosted billing
+    authority because older API boundaries allowed that pair. Pricing already
+    lets the hosted authority win; render does the same by omitting the inert
+    engine so reconciliation can proceed and the worker boots with the backend
+    it actually calls. New writes still use ``check_primary_llm_engine_config``
+    and remain rejected at the API boundary.
+    """
+    normalized = normalize_llm_engine(engine)
+    if normalized in SERVED_ENGINES and (provider or "").strip().lower() in {
+        "openai",
+        "openai-compatible",
+    }:
+        from soctalk.core.pricing.resolve import hosted_provider_kind_for_base_url
+
+        hosted_kind = hosted_provider_kind_for_base_url(base_url)
+        if hosted_kind is not None:
+            import structlog
+
+            structlog.get_logger(__name__).warning(
+                "tenant_llm_engine_ignored_for_hosted_authority",
+                provider=provider,
+                engine=normalized,
+                hosted_provider_kind=hosted_kind,
+            )
+            return None
+
+    check_primary_llm_engine_config(provider, normalized, base_url)
+    return normalized
 
 
 def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[str, str]:
@@ -328,9 +364,8 @@ def render_tenant_values(
     llm_tier_values, llm_tier_keys, extra_llm_ports = _render_llm_tiers(
         integration, include_llm_api_key=include_llm_api_key, primary_port=llm_egress_port
     )
-    llm_engine = normalize_llm_engine(integration.llm_engine)
-    check_primary_llm_engine_config(
-        integration.llm_provider, llm_engine, integration.llm_base_url
+    llm_engine = primary_llm_engine_for_render(
+        integration.llm_provider, integration.llm_engine, integration.llm_base_url
     )
 
     # 'provided' = tenant brings their OWN externally-deployed Wazuh stack.
