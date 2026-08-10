@@ -72,6 +72,9 @@ def test_served_base_url_rejects_hosted_openai_equivalent_urls():
         "https://API.OPENAI.COM/v1",
         "https://API.OPENAI.COM/V1",
         " https://Api.OpenAI.Com:443/v1 ",
+        "https://api\u3002openai\u3002com/v1",
+        "https://api\uff0eopenai\uff0ecom/v1",
+        "https://api\uff61openai\uff61com/v1",
     ):
         assert has_usable_served_base_url(url) is False
 
@@ -79,6 +82,15 @@ def test_served_base_url_rejects_hosted_openai_equivalent_urls():
 def test_served_base_url_rejects_other_first_party_vendor_authority():
     assert has_usable_served_base_url("https://api.anthropic.com") is False
     assert has_usable_served_base_url("https://API.ANTHROPIC.COM") is False
+    assert has_usable_served_base_url(
+        "https://api\u3002anthropic\u3002com"
+    ) is False
+    assert has_usable_served_base_url(
+        "https://api\uff0eanthropic\uff0ecom"
+    ) is False
+    assert has_usable_served_base_url(
+        "https://api\uff61anthropic\uff61com"
+    ) is False
 
 
 def test_served_base_url_rejects_values_without_url_authority():
@@ -92,5 +104,7 @@ def test_served_base_url_accepts_genuine_custom_and_gateway_authorities():
         "https://api.openai.com.evil.example/v1",
         "https://API.OPENAI.COM.gateway.example:8443/V1",
         "https://openrouter.ai/api/v1",
+        "https://api%2eopenai%2ecom/v1",
+        "https://api%2eanthropic%2ecom",
     ):
         assert has_usable_served_base_url(url) is True

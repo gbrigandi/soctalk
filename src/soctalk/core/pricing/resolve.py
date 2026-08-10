@@ -65,6 +65,34 @@ _HOST_VENDORS = {
 # carries self_hosted rows at $0 rather than leaving them unpriced.
 _SELF_HOSTED_ENGINES = frozenset({"vllm", "sglang"})
 
+_HTTPX_DOT_FOLD = str.maketrans({
+    "\u3002": ".",
+    "\uff0e": ".",
+    "\uff61": ".",
+})
+
+
+def authority_host_for_base_url(base_url: str | None) -> str:
+    """Hostname normalized the same way httpx normalizes dot equivalents.
+
+    ``httpx`` folds the IDNA dot characters U+3002, U+FF0E, and U+FF61 to
+    ``.`` before connecting, but it does not decode ``%2e`` inside the
+    authority. Keep that exact boundary so hosted-vendor checks agree with the
+    actual request destination.
+    """
+    host = urlparse(base_url or "").hostname or ""
+    return host.translate(_HTTPX_DOT_FOLD).lower()
+
+
+def _provider_kind_from_authority(host: str) -> str | None:
+    if host.endswith("openrouter.ai"):
+        return "openrouter"
+    if host.endswith("api.openai.com"):
+        return "openai"
+    if host.endswith("api.anthropic.com"):
+        return "anthropic"
+    return None
+
 
 def provider_kind_for(
     provider: str | None, base_url: str | None, engine: str | None = None
@@ -76,30 +104,23 @@ def provider_kind_for(
     upstreams at different prices. So the kind records what we actually know,
     and ``provider_id_for`` carries the vendor when the host reveals it.
 
-    ``engine`` wins when it names a self-hosted server. A vLLM or SGLang tier
-    speaks the OpenAI protocol on some arbitrary host, so without this it
-    classified as ``openai_compatible`` and could never match the catalog's
-    self_hosted rows — leaving a self-hosted tenant on the fail-expensive
-    unknown-model fallback while a $0 row for its model sat in the table
-    (Codex review round 2, finding 1).
+    ``engine`` wins when it names a self-hosted server on a non-hosted
+    authority. A vLLM or SGLang tier speaks the OpenAI protocol on some
+    arbitrary host, so without this it classified as ``openai_compatible`` and
+    could never match the catalog's self_hosted rows — leaving a self-hosted
+    tenant on the fail-expensive unknown-model fallback while a $0 row for its
+    model sat in the table (Codex review round 2, finding 1). Hosted vendor
+    authorities are checked first because the actual request still reaches
+    that vendor even if a bad config also names a served engine.
     """
-    if (engine or "").strip().lower() in _SELF_HOSTED_ENGINES:
-        return "self_hosted"
     p = (provider or "").strip().lower()
     if p == "anthropic":
         return "anthropic"
-    host = (urlparse(base_url or "").hostname or "").lower()
-    if host.endswith("openrouter.ai"):
-        return "openrouter"
-    if host.endswith("api.openai.com"):
-        return "openai"
-    # Anthropic's own host, by the same rule as OpenAI's above. Its absence was
-    # found on a live install: a tenant pointing at api.anthropic.com with the
-    # provider left as "openai-compatible" classified as openai_compatible and
-    # missed every anthropic catalog row, so a seeded model read as unpriced.
-    # The host is the authority here — it says which vendor is billing.
-    if host.endswith("api.anthropic.com"):
-        return "anthropic"
+    host_kind = _provider_kind_from_authority(authority_host_for_base_url(base_url))
+    if host_kind is not None:
+        return host_kind
+    if (engine or "").strip().lower() in _SELF_HOSTED_ENGINES:
+        return "self_hosted"
     if p in ("openai", "openai-compatible"):
         return "openai_compatible"
     return "openai_compatible"
@@ -107,7 +128,7 @@ def provider_kind_for(
 
 def provider_id_for(base_url: str | None) -> str | None:
     """The vendor slug a base URL identifies, or None when it does not."""
-    host = (urlparse(base_url or "").hostname or "").lower()
+    host = authority_host_for_base_url(base_url)
     for known, slug in _HOST_VENDORS.items():
         if host == known or host.endswith("." + known):
             return slug

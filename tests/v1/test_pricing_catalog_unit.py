@@ -712,6 +712,36 @@ def test_anthropic_host_is_recognised_like_openais():
     )
 
 
+def test_provider_kind_folds_httpx_unicode_dots_but_not_percent_encoded_dots():
+    for dot in ("\u3002", "\uff0e", "\uff61"):
+        assert (
+            provider_kind_for(
+                "openai-compatible",
+                f"https://api{dot}openai{dot}com/v1",
+                "sglang",
+            )
+            == "openai"
+        )
+        assert (
+            provider_kind_for(
+                "openai-compatible",
+                f"https://api{dot}anthropic{dot}com",
+                "sglang",
+            )
+            == "anthropic"
+        )
+
+    assert (
+        provider_kind_for(
+            "openai-compatible",
+            "https://api%2eopenai%2ecom/v1",
+            "sglang",
+        )
+        == "self_hosted"
+    )
+    assert provider_id_for("https://api%2edeepseek%2ecom/v1") is None
+
+
 def test_chat_is_a_first_class_pricing_role():
     """Chat's model must appear in the snapshot, not just pass the gate.
 

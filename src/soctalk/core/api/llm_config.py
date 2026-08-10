@@ -1182,6 +1182,8 @@ async def tenant_put_llm_key(
         engine=cfg.llm_engine,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
+        temperature=cfg.llm_temperature,
+        max_tokens=cfg.llm_max_tokens,
         has_api_key=True,
         api_key_preview=_mask_key(payload.api_key),
     )
@@ -1251,6 +1253,8 @@ async def tenant_clear_llm_key(request: Request) -> LlmConfigRead:
         engine=cfg.llm_engine,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
+        temperature=cfg.llm_temperature,
+        max_tokens=cfg.llm_max_tokens,
         has_api_key=False,
         api_key_preview="",
     )

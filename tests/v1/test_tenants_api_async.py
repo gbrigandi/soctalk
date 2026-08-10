@@ -2413,6 +2413,84 @@ async def test_tenant_get_llm_carries_model_override_fields(
     assert result.reasoning_model is None
 
 
+async def test_tenant_byok_put_and_clear_return_valid_config_body(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """Tenant BYOK set/clear must return 200 with a complete LlmConfigRead body."""
+    import httpx
+    from fastapi import FastAPI
+
+    import soctalk.core.api.llm_config as llm_mod
+    from soctalk.core.api.llm_config import tenant_router
+
+    async def _noop_write(*_a, **_kw):
+        return None
+
+    async def _install_key():
+        return "sk-install-shared"
+
+    monkeypatch.setattr(llm_mod, "_write_api_key", _noop_write)
+    monkeypatch.setattr(llm_mod, "_install_shared_llm_key", _install_key)
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_temperature = 0.7
+    cfg.llm_max_tokens = 512
+    await mssp_session.commit()
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _attach_request_state(request, call_next):
+        request.state.db = mssp_session
+        request.state.user_identity = {
+            "user_id": str(uuid4()),
+            "email": "admin@tenant.example",
+            "user_type": "tenant",
+            "role": "tenant_admin",
+            "tenant_id": str(tenant.id),
+            "current_tenant": None,
+        }
+        return await call_next(request)
+
+    app.include_router(tenant_router)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        put_resp = await client.put(
+            "/api/tenant/llm/api-key",
+            json={"api_key": "sk-tenant-byok-123456"},
+        )
+        assert put_resp.status_code == 200, put_resp.text
+        put_body = put_resp.json()
+        assert put_body["has_api_key"] is True
+        assert put_body["api_key_preview"].startswith("sk-")
+        assert put_body["api_key_preview"].endswith("3456")
+        assert put_body["temperature"] == 0.7
+        assert put_body["max_tokens"] == 512
+
+        delete_resp = await client.delete("/api/tenant/llm/api-key")
+        assert delete_resp.status_code == 200, delete_resp.text
+        delete_body = delete_resp.json()
+        assert delete_body["has_api_key"] is False
+        assert delete_body["api_key_preview"] == ""
+        assert delete_body["temperature"] == 0.7
+        assert delete_body["max_tokens"] == 512
+
+    await mssp_session.refresh(cfg)
+    assert cfg.llm_api_key_plain is None
+
+
 # ---------------------------------------------------------------------------
 # :retry on a degraded tenant (tenant.provisioning.retry-active-job)
 # ---------------------------------------------------------------------------

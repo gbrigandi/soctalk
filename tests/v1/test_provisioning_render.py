@@ -63,11 +63,24 @@ def _make_branding(tid) -> BrandingConfig:
 
 
 _HOSTED_VENDOR_SERVED_BASE_URL_REF = "#/$defs/hostedVendorServedBaseUrl"
+_HOSTED_VENDOR_DOT = "[.\u3002\uff0e\uff61]"
 _HOSTED_VENDOR_SERVED_BASE_URL_PATTERN = (
     r"^\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\s]+@)?"
-    r"[aA][pP][iI]\.(?:[oO][pP][eE][nN][aA][iI]|"
-    r"[aA][nN][tT][hH][rR][oO][pP][iI][cC])\.[cC][oO][mM]"
+    r"[aA][pP][iI]"
+    + _HOSTED_VENDOR_DOT
+    + r"(?:[oO][pP][eE][nN][aA][iI]|"
+    r"[aA][nN][tT][hH][rR][oO][pP][iI][cC])"
+    + _HOSTED_VENDOR_DOT
+    + r"[cC][oO][mM]"
     r"(?::[0-9]+)?(?:[/\?#].*)?)\s*$"
+)
+_HOSTED_UNICODE_DOT_BASE_URLS = (
+    "https://api\u3002openai\u3002com/v1",
+    "https://api\uff0eopenai\uff0ecom/v1",
+    "https://api\uff61openai\uff61com/v1",
+    "https://api\u3002anthropic\u3002com",
+    "https://api\uff0eanthropic\uff0ecom",
+    "https://api\uff61anthropic\uff61com",
 )
 _HOSTED_VENDOR_REJECT_BASE_URLS = (
     OPENAI_SENTINEL_BASE_URL,
@@ -78,6 +91,7 @@ _HOSTED_VENDOR_REJECT_BASE_URLS = (
     "https://API.OPENAI.COM/V1",
     " https://Api.OpenAI.Com:443/v1 ",
     "https://API.ANTHROPIC.COM",
+    *_HOSTED_UNICODE_DOT_BASE_URLS,
 )
 _HOSTED_MIXED_CASE_BASE_URL = "https://API.OPENAI.COM/v1"
 _HOSTED_SUBSTRING_GATEWAY_BASE_URL = "https://API.OPENAI.COM.gateway.example:8443/V1"
@@ -307,9 +321,12 @@ def test_chart_schemas_share_hosted_vendor_served_base_url_guard():
         _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
         "https://gateway.example/API.OPENAI.COM/v1",
         " http://SGLANG.INTERNAL:8000/V1 ",
+        *_HOSTED_UNICODE_DOT_BASE_URLS,
+        "https://api%2eopenai%2ecom/v1",
+        "https://api%2eanthropic%2ecom",
     ),
 )
-def test_chart_schema_served_base_url_case_variants_match_python_classifier(
+def test_chart_schema_served_base_url_authority_variants_match_python_classifier(
     base_url: str,
 ):
     runtime_accepts = has_usable_served_base_url(base_url)

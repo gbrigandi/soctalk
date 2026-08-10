@@ -82,15 +82,22 @@ def test_install_default_fast_tier_from_env(monkeypatch):
     assert _install_default_llm_tiers() is None
 
 
-def test_install_default_fast_tier_rejects_hosted_openai_served_engine(monkeypatch):
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        " https://api.openai.com/v1 ",
+        "https://api\u3002openai\u3002com/v1",
+    ),
+)
+def test_install_default_fast_tier_rejects_hosted_openai_served_engine(
+    monkeypatch, base_url: str,
+):
     from soctalk.core.api.tenants import _install_default_llm_tiers
 
     for k in ("PROVIDER", "BASE_URL", "MODEL", "ENGINE", "DECODING_MODE", "API_KEY"):
         monkeypatch.delenv(f"SOCTALK_DEFAULT_FAST_TIER_{k}", raising=False)
     monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_PROVIDER", "openai-compatible")
-    monkeypatch.setenv(
-        "SOCTALK_DEFAULT_FAST_TIER_BASE_URL", " https://api.openai.com/v1 "
-    )
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_BASE_URL", base_url)
     monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_MODEL", "Qwen/Qwen3-32B")
     monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_ENGINE", "sglang")
 
@@ -182,15 +189,28 @@ def test_validate_llm_tiers_bad_base_url_rejected():
         validate_llm_tiers({"fast": {**_FAST, "base_url": "sglang.internal:8000"}})
 
 
-def test_validate_llm_tiers_rejects_served_engine_hosted_openai_base_url():
+def test_validate_llm_tiers_rejects_served_engine_hosted_vendor_base_url():
     for base_url in (
         "https://api.openai.com/v1",
         " https://api.openai.com/v1 ",
         "https://api.openai.com/v1/",
         "https://api.openai.com:443/v1",
+        "https://api\u3002openai\u3002com/v1",
+        "https://api\uff0eopenai\uff0ecom/v1",
+        "https://api\uff61openai\uff61com/v1",
+        "https://api\u3002anthropic\u3002com",
+        "https://api\uff0eanthropic\uff0ecom",
+        "https://api\uff61anthropic\uff61com",
     ):
         with pytest.raises(ValueError, match="requires a custom base_url"):
             validate_llm_tiers({"fast": {**_FAST, "base_url": base_url}})
+
+
+def test_validate_llm_tiers_accepts_percent_encoded_dot_base_url():
+    out = validate_llm_tiers(
+        {"fast": {**_FAST, "base_url": "https://api%2eopenai%2ecom/v1"}}
+    )
+    assert out["fast"]["base_url"] == "https://api%2eopenai%2ecom/v1"
 
 
 def test_validate_llm_tiers_accepts_served_engine_whitespace_custom_base_url():
