@@ -275,6 +275,41 @@ async def test_provision_happy_path_emits_each_step(
     assert integ.wazuh_url is not None and integ.wazuh_url.endswith(":55000")
 
 
+async def test_provision_rejects_stored_anthropic_served_engine(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm
+):
+    cfg = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_provider = "anthropic"
+    cfg.llm_base_url = "https://api.anthropic.com"
+    cfg.llm_model = "claude-sonnet-4-6"
+    cfg.llm_engine = "sglang"
+    await session.commit()
+
+    controller = TenantController(
+        session,
+        k8s=FakeK8s(),
+        settings=ControllerSettings(
+            wazuh_chart_path="charts/wazuh",
+            readiness_poll_interval_seconds=0.01,
+            readiness_timeout_seconds=5.0,
+        ),
+    )
+
+    with pytest.raises(ProvisionError) as exc_info:
+        await controller.provision(seeded_tenant.id, actor_id="test")
+
+    assert exc_info.value.step == "helm_apply_tenant"
+    assert "not valid with provider 'anthropic'" in str(exc_info.value)
+    await session.refresh(seeded_tenant)
+    assert seeded_tenant.state == TenantState.DEGRADED.value
+
+
 async def test_provision_resume_after_crash_is_idempotent(
     session: AsyncSession, seeded_tenant: Tenant, patched_helm
 ):

@@ -6,6 +6,7 @@
 		type TenantLlmUpdate,
 		type TenantLlmTierRead,
 		type TenantLlmTierWrite,
+		type LlmEngine,
 		type LlmDecodingMode
 	} from '$lib/api/tenants';
 	import { addToast } from '$lib/stores';
@@ -39,6 +40,7 @@
 		provider: string;
 		base_url: string;
 		model: string;
+		engine: '' | LlmEngine;
 		// Per-tier overrides — '' in the form means "no override" (the tier
 		// falls back to the primary model).
 		fast_model: string;
@@ -92,14 +94,15 @@
 
 	async function lookupPrice(): Promise<void> {
 		const model = formData.model.trim();
-		const key = `${formData.provider}|${formData.base_url.trim()}|${model}`;
+		const key = `${formData.provider}|${formData.base_url.trim()}|${formData.engine}|${model}`;
 		if (!model || !tenantId || key === priceLookupFor) return;
 		priceLookupFor = key;
 		try {
 			const s = await tenantsApi.priceSuggestion(tenantId, {
 				model,
 				provider: formData.provider,
-				base_url: formData.base_url.trim() || undefined
+				base_url: formData.base_url.trim() || undefined,
+				engine: formData.engine || undefined
 			});
 			priceSuggestion = s;
 			if (!priceEdited) {
@@ -117,6 +120,7 @@
 		provider: 'openai-compatible',
 		base_url: '',
 		model: '',
+		engine: '',
 		fast_model: '',
 		reasoning_model: '',
 		temperature: '',
@@ -286,6 +290,7 @@
 			provider: read?.provider ?? 'openai-compatible',
 			base_url: read?.base_url ?? '',
 			model: read?.model ?? '',
+			engine: read?.engine ?? '',
 			// null (no override) seeds as '' — emptying a previously-set input
 			// later diffs as a clear ('' sent), while staying empty is unchanged.
 			fast_model: read?.fast_model ?? '',
@@ -398,6 +403,7 @@
 			}
 			if (read && baseUrl !== read.base_url) payload.base_url = baseUrl;
 			if (read && formData.model !== read.model) payload.model = formData.model;
+			if (read && formData.engine !== (read.engine ?? '')) payload.engine = formData.engine;
 			// Tri-state per-tier overrides: compare against ``read.x ?? ''`` so an
 			// empty input over a null read is "unchanged" (omitted), not a
 			// spurious clear. A real clear (input emptied over a set override)
@@ -453,13 +459,15 @@
 					}
 				})();
 				const kind =
-					formData.provider === 'anthropic'
-						? 'anthropic'
-						: host.endsWith('openrouter.ai')
-							? 'openrouter'
-							: host.endsWith('api.openai.com')
-								? 'openai'
-								: 'openai_compatible';
+					formData.engine === 'vllm' || formData.engine === 'sglang'
+						? 'self_hosted'
+						: formData.provider === 'anthropic'
+							? 'anthropic'
+							: host.endsWith('openrouter.ai')
+								? 'openrouter'
+								: host.endsWith('api.openai.com')
+									? 'openai'
+									: 'openai_compatible';
 				payload.model_prices = {
 					...(read?.model_prices ?? {}),
 					[`${kind}:*:${formData.model.trim()}`]: { input: inNum, output: outNum }
@@ -582,6 +590,16 @@
 						data-testid="llm-model"
 						on:blur={lookupPrice}
 					/>
+				</label>
+				<label class="label">
+					<span class="text-sm">{m.ten_llm_engine()}</span>
+					<select name="engine" class="select" bind:value={formData.engine}>
+						<option value="">{m.ten_llm_auto()}</option>
+						<option value="frontier">frontier</option>
+						<option value="openai_compatible">openai_compatible</option>
+						<option value="vllm">vllm</option>
+						<option value="sglang">sglang</option>
+					</select>
 				</label>
 				<!-- Rates for the model above. Prefilled from the catalog where we
 				     know them, blank where we do not, and only SAVED as a tenant
@@ -851,24 +869,30 @@
 					</button>
 				</div>
 			</form>
-		{:else if read}
-			<!-- Read view — masked; only the server-provided key preview is shown. -->
-			<dl class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">{m.ten_llm_provider()}</dt>
-					<dd data-testid="llm-provider">{read.provider || '—'}</dd>
-				</div>
-				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">{m.ten_llm_base_url()}</dt>
-					<dd class="font-mono text-xs text-right break-all" data-testid="llm-base-url">
-						{read.base_url || '—'}
-					</dd>
-				</div>
-				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">{m.ten_llm_model()}</dt>
-					<dd class="font-mono text-xs" data-testid="llm-model">{read.model || '—'}</dd>
-				</div>
-				<!-- Per-tier overrides — when unset (null) the effective model is the
+			{:else if read}
+				<!-- Read view — masked; only the server-provided key preview is shown. -->
+				<dl class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+					<div class="flex justify-between gap-3">
+						<dt class="opacity-60">{m.ten_llm_provider()}</dt>
+						<dd data-testid="llm-provider">{read.provider || '—'}</dd>
+					</div>
+					<div class="flex justify-between gap-3">
+						<dt class="opacity-60">{m.ten_llm_base_url()}</dt>
+						<dd class="font-mono text-xs text-right break-all" data-testid="llm-base-url">
+							{read.base_url || '—'}
+						</dd>
+					</div>
+					<div class="flex justify-between gap-3">
+						<dt class="opacity-60">{m.ten_llm_model()}</dt>
+						<dd class="font-mono text-xs" data-testid="llm-model">{read.model || '—'}</dd>
+					</div>
+					<div class="flex justify-between gap-3">
+						<dt class="opacity-60">{m.ten_llm_engine()}</dt>
+						<dd class="font-mono text-xs" data-testid="llm-engine">
+							{read.engine ?? m.ten_llm_auto()}
+						</dd>
+					</div>
+					<!-- Per-tier overrides — when unset (null) the effective model is the
 				     primary one, rendered as "default (<model>)" so the operator
 				     always sees what will actually be used. -->
 				<div class="flex justify-between gap-3">

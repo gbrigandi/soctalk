@@ -1263,6 +1263,43 @@ async def test_onboard_non_sk_ant_key_keeps_openai_compatible_default(
     assert integration.llm_model == "gpt-4o"
 
 
+async def test_onboard_folded_defaults_reject_anthropic_served_engine(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """The request body can omit provider/engine, so validate the pair after
+    install defaults are folded in. Anthropic + sglang must fail before a Tenant
+    row is written.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    monkeypatch.setenv("SOCTALK_LLM_PROVIDER_DEFAULT", "anthropic")
+    monkeypatch.setenv("SOCTALK_LLM_ENGINE_DEFAULT", "sglang")
+    slug = f"ed{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="Contradictory Defaults",
+        profile="poc",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+    assert "not valid with provider 'anthropic'" in str(exc_info.value.detail)
+
+    rows = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalars().all()
+    assert rows == []
+
+
 async def test_onboard_poc_without_llm_key_still_succeeds(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
@@ -1529,6 +1566,92 @@ async def test_patch_llm_key_only_enqueues_no_job(
 
     kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
     assert kinds == {}, f"key-only PATCH must not enqueue jobs, got {kinds}"
+
+
+async def test_patch_llm_unknown_engine_rejected_at_payload_boundary():
+    """Unknown primary engines must 422 instead of being stored."""
+    from pydantic import ValidationError
+
+    from soctalk.core.api.llm_config import LlmConfigUpdate
+
+    with pytest.raises(ValidationError):
+        LlmConfigUpdate(engine="banana")
+
+
+async def test_patch_llm_engine_only_persists_and_enqueues_reconcile(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Changing only llm_engine is chart-affecting: it must enqueue reconcile.
+
+    Sending '' clears the stored engine so an operator can move from a
+    self-hosted endpoint back to a gateway without stale pricing classification.
+    """
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(engine="sglang"),
+        FakeRequest(),
+    )
+    assert result.engine == "sglang"
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    assert cfg.llm_engine == "sglang"
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.reconcile") == 1
+    assert "tenant.provision" not in kinds
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(engine=""),
+        FakeRequest(),
+    )
+    assert result.engine is None
+    await mssp_session.refresh(cfg)
+    assert cfg.llm_engine is None
+
+
+async def test_patch_llm_anthropic_served_engine_rejected(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Provider and engine can arrive in one PATCH; validate the result."""
+    from fastapi import HTTPException
+
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_tenant_llm(
+            tenant.id,
+            LlmConfigUpdate(provider="anthropic", engine="sglang"),
+            FakeRequest(),
+        )
+    assert exc_info.value.status_code == 422
+    assert "not valid with provider 'anthropic'" in str(exc_info.value.detail)
 
 
 # ---------------------------------------------------------------------------

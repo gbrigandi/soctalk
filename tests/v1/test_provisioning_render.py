@@ -157,10 +157,97 @@ def _tenant_values_schema() -> dict:
     return json.loads(schema_path.read_text())
 
 
+def _system_values_schema() -> dict:
+    """Load the soctalk-system chart values schema from the repo."""
+    schema_path = (
+        Path(__file__).resolve().parents[2]
+        / "charts"
+        / "soctalk-system"
+        / "values.schema.json"
+    )
+    return json.loads(schema_path.read_text())
+
+
 def _assert_validates_against_tenant_schema(values: dict) -> None:
     """The rendered values must satisfy the tenant chart's JSON Schema."""
     jsonschema = pytest.importorskip("jsonschema")
     jsonschema.validate(instance=values, schema=_tenant_values_schema())
+
+
+def test_render_tenant_values_emits_primary_llm_engine():
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)
+    integration.llm_base_url = "http://sglang.internal:8000/v1"
+    integration.llm_engine = "sglang"
+
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+
+    assert v["llm"]["engine"] == "sglang"
+    _assert_validates_against_tenant_schema(v)
+
+
+def test_render_tenant_values_rejects_bad_stored_primary_engine():
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)
+    integration.llm_provider = "anthropic"
+    integration.llm_base_url = "https://api.anthropic.com"
+    integration.llm_engine = "sglang"
+
+    with pytest.raises(ValueError, match="not valid with provider 'anthropic'"):
+        render_tenant_values(
+            tenant=t,
+            integration=integration,
+            branding=_make_branding(t.id),
+            mssp_id=str(uuid4()),
+            install_id=str(uuid4()),
+            llm_secret_name="tenant-x-llm",
+            profile="poc",
+        )
+
+
+def test_tenant_chart_schema_rejects_anthropic_primary_served_engine():
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    v["llm"]["provider"] = "anthropic"
+    v["llm"]["engine"] = "sglang"
+
+    jsonschema = pytest.importorskip("jsonschema")
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=v, schema=_tenant_values_schema())
+
+
+def test_system_chart_schema_rejects_contradictory_llm_defaults():
+    jsonschema = pytest.importorskip("jsonschema")
+    for engine in ("openai_compatible", "sglang"):
+        values = {
+            "defaults": {
+                "llm": {
+                    "provider": "anthropic",
+                    "baseUrl": "https://api.anthropic.com",
+                    "model": "claude-sonnet-4-6",
+                    "engine": engine,
+                }
+            }
+        }
+
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(instance=values, schema=_system_values_schema())
 
 
 def test_render_provided_profile():

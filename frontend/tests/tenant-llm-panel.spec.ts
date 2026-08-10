@@ -48,6 +48,7 @@ interface LlmRead {
 	provider: string;
 	base_url: string;
 	model: string;
+	engine: string | null;
 	fast_model: string | null;
 	reasoning_model: string | null;
 	temperature: number;
@@ -62,6 +63,7 @@ const LLM_READ_WITH_KEY: LlmRead = {
 	provider: 'openai-compatible',
 	base_url: 'https://llm.acme.example/v1',
 	model: 'gpt-4o-mini',
+	engine: null,
 	fast_model: null,
 	reasoning_model: null,
 	temperature: 0.0,
@@ -76,6 +78,7 @@ const LLM_READ_NO_KEY: LlmRead = {
 	provider: 'openai-compatible',
 	base_url: 'https://llm.acme.example/v1',
 	model: 'gpt-4o-mini',
+	engine: null,
 	fast_model: null,
 	reasoning_model: null,
 	temperature: 0.0,
@@ -92,6 +95,11 @@ const LLM_READ_WITH_OVERRIDES: LlmRead = {
 	...LLM_READ_WITH_KEY,
 	fast_model: 'gpt-4o-mini-fast',
 	reasoning_model: 'o3-deep-thought'
+};
+
+const LLM_READ_WITH_ENGINE: LlmRead = {
+	...LLM_READ_WITH_KEY,
+	engine: 'sglang'
 };
 
 const SIEM_READ = {
@@ -155,6 +163,7 @@ async function mockApi(page: Page, initialRead: LlmRead = LLM_READ_WITH_KEY): Pr
 					...(body.provider !== undefined ? { provider: body.provider as string } : {}),
 					...(body.base_url !== undefined ? { base_url: body.base_url as string } : {}),
 					...(body.model !== undefined ? { model: body.model as string } : {}),
+					...(body.engine !== undefined ? { engine: (body.engine as string) || null } : {}),
 					// ''-clears semantics: an empty string NULLs the override server-side.
 					...(body.fast_model !== undefined
 						? { fast_model: (body.fast_model as string) || null }
@@ -215,6 +224,7 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		await expect(page.getByTestId('llm-provider')).toContainText('openai-compatible');
 		await expect(page.getByTestId('llm-base-url')).toContainText('https://llm.acme.example/v1');
 		await expect(page.getByTestId('llm-model')).toContainText('gpt-4o-mini');
+		await expect(page.getByTestId('llm-engine')).toContainText('auto');
 		// No per-tier overrides → the effective primary model is shown as the
 		// "default (<model>)" fallback so the operator sees what will be used.
 		await expect(page.getByTestId('llm-fast-model')).toContainText('default (gpt-4o-mini)');
@@ -428,6 +438,27 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		// Read view returns with the refreshed masked state.
 		await expect(page.getByTestId('llm-model')).toContainText('claude-sonnet-4');
 		await expect(page.locator('input[name="api_key"]')).toHaveCount(0);
+	});
+
+	test('clearing the primary engine sends engine: "" and re-renders auto', async ({ page }) => {
+		const handles = await mockApi(page, LLM_READ_WITH_ENGINE);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+		await expect(page.getByTestId('llm-engine')).toContainText('sglang');
+
+		await page.getByTestId('llm-edit').click();
+		await expect(page.locator('select[name="engine"]')).toHaveValue('sglang');
+		await page.selectOption('select[name="engine"]', '');
+
+		const patchReq = page.waitForRequest(
+			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
+		);
+		await page.getByTestId('llm-save').click();
+		await patchReq;
+
+		await expect.poll(() => handles.lastPatchBody()).not.toBeNull();
+		expect(handles.lastPatchBody()).toEqual({ engine: '' });
+		await expect(page.getByTestId('llm-engine')).toContainText('auto');
 	});
 
 	test('replacing the key sends api_key but the plaintext NEVER appears in the page', async ({

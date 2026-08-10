@@ -34,7 +34,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.llm_provider import normalize_provider
 from soctalk.core.pricing import catalog, gate
-from soctalk.core.tenancy.models import check_engine_provider_combo
+from soctalk.core.tenancy.models import (
+    check_engine_provider_combo,
+    normalize_llm_engine,
+)
 from soctalk.core.pricing.resolve import (
     provider_id_for,
     provider_kind_for,
@@ -284,6 +287,15 @@ class LlmConfigUpdate(BaseModel):
             raise ValueError("base_url must start with http(s)://")
         return v
 
+    @field_validator("engine")
+    @classmethod
+    def _normalize_engine(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not v.strip():
+            return ""
+        return normalize_llm_engine(v)
+
     @field_validator(
         "temperature", "max_tokens", mode="before",
     )
@@ -349,6 +361,7 @@ async def suggest_model_price(
     model: str,
     provider: str | None = None,
     base_url: str | None = None,
+    engine: str | None = None,
 ) -> ModelPriceSuggestion:
     """Catalog rates for ``model``, so the config form can prefill them.
 
@@ -368,10 +381,17 @@ async def suggest_model_price(
 
     prov = provider if provider is not None else (cfg.llm_provider if cfg else None)
     url = base_url if base_url is not None else (cfg.llm_base_url if cfg else None)
+    eng = engine if engine is not None else (cfg.llm_engine if cfg else None)
+    try:
+        engine_norm = normalize_llm_engine(eng)
+        check_engine_provider_combo(prov, engine_norm)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    current_kind = provider_kind_for(prov, url, engine_norm)
 
     row = await catalog.lookup(
         session,
-        provider_kind=provider_kind_for(prov, url),
+        provider_kind=current_kind,
         model=name,
         provider_id=provider_id_for(url),
     )
@@ -381,7 +401,7 @@ async def suggest_model_price(
         # nothing is stored until the operator saves it.
         vendor = None
         for kind in ("anthropic", "openai", "openrouter", "openai_compatible"):
-            if kind == provider_kind_for(prov, url):
+            if kind == current_kind:
                 continue
             vendor = await catalog.lookup(
                 session, provider_kind=kind, model=name, provider_id=None
@@ -513,6 +533,7 @@ async def update_tenant_llm(
         prior_provider = cfg.llm_provider
         prior_base_url = cfg.llm_base_url
         prior_model = cfg.llm_model
+        prior_engine = cfg.llm_engine
         prior_fast_model = cfg.llm_fast_model
         prior_reasoning_model = cfg.llm_reasoning_model
         prior_temperature = cfg.llm_temperature
@@ -528,7 +549,7 @@ async def update_tenant_llm(
         # move off a self-hosted endpoint without the stale engine keeping
         # the new gateway priced as self_hosted (#142, Codex round 14).
         if payload.engine is not None:
-            cfg.llm_engine = payload.engine.strip() or None
+            cfg.llm_engine = payload.engine or None
         # Validate the RESULT, not the payload: provider and engine can arrive
         # in separate PATCHes, and only the combination is wrong.
         try:
@@ -616,6 +637,7 @@ async def update_tenant_llm(
             cfg.llm_provider != prior_provider
             or cfg.llm_base_url != prior_base_url
             or cfg.llm_model != prior_model
+            or cfg.llm_engine != prior_engine
             or cfg.llm_fast_model != prior_fast_model
             or cfg.llm_reasoning_model != prior_reasoning_model
             or cfg.llm_temperature != prior_temperature

@@ -156,6 +156,8 @@ export type LlmDecodingMode =
 	| 'guided_json'
 	| 'guided_grammar';
 
+export type LlmEngine = 'frontier' | 'openai_compatible' | 'vllm' | 'sglang';
+
 // Sanitized read view of one per-tier LLM backend (the "chain" of a hybrid
 // tenant). The plaintext key is NEVER returned — ``has_api_key`` signals its
 // presence, matching the top-level ``TenantLlmRead`` convention. Mirrors the
@@ -164,7 +166,7 @@ export interface TenantLlmTierRead {
 	provider: string | null;
 	base_url: string | null;
 	model: string | null;
-	engine: string | null;
+	engine: LlmEngine | null;
 	decoding_mode: LlmDecodingMode | null;
 	// Per-tier sampling override — null means the tier inherits its caller
 	// default (router → tenant-global sampling; reasoning → tuned constants).
@@ -181,7 +183,7 @@ export interface TenantLlmTierWrite {
 	provider: 'openai-compatible' | 'anthropic';
 	base_url: string;
 	model: string;
-	engine?: 'frontier' | 'openai_compatible' | 'vllm' | 'sglang';
+	engine?: LlmEngine;
 	decoding_mode?: LlmDecodingMode;
 	// Per-tier sampling override (0–2 / 1–8192). Omit to inherit the default.
 	temperature?: number;
@@ -213,6 +215,7 @@ export interface TenantLlmRead {
 	provider: string;
 	base_url: string;
 	model: string;
+	engine: LlmEngine | null;
 	// Per-tier model overrides — ``null`` means no override is set and the
 	// tier falls back to ``model``.
 	fast_model: string | null;
@@ -247,6 +250,9 @@ export interface TenantLlmUpdate {
 	provider?: 'openai' | 'anthropic' | 'openai-compatible';
 	base_url?: string;
 	model?: string;
+	// Tri-state primary engine: omitted = leave unchanged, '' = clear to a
+	// generic gateway/frontier default, non-empty = set the stored engine.
+	engine?: '' | LlmEngine;
 	api_key?: string;
 	// Tri-state per-tier overrides: omitted = leave unchanged, '' = clear
 	// the override (revert the tier to the primary ``model``), non-empty =
@@ -324,11 +330,12 @@ export const tenantsApi = {
 	 *  gateway's — clients must read `exact`, not just `found`. */
 	priceSuggestion: (
 		id: string,
-		q: { model: string; provider?: string; base_url?: string }
+		q: { model: string; provider?: string; base_url?: string; engine?: string }
 	) => {
 		const p = new URLSearchParams({ model: q.model });
 		if (q.provider) p.set('provider', q.provider);
 		if (q.base_url) p.set('base_url', q.base_url);
+		if (q.engine) p.set('engine', q.engine);
 		return _request<{
 			model: string;
 			found: boolean;

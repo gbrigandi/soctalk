@@ -84,8 +84,8 @@ defaults:
     provider: openai-compatible
     baseUrl: https://api.openai.com/v1
     model: gpt-4o
-    # Serving engine behind baseUrl, when it is one SocTalk prices separately:
-    # "vllm" or "sglang". Leave empty for a hosted vendor or a generic gateway.
+    # Serving engine behind baseUrl, when the endpoint protocol or server matters:
+    # "frontier", "openai_compatible", "vllm", or "sglang". Leave empty to infer.
     # Pricing cannot tell a served endpoint from a gateway by its host alone,
     # so without this a self-hosted install prices as openai_compatible (#142).
     engine: ""

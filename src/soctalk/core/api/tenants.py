@@ -35,6 +35,7 @@ from soctalk.core.tenancy.models import (
     BrandingConfig,
     check_engine_provider_combo,
     IntegrationConfig,
+    normalize_llm_engine,
     Organization,
     ProvisioningJob,
     Role,
@@ -147,7 +148,7 @@ class TenantOnboard(BaseModel):
     # are both omitted.
     llm_engine: str | None = Field(
         default=None,
-        pattern=r"^(frontier|openai_compatible|vllm|sglang)$",
+        max_length=32,
     )
     # External SIEM connection — only meaningful for the ``provided`` profile.
     # Required for ``provided`` (enforced server-side with a 422 in
@@ -162,6 +163,11 @@ class TenantOnboard(BaseModel):
         # storage must only ever see ``openai-compatible`` / ``anthropic``
         # so chart values.schema.json validation never fails on render.
         return normalize_provider(v)
+
+    @field_validator("llm_engine")
+    @classmethod
+    def _normalize_llm_engine(cls, v: str | None) -> str | None:
+        return normalize_llm_engine(v)
 
     @field_validator("llm_fast_model", "llm_reasoning_model")
     @classmethod
@@ -331,6 +337,29 @@ def _install_default_llm_tiers() -> dict[str, Any] | None:
     return validate_llm_tiers({"fast": block})
 
 
+def _check_onboard_folded_llm_defaults(payload: TenantOnboard) -> None:
+    """Validate the provider/engine pair after install defaults would apply.
+
+    ``TenantOnboard`` validates only the request body. The install-wide
+    ``SOCTALK_LLM_*_DEFAULT`` env values are folded in below, so check the same
+    resolved pair before any tenant row is written.
+    """
+    provider = payload.llm_provider
+    engine = payload.llm_engine
+    if provider is None:
+        env_provider = os.getenv("SOCTALK_LLM_PROVIDER_DEFAULT", "").strip()
+        if env_provider:
+            provider = normalize_provider(env_provider)
+            if engine is None:
+                engine = normalize_llm_engine(
+                    os.getenv("SOCTALK_LLM_ENGINE_DEFAULT", "")
+                )
+    try:
+        check_engine_provider_combo(provider, engine)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.post(
     "/onboard",
     response_model=TenantRead,
@@ -361,6 +390,8 @@ async def onboard_tenant(
         errors += _llm_key_errors(payload.llm_api_key)
         if errors:
             raise HTTPException(status_code=422, detail=errors)
+
+    _check_onboard_folded_llm_defaults(payload)
 
     org = await _get_organization(session)
 
@@ -413,7 +444,7 @@ async def onboard_tenant(
         import os
         env_provider = os.getenv("SOCTALK_LLM_PROVIDER_DEFAULT", "").strip()
         if env_provider:
-            llm_provider = env_provider
+            llm_provider = normalize_provider(env_provider)
             if llm_model == "gpt-4o":
                 env_model = os.getenv("SOCTALK_LLM_MODEL_DEFAULT", "").strip()
                 if env_model:
@@ -437,7 +468,7 @@ async def onboard_tenant(
             if llm_engine is None:
                 env_engine = os.getenv("SOCTALK_LLM_ENGINE_DEFAULT", "").strip()
                 if env_engine:
-                    llm_engine = env_engine
+                    llm_engine = normalize_llm_engine(env_engine)
     if llm_provider is not None:
         llm_model = reconcile_provider_model(llm_provider, llm_model) or llm_model
         # Keep the endpoint consistent with the resolved provider. The env
@@ -458,6 +489,10 @@ async def onboard_tenant(
             llm_reasoning_model = reconcile_provider_model(
                 llm_provider, llm_reasoning_model
             )
+    try:
+        check_engine_provider_combo(llm_provider, llm_engine)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     # Only pass llm_provider when set so the column default
     # ('openai-compatible') applies for a provider-less, key-less onboard.
     llm_kwargs: dict[str, Any] = {"llm_model": llm_model}

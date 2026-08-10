@@ -29,6 +29,10 @@ llm:
   provider: "openai-compatible"
   baseUrl: "https://api.openai.com/v1"
   model: "gpt-4o"
+  # Primary serving engine behind baseUrl. Empty = hosted vendor/generic default.
+  # vllm/sglang tell runtime + pricing this is a self-hosted OpenAI-compatible
+  # endpoint rather than a gateway.
+  engine: ""
   apiKeyRef:
     namespace: "soctalk-system"
     name: ""            # REQUIRED: set by controller to `tenant-<id>-llm`

@@ -53,6 +53,7 @@ from soctalk.core.provisioning.secrets_gen import (
 )
 from soctalk.core.tenancy.models import (
     BrandingConfig,
+    check_engine_provider_combo,
     IntegrationConfig,
     Organization,
     Tenant,
@@ -1230,6 +1231,12 @@ class TenantController:
             f"{self.settings.api_service_name}."
             f"{self.settings.soctalk_system_namespace}.svc.cluster.local"
         )
+        try:
+            check_engine_provider_combo(
+                ctx.integration.llm_provider, ctx.integration.llm_engine
+            )
+        except ValueError as exc:
+            raise ProvisionError(str(exc), step="helm_apply_tenant") from exc
         # Materialize DB-authored ACTIVE triage policies into the tenant chart values (#44).
         # Fail-closed: an invalid/oversized active row raises here → the reconcile step
         # fails → the job surfaces the failure (never a silent "active but not governing").

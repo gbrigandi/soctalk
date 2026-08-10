@@ -235,6 +235,28 @@
         "llm": {
           "type": "object",
           "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "provider",
+                  "engine"
+                ],
+                "properties": {
+                  "provider": {
+                    "const": "anthropic"
+                  },
+                  "engine": {
+                    "enum": [
+                      "openai_compatible",
+                      "vllm",
+                      "sglang"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
           "properties": {
             "provider": {
               "enum": [
@@ -308,6 +330,8 @@
               "type": "string",
               "enum": [
                 "",
+                "frontier",
+                "openai_compatible",
                 "vllm",
                 "sglang"
               ],

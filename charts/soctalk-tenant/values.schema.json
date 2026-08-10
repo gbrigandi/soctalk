@@ -96,6 +96,28 @@
         "apiKeyRef"
       ],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "provider",
+              "engine"
+            ],
+            "properties": {
+              "provider": {
+                "const": "anthropic"
+              },
+              "engine": {
+                "enum": [
+                  "openai_compatible",
+                  "vllm",
+                  "sglang"
+                ]
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "provider": {
           "enum": [
@@ -122,6 +144,15 @@
         "model": {
           "type": "string",
           "minLength": 1
+        },
+        "engine": {
+          "enum": [
+            "",
+            "frontier",
+            "openai_compatible",
+            "vllm",
+            "sglang"
+          ]
         },
         "apiKeyRef": {
           "type": "object",

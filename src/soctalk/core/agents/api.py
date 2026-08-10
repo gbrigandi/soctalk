@@ -216,6 +216,7 @@ async def _build_install_helm_release_spec(
     from soctalk.core.tenancy.auth import mint_adapter_token
     from soctalk.core.tenancy.models import (
         BrandingConfig,
+        check_engine_provider_combo,
         IntegrationConfig,
         Organization,
     )
@@ -249,6 +250,10 @@ async def _build_install_helm_release_spec(
         ).scalar_one()
 
     llm_secret_name = f"tenant-{tenant.id}-llm"
+    try:
+        check_engine_provider_combo(integration.llm_provider, integration.llm_engine)
+    except ValueError as exc:
+        raise HTTPException(422, f"invalid tenant LLM config: {exc}") from exc
 
     values = render_tenant_values(
         tenant=tenant,

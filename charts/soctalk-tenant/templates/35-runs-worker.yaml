@@ -153,6 +153,10 @@ spec:
             {{- $tierKeys := .Values.llm.tierKeys | default dict }}
             - name: SOCTALK_LLM_PROVIDER
               value: {{ $prov | quote }}
+            {{- if .Values.llm.engine }}
+            - name: SOCTALK_LLM_ENGINE
+              value: {{ .Values.llm.engine | quote }}
+            {{- end }}
             {{- /*
               Tenant-global default sampling. load_config() reads these into
               LLMConfig.temperature / .max_tokens (consumed by the router tier).

@@ -32,6 +32,10 @@ class LLMConfig(BaseModel):
     # means every tier falls back to the legacy fast_model/reasoning_model
     # defaults — the multi-provider chart (#4) populates this.
     tiers: dict[str, dict] = {}
+    # Primary backend engine. Applies to tiers without an explicit
+    # SOCTALK_<TIER>_ENGINE override, so a single-provider self-hosted tenant
+    # runs and prices with the same engine classification.
+    engine: Literal["frontier", "openai_compatible", "vllm", "sglang"] | None = None
     anthropic_api_key: str = ""
     anthropic_base_url: Optional[str] = None
     openai_api_key: str = ""
@@ -294,12 +298,33 @@ def load_config(env_file: Optional[Path] = None) -> Config:
     # LLM config (Anthropic or OpenAI-compatible; mutually exclusive)
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    openai_base_url = _optional_env("OPENAI_BASE_URL") or _optional_env("OPENAI_API_BASE")
 
     provider_preference = (os.getenv("SOCTALK_LLM_PROVIDER") or "").strip().lower()
     if provider_preference and provider_preference not in {"anthropic", "openai"}:
         raise ValueError(
             f"Invalid SOCTALK_LLM_PROVIDER={provider_preference!r}. Expected 'anthropic' or 'openai'."
         )
+    primary_engine = _optional_env("SOCTALK_LLM_ENGINE")
+    if primary_engine:
+        from soctalk.inference import ProviderEngine
+        try:
+            parsed_engine = ProviderEngine(primary_engine)
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid SOCTALK_LLM_ENGINE={primary_engine!r}. "
+                f"Expected one of {[m.value for m in ProviderEngine]}."
+            ) from e
+        served = {
+            ProviderEngine.VLLM,
+            ProviderEngine.SGLANG,
+            ProviderEngine.OPENAI_COMPATIBLE,
+        }
+        if parsed_engine in served and not openai_base_url:
+            raise ValueError(
+                f"SOCTALK_LLM_ENGINE={primary_engine} requires OPENAI_BASE_URL "
+                "(or OPENAI_API_BASE) — a served/gateway engine has no default endpoint."
+            )
 
     # Per-tier provider overlay (issue #4). When present, the deployment has
     # opted into mixed-provider triage (e.g. self-hosted router + frontier
@@ -345,6 +370,12 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         if provider == "openai" and not openai_api_key and anthropic_api_key:
             provider = "anthropic"
 
+    if primary_engine in {"openai_compatible", "vllm", "sglang"} and provider == "anthropic":
+        raise ValueError(
+            f"SOCTALK_LLM_ENGINE={primary_engine!r} is OpenAI-compatible; "
+            "not valid with SOCTALK_LLM_PROVIDER='anthropic'."
+        )
+
     # The global-provider key is the fallback for tiers without their own
     # credential. When per-tier providers are configured (mixed intent, #4) the
     # tiers can supply their own keys — e.g. two self-hosted OpenAI-compatible
@@ -366,13 +397,14 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
         reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
         chat_model=os.getenv("SOCTALK_CHAT_MODEL", ""),
+        engine=primary_engine,  # type: ignore[arg-type]
         chat_temperature=float(os.getenv("SOCTALK_CHAT_TEMPERATURE", "0.2")),
         chat_max_tokens=int(os.getenv("SOCTALK_CHAT_MAX_TOKENS", "2048")),
         tiers=tier_configs,
         anthropic_api_key=anthropic_api_key,
         anthropic_base_url=_optional_env("ANTHROPIC_BASE_URL"),
         openai_api_key=openai_api_key,
-        openai_base_url=_optional_env("OPENAI_BASE_URL") or _optional_env("OPENAI_API_BASE"),
+        openai_base_url=openai_base_url,
         openai_organization=_optional_env("OPENAI_ORGANIZATION"),
         temperature=float(os.getenv("SOCTALK_LLM_TEMPERATURE", "0.0")),
         max_tokens=int(os.getenv("SOCTALK_LLM_MAX_TOKENS", "4096")),

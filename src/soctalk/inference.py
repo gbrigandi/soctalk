@@ -276,7 +276,7 @@ def resolve_tier(
     tconf = tiers.get(tier.value) or tiers.get(tier) or {}
 
     explicit_provider = tconf.get("provider")
-    engine_raw = tconf.get("engine")
+    engine_raw = tconf.get("engine") or getattr(cfg, "engine", None)
     if engine_raw:
         engine = ProviderEngine(engine_raw)
     else:

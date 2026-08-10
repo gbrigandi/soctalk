@@ -22,7 +22,13 @@ import os
 import re
 from typing import Any, Literal
 
-from soctalk.core.tenancy.models import BrandingConfig, IntegrationConfig, Tenant
+from soctalk.core.tenancy.models import (
+    BrandingConfig,
+    check_engine_provider_combo,
+    IntegrationConfig,
+    normalize_llm_engine,
+    Tenant,
+)
 
 Profile = Literal["poc", "persistent", "provided", "legacy"]
 
@@ -320,6 +326,8 @@ def render_tenant_values(
     llm_tier_values, llm_tier_keys, extra_llm_ports = _render_llm_tiers(
         integration, include_llm_api_key=include_llm_api_key, primary_port=llm_egress_port
     )
+    llm_engine = normalize_llm_engine(integration.llm_engine)
+    check_engine_provider_combo(integration.llm_provider, llm_engine)
 
     # 'provided' = tenant brings their OWN externally-deployed Wazuh stack.
     # SocTalk deploys only the adapter + runs-worker here and points the
@@ -386,6 +394,7 @@ def render_tenant_values(
             "provider": integration.llm_provider,
             "baseUrl": integration.llm_base_url,
             "model": integration.llm_model,
+            **({"engine": llm_engine} if llm_engine else {}),
             # Tenant-global default sampling (issue #4/#12 follow-up). Rendered
             # to SOCTALK_LLM_TEMPERATURE / SOCTALK_LLM_MAX_TOKENS worker env,
             # which config.load_config() already reads into LLMConfig.temperature

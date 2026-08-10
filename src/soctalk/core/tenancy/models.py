@@ -233,7 +233,29 @@ class User(SQLModel, table=True):
 _ALLOWED_LLM_TIERS: frozenset[str] = frozenset({"fast", "reasoning"})
 
 
-SERVED_ENGINES = {"openai_compatible", "vllm", "sglang"}
+ALLOWED_LLM_ENGINES = frozenset(
+    {"frontier", "openai_compatible", "vllm", "sglang"}
+)
+SERVED_ENGINES = frozenset({"openai_compatible", "vllm", "sglang"})
+
+
+def normalize_llm_engine(engine: str | None) -> str | None:
+    """Canonicalize and allowlist a primary/tier LLM engine string.
+
+    API models call this before writes. Provisioning paths call
+    :func:`check_engine_provider_combo` against stored rows because
+    ``IntegrationConfig`` is ``table=True`` and validators do not run there.
+    """
+    if engine is None:
+        return None
+    normalized = engine.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in ALLOWED_LLM_ENGINES:
+        raise ValueError(
+            f"engine must be one of {sorted(ALLOWED_LLM_ENGINES)}"
+        )
+    return normalized
 
 
 def check_engine_provider_combo(provider: str | None, engine: str | None) -> None:
@@ -249,9 +271,10 @@ def check_engine_provider_combo(provider: str | None, engine: str | None) -> Non
     function rather than a validator because IntegrationConfig is a
     ``table=True`` SQLModel and pydantic validators do not run on those.
     """
-    if provider == "anthropic" and engine in SERVED_ENGINES:
+    normalized = normalize_llm_engine(engine)
+    if provider == "anthropic" and normalized in SERVED_ENGINES:
         raise ValueError(
-            f"engine {engine!r} is OpenAI-compatible; "
+            f"engine {normalized!r} is OpenAI-compatible; "
             "not valid with provider 'anthropic'"
         )
 

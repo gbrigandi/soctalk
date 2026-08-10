@@ -10,12 +10,13 @@ the extraction carries the schema).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from soctalk.config import LLMConfig
+from soctalk.config import LLMConfig, load_config
 from soctalk.inference import (
     DecodingMode,
     ExtractionPolicy,
@@ -98,6 +99,46 @@ def test_resolve_tier_engine_defaults_and_override():
     assert resolve_tier(cfg, InferenceTier.ROUTER).engine == ProviderEngine.FRONTIER
     cfg2 = _cfg(tiers={"extraction": {"engine": "vllm", "base_url": "http://vllm:8000/v1"}})
     assert resolve_tier(cfg2, InferenceTier.EXTRACTION).engine == ProviderEngine.VLLM
+
+
+def test_resolve_tier_primary_engine_applies_to_single_provider_tenant():
+    cfg = _cfg(
+        provider="openai",
+        anthropic_api_key="",
+        openai_api_key="sk-primary",
+        openai_base_url="http://sglang.internal:8000/v1",
+        engine="sglang",
+    )
+
+    router = resolve_tier(cfg, InferenceTier.ROUTER)
+    reasoning = resolve_tier(cfg, InferenceTier.REASONING)
+
+    assert router.engine == ProviderEngine.SGLANG
+    assert router.provider == "openai"
+    assert router.llm_config.openai_base_url == "http://sglang.internal:8000/v1"
+    assert reasoning.engine == ProviderEngine.SGLANG
+
+
+def test_load_config_reads_primary_engine_env(monkeypatch):
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "SOCTALK_FAST_ENGINE",
+        "SOCTALK_REASONING_ENGINE",
+        "SOCTALK_CHAT_ENGINE",
+        "SOCTALK_EXTRACTION_ENGINE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-primary")
+    monkeypatch.setenv("SOCTALK_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://sglang.internal:8000/v1")
+    monkeypatch.setenv("SOCTALK_LLM_ENGINE", "sglang")
+    monkeypatch.setenv("SOCTALK_FAST_MODEL", "qwen3-32b")
+    monkeypatch.setenv("SOCTALK_REASONING_MODEL", "qwen3-32b")
+
+    cfg = load_config(env_file=Path("/tmp/soctalk-no-env-file"))
+
+    assert cfg.llm.engine == "sglang"
+    assert resolve_tier(cfg.llm, InferenceTier.ROUTER).engine == ProviderEngine.SGLANG
 
 
 # ------------------------------------------------------------ decoding resolve
