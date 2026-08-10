@@ -219,22 +219,40 @@ def test_served_engine_without_base_url_rejected(clean_env):
                   ANTHROPIC_API_KEY="a")
 
 
-def test_chat_served_engine_rejects_global_openai_sentinel_base_url(clean_env):
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        OPENAI_SENTINEL_BASE_URL,
+        "https://API.OPENAI.COM/v1",
+        "https://API.OPENAI.COM/V1",
+    ),
+)
+def test_chat_served_engine_rejects_global_openai_sentinel_base_url(
+    clean_env, base_url
+):
     # This is the system-chart fleet-chat failure mode: SOCTALK_CHAT_ENGINE made
     # chat price as self-hosted while OPENAI_BASE_URL still pointed at hosted OpenAI.
     with pytest.raises(ValueError, match="requires SOCTALK_CHAT_BASE_URL"):
         clean_env(
             SOCTALK_CHAT_ENGINE="sglang",
-            OPENAI_BASE_URL=OPENAI_SENTINEL_BASE_URL,
+            OPENAI_BASE_URL=base_url,
             OPENAI_API_KEY="o",
         )
 
 
-def test_served_engine_rejects_tier_openai_sentinel_base_url(clean_env):
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        OPENAI_SENTINEL_BASE_URL,
+        "https://API.OPENAI.COM/v1",
+        "https://API.OPENAI.COM/V1",
+    ),
+)
+def test_served_engine_rejects_tier_openai_sentinel_base_url(clean_env, base_url):
     with pytest.raises(ValueError, match="requires SOCTALK_FAST_BASE_URL"):
         clean_env(
             SOCTALK_FAST_ENGINE="vllm",
-            SOCTALK_FAST_BASE_URL=OPENAI_SENTINEL_BASE_URL,
+            SOCTALK_FAST_BASE_URL=base_url,
             OPENAI_API_KEY="o",
         )
 
@@ -270,6 +288,9 @@ def test_served_engine_accepts_global_openai_base_url(clean_env):
         " https://api.openai.com/v1 ",
         "https://api.openai.com/v1/",
         "https://api.openai.com:443/v1",
+        "https://API.OPENAI.COM/v1",
+        "https://API.OPENAI.COM/V1",
+        " https://Api.OpenAI.Com:443/v1 ",
     ),
 )
 def test_primary_served_engine_rejects_hosted_openai_base_url(clean_env, base_url):

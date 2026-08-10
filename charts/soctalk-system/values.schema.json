@@ -284,7 +284,7 @@
                     ],
                     "properties": {
                       "baseUrl": {
-                        "pattern": "^\\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\\s]+@)?api\\.(?:openai|anthropic)\\.com(?::[0-9]+)?(?:[/\\?#].*)?)\\s*$"
+                        "$ref": "#/$defs/hostedVendorServedBaseUrl"
                       }
                     }
                   }
@@ -364,7 +364,7 @@
                         ],
                         "properties": {
                           "baseUrl": {
-                            "pattern": "^\\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\\s]+@)?api\\.(?:openai|anthropic)\\.com(?::[0-9]+)?(?:[/\\?#].*)?)\\s*$"
+                            "$ref": "#/$defs/hostedVendorServedBaseUrl"
                           }
                         }
                       }
@@ -628,6 +628,9 @@
     }
   },
   "$defs": {
+    "hostedVendorServedBaseUrl": {
+      "pattern": "^\\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\\s]+@)?[aA][pP][iI]\\.(?:[oO][pP][eE][nN][aA][iI]|[aA][nN][tT][hH][rR][oO][pP][iI][cC])\\.[cC][oO][mM](?::[0-9]+)?(?:[/\\?#].*)?)\\s*$"
+    },
     "resources": {
       "type": "object",
       "additionalProperties": false,

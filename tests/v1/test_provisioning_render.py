@@ -18,7 +18,10 @@ from uuid import uuid4
 
 import pytest
 
-from soctalk.core.llm_provider import OPENAI_SENTINEL_BASE_URL
+from soctalk.core.llm_provider import (
+    OPENAI_SENTINEL_BASE_URL,
+    has_usable_served_base_url,
+)
 from soctalk.core.provisioning.render import (
     _profile_tenant_overrides,
     render_tenant_values,
@@ -57,6 +60,27 @@ def _make_branding(tid) -> BrandingConfig:
         app_name="Acme SOC",
         primary_color="#112233",
     )
+
+
+_HOSTED_VENDOR_SERVED_BASE_URL_REF = "#/$defs/hostedVendorServedBaseUrl"
+_HOSTED_VENDOR_SERVED_BASE_URL_PATTERN = (
+    r"^\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\s]+@)?"
+    r"[aA][pP][iI]\.(?:[oO][pP][eE][nN][aA][iI]|"
+    r"[aA][nN][tT][hH][rR][oO][pP][iI][cC])\.[cC][oO][mM]"
+    r"(?::[0-9]+)?(?:[/\?#].*)?)\s*$"
+)
+_HOSTED_VENDOR_REJECT_BASE_URLS = (
+    OPENAI_SENTINEL_BASE_URL,
+    " https://api.openai.com/v1 ",
+    "https://api.openai.com/v1/",
+    "https://api.openai.com:443/v1",
+    "https://API.OPENAI.COM/v1",
+    "https://API.OPENAI.COM/V1",
+    " https://Api.OpenAI.Com:443/v1 ",
+    "https://API.ANTHROPIC.COM",
+)
+_HOSTED_MIXED_CASE_BASE_URL = "https://API.OPENAI.COM/v1"
+_HOSTED_SUBSTRING_GATEWAY_BASE_URL = "https://API.OPENAI.COM.gateway.example:8443/V1"
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +205,147 @@ def _system_default_values() -> dict:
     return yaml.safe_load(values_path.read_text())
 
 
+def _count_schema_refs(schema: dict, ref: str) -> int:
+    count = 0
+    stack: list = [schema]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if node.get("$ref") == ref:
+                count += 1
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return count
+
+
+def _schema_accepts(instance: dict, schema: dict) -> bool:
+    jsonschema = pytest.importorskip("jsonschema")
+    try:
+        jsonschema.validate(instance=instance, schema=schema)
+    except jsonschema.ValidationError:
+        return False
+    return True
+
+
+def _tenant_values_with_served_primary_base_url(base_url: str) -> dict:
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    v["llm"]["baseUrl"] = base_url
+    v["llm"]["engine"] = "sglang"
+    return v
+
+
+def _tenant_values_with_served_tier_base_url(base_url: str) -> dict:
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    v["llm"]["tiers"] = {
+        "fast": {
+            "provider": "openai",
+            "baseUrl": base_url,
+            "model": "qwen3-32b",
+            "engine": "sglang",
+        }
+    }
+    return v
+
+
+def _system_values_with_served_primary_base_url(base_url: str) -> dict:
+    values = _system_default_values()
+    values["defaults"]["llm"]["baseUrl"] = base_url
+    values["defaults"]["llm"]["engine"] = "sglang"
+    return values
+
+
+def _system_values_with_served_fast_tier_base_url(base_url: str) -> dict:
+    values = _system_default_values()
+    values["defaults"]["llm"]["fastTier"] = {
+        "provider": "openai-compatible",
+        "baseUrl": base_url,
+        "model": "qwen3-32b",
+        "engine": "sglang",
+    }
+    return values
+
+
+def test_chart_schemas_share_hosted_vendor_served_base_url_guard():
+    system_schema = _system_values_schema()
+    tenant_schema = _tenant_values_schema()
+
+    assert _count_schema_refs(system_schema, _HOSTED_VENDOR_SERVED_BASE_URL_REF) == 2
+    assert _count_schema_refs(tenant_schema, _HOSTED_VENDOR_SERVED_BASE_URL_REF) == 2
+    assert (
+        system_schema["$defs"]["hostedVendorServedBaseUrl"]
+        == tenant_schema["$defs"]["hostedVendorServedBaseUrl"]
+        == {"pattern": _HOSTED_VENDOR_SERVED_BASE_URL_PATTERN}
+    )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "https://API.OPENAI.COM/v1",
+        "https://API.OPENAI.COM/V1",
+        " https://Api.OpenAI.Com:443/v1 ",
+        "https://API.ANTHROPIC.COM",
+        _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
+        "https://gateway.example/API.OPENAI.COM/v1",
+        " http://SGLANG.INTERNAL:8000/V1 ",
+    ),
+)
+def test_chart_schema_served_base_url_case_variants_match_python_classifier(
+    base_url: str,
+):
+    runtime_accepts = has_usable_served_base_url(base_url)
+    system_schema = _system_values_schema()
+    tenant_schema = _tenant_values_schema()
+
+    assert (
+        _schema_accepts(
+            _system_values_with_served_primary_base_url(base_url),
+            system_schema,
+        )
+        is runtime_accepts
+    )
+    assert (
+        _schema_accepts(
+            _system_values_with_served_fast_tier_base_url(base_url),
+            system_schema,
+        )
+        is runtime_accepts
+    )
+    assert (
+        _schema_accepts(
+            _tenant_values_with_served_primary_base_url(base_url),
+            tenant_schema,
+        )
+        is runtime_accepts
+    )
+    assert (
+        _schema_accepts(
+            _tenant_values_with_served_tier_base_url(base_url),
+            tenant_schema,
+        )
+        is runtime_accepts
+    )
+
+
 def _assert_validates_against_tenant_schema(values: dict) -> None:
     """The rendered values must satisfy the tenant chart's JSON Schema."""
     jsonschema = pytest.importorskip("jsonschema")
@@ -266,12 +431,7 @@ def test_tenant_chart_schema_rejects_anthropic_primary_served_engine():
 
 @pytest.mark.parametrize(
     "base_url",
-    (
-        OPENAI_SENTINEL_BASE_URL,
-        " https://api.openai.com/v1 ",
-        "https://api.openai.com/v1/",
-        "https://api.openai.com:443/v1",
-    ),
+    _HOSTED_VENDOR_REJECT_BASE_URLS,
 )
 def test_tenant_chart_schema_rejects_primary_served_engine_hosted_openai_base_url(
     base_url: str,
@@ -297,12 +457,7 @@ def test_tenant_chart_schema_rejects_primary_served_engine_hosted_openai_base_ur
 @pytest.mark.parametrize("tier", ("fast", "reasoning"))
 @pytest.mark.parametrize(
     "base_url",
-    (
-        OPENAI_SENTINEL_BASE_URL,
-        " https://api.openai.com/v1 ",
-        "https://api.openai.com/v1/",
-        "https://api.openai.com:443/v1",
-    ),
+    _HOSTED_VENDOR_REJECT_BASE_URLS,
 )
 def test_tenant_chart_schema_rejects_tier_served_engine_hosted_openai_base_url(
     tier: str, base_url: str,
@@ -351,14 +506,7 @@ def test_system_chart_schema_rejects_contradictory_llm_defaults():
 @pytest.mark.parametrize("engine", ("openai_compatible", "vllm", "sglang"))
 @pytest.mark.parametrize(
     "base_url",
-    (
-        None,
-        "",
-        OPENAI_SENTINEL_BASE_URL,
-        " https://api.openai.com/v1 ",
-        "https://api.openai.com/v1/",
-        "https://api.openai.com:443/v1",
-    ),
+    (None, "", *_HOSTED_VENDOR_REJECT_BASE_URLS),
 )
 def test_system_chart_schema_rejects_served_engine_without_custom_base_url(
     engine: str, base_url: str | None
@@ -378,14 +526,7 @@ def test_system_chart_schema_rejects_served_engine_without_custom_base_url(
 @pytest.mark.parametrize("engine", ("openai_compatible", "vllm", "sglang"))
 @pytest.mark.parametrize(
     "base_url",
-    (
-        None,
-        "",
-        OPENAI_SENTINEL_BASE_URL,
-        " https://api.openai.com/v1 ",
-        "https://api.openai.com/v1/",
-        "https://api.openai.com:443/v1",
-    ),
+    (None, "", *_HOSTED_VENDOR_REJECT_BASE_URLS),
 )
 def test_system_chart_schema_rejects_default_fast_tier_served_engine_hosted_base_url(
     engine: str, base_url: str | None
@@ -417,6 +558,15 @@ def test_system_chart_schema_rejects_default_fast_tier_served_engine_hosted_base
             ("engine",),
         ),
         (
+            "hosted default mixed-case no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": _HOSTED_MIXED_CASE_BASE_URL,
+                "model": "gpt-4o",
+            },
+            ("engine",),
+        ),
+        (
             "gateway base URL no engine",
             {
                 "provider": "openai-compatible",
@@ -432,6 +582,16 @@ def test_system_chart_schema_rejects_default_fast_tier_served_engine_hosted_base
                 "baseUrl": "https://llm-gateway.example/v1",
                 "model": "qwen3-32b",
                 "engine": "openai_compatible",
+            },
+            (),
+        ),
+        (
+            "served engine hosted-substring gateway",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
+                "model": "qwen3-32b",
+                "engine": "sglang",
             },
             (),
         ),
@@ -509,12 +669,29 @@ def test_system_chart_schema_accepts_legitimate_llm_default_shapes(
             },
         ),
         (
+            "hosted default mixed-case no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": _HOSTED_MIXED_CASE_BASE_URL,
+                "model": "gpt-4o",
+            },
+        ),
+        (
             "gateway engine custom base URL",
             {
                 "provider": "openai-compatible",
                 "baseUrl": "https://llm-gateway.example/v1",
                 "model": "qwen3-32b",
                 "engine": "openai_compatible",
+            },
+        ),
+        (
+            "served engine hosted-substring gateway",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
+                "model": "qwen3-32b",
+                "engine": "sglang",
             },
         ),
         (
@@ -588,12 +765,29 @@ def test_system_chart_schema_accepts_legitimate_default_fast_tier_shapes(
             },
         ),
         (
+            "hosted default mixed-case no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": _HOSTED_MIXED_CASE_BASE_URL,
+                "model": "gpt-4o",
+            },
+        ),
+        (
             "gateway engine custom base URL",
             {
                 "provider": "openai-compatible",
                 "baseUrl": "https://llm-gateway.example/v1",
                 "model": "qwen3-32b",
                 "engine": "openai_compatible",
+            },
+        ),
+        (
+            "served engine hosted-substring gateway",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
+                "model": "qwen3-32b",
+                "engine": "sglang",
             },
         ),
         (
@@ -677,12 +871,29 @@ def test_tenant_chart_schema_accepts_legitimate_primary_llm_shapes(
             },
         ),
         (
+            "hosted default mixed-case no engine",
+            {
+                "provider": "openai",
+                "baseUrl": _HOSTED_MIXED_CASE_BASE_URL,
+                "model": "gpt-4o",
+            },
+        ),
+        (
             "gateway engine custom base URL",
             {
                 "provider": "openai",
                 "baseUrl": "https://llm-gateway.example/v1",
                 "model": "qwen3-32b",
                 "engine": "openai_compatible",
+            },
+        ),
+        (
+            "served engine hosted-substring gateway",
+            {
+                "provider": "openai",
+                "baseUrl": _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
+                "model": "qwen3-32b",
+                "engine": "sglang",
             },
         ),
         (
