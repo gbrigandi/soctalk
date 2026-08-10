@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { api, type TriagePolicy, type AuthoredTriagePolicy } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages';
-	import { localizeHref } from '$lib/i18n';
-	import { currentTenantId, canManageTriagePolicies } from '$lib/stores';
+	import { localizeHref, localizedGoto } from '$lib/i18n';
+	import { authSession, currentTenantId, canManageTriagePolicies, isMsspUser } from '$lib/stores';
 
 	let policies: TriagePolicy[] = [];
 	let loading = true;
@@ -21,8 +20,16 @@
 	let editorSaving = false;
 	let editorError: string | null = null;
 
+	// MSSP-side (/api/mssp/*) page. The nav already hides it from tenant
+	// audiences; a tenant user who reaches it by URL is denied by the role
+	// wall, so bounce them rather than surface a raw permission error, and
+	// gate every fetch on the audience so no 403 fires before the bounce.
+	$: if ($authSession.user && !$isMsspUser) {
+		localizedGoto('/');
+	}
+
 	$: tenantId = $currentTenantId;
-	$: if (tenantId) loadAuthored(tenantId);
+	$: if (tenantId && $authSession.user && $isMsspUser) loadAuthored(tenantId);
 
 	async function loadAuthored(tid: string) {
 		authoredLoading = true;
@@ -131,7 +138,13 @@
 				: 'variant-soft';
 	}
 
-	onMount(loadPolicies);
+	// Session-gated one-shot instead of onMount: the session may hydrate
+	// after mount, and the built-in list is MSSP-only too.
+	let builtinRequested = false;
+	$: if ($authSession.user && $isMsspUser && !builtinRequested) {
+		builtinRequested = true;
+		loadPolicies();
+	}
 
 	async function loadPolicies() {
 		loading = true;

@@ -1,8 +1,16 @@
 <script lang="ts">
 	import { api, type AuthoredResponsePlaybook } from '$lib/api/client';
-	import { currentTenantId, canManageTriagePolicies } from '$lib/stores';
+	import { authSession, currentTenantId, canManageTriagePolicies, isMsspUser } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
-	import { localizeHref } from '$lib/i18n';
+	import { localizeHref, localizedGoto } from '$lib/i18n';
+
+	// MSSP-side (/api/mssp/*) page. The nav already hides it from tenant
+	// audiences; a tenant user who reaches it by URL is denied by the role
+	// wall, so bounce them rather than surface a raw permission error, and
+	// gate the fetch on the audience so no 403 fires before the bounce.
+	$: if ($authSession.user && !$isMsspUser) {
+		localizedGoto('/');
+	}
 
 	// Reuses the admin-tier config-management gate (the API gates response-playbook
 	// mutations with the same MSSP_ADMIN role as triage policies).
@@ -21,7 +29,7 @@
 	let editorError: string | null = null;
 
 	$: tenantId = $currentTenantId;
-	$: if (tenantId) load(tenantId);
+	$: if (tenantId && $authSession.user && $isMsspUser) load(tenantId);
 
 	async function load(tid: string) {
 		loading = true;

@@ -4,7 +4,7 @@
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages';
 	import { localizeHref, localizedGoto } from '$lib/i18n';
-	import { currentTenantId } from '$lib/stores';
+	import { authSession, currentTenantId, isMsspUser } from '$lib/stores';
 	import ResponseFlowPreview from '$lib/response-playbook/ResponseFlowPreview.svelte';
 	import {
 		CAPABILITIES,
@@ -23,6 +23,13 @@
 	} from '$lib/response-playbook/schema';
 
 	type Which = 'escalate' | 'close';
+
+	// MSSP-side editor (same audience wall as /response-playbooks): bounce a
+	// tenant user who direct-loads the URL, and key the load on the audience
+	// so no MSSP-only fetch fires for them.
+	$: if ($authSession.user && !$isMsspUser) {
+		localizedGoto('/');
+	}
 
 	$: tenantId = $currentTenantId;
 	$: editId = $page.url.searchParams.get('id');
@@ -164,7 +171,8 @@
 	});
 
 	let loadedKey = '';
-	$: loadKey = editId && tenantId ? `${tenantId}|${editId}` : '';
+	$: loadKey =
+		editId && tenantId && $authSession.user && $isMsspUser ? `${tenantId}|${editId}` : '';
 	$: if (loadKey && loadKey !== loadedKey) {
 		loadedKey = loadKey;
 		loaded = false;

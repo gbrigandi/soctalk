@@ -4,7 +4,7 @@
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages';
 	import { localizeHref, localizedGoto } from '$lib/i18n';
-	import { currentTenantId } from '$lib/stores';
+	import { authSession, currentTenantId, isMsspUser } from '$lib/stores';
 	import ConditionBuilder from '$lib/triage-policy/ConditionBuilder.svelte';
 	import TriagePolicyFlowPreview from '$lib/triage-policy/TriagePolicyFlowPreview.svelte';
 	import {
@@ -28,6 +28,13 @@
 	} from '$lib/triage-policy/schema';
 
 	// ---------------------------------------------------------------- state
+
+	// MSSP-side editor (same audience wall as /triage-policies): bounce a
+	// tenant user who direct-loads the URL, and key the load on the audience
+	// so no MSSP-only fetch fires for them.
+	$: if ($authSession.user && !$isMsspUser) {
+		localizedGoto('/');
+	}
 
 	$: tenantId = $currentTenantId;
 	$: editId = $page.url.searchParams.get('id');
@@ -212,7 +219,8 @@
 	// left stale form data behind. Reload whenever (tenant, id) changes and
 	// discard responses that arrive for a key we've since navigated away from.
 	let loadedKey = '';
-	$: loadKey = editId && tenantId ? `${tenantId}|${editId}` : '';
+	$: loadKey =
+		editId && tenantId && $authSession.user && $isMsspUser ? `${tenantId}|${editId}` : '';
 	$: if (loadKey && loadKey !== loadedKey) {
 		loadedKey = loadKey;
 		loaded = false;
