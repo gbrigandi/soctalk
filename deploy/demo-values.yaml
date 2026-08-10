@@ -11,11 +11,10 @@
 
 image:
   registry: ghcr.io/soctalk   # → ghcr.io/soctalk/soctalk-{api,app-ui,...}:<tag>
-  tag: latest                 # demo tracks head of main
-  # MUST be Always for a moving `latest` tag: with IfNotPresent (the chart
-  # default) the node caches the first `latest` it pulls and NEVER re-pulls,
-  # so every deploy silently runs stale code — the reason the demo ran
-  # provisioning logic weeks behind main. Paired with a rollout-restart in
+  tag: "0.2.1"                # PINNED to the released artifacts (branch demo-pin-0.2.1)
+  # Always even for a pinned tag: 0.2.1 was republished during the release
+  # recut, and IfNotPresent would keep serving whatever layers the node
+  # cached under that tag before the recut. Paired with a rollout-restart in
   # deploy-demo.yml (helm upgrade alone won't restart pods on an unchanged spec).
   pullPolicy: Always
 
@@ -74,10 +73,9 @@ preInstallCheck:
 # render.py default (0.1.13-fixes), which is not published to public
 # ghcr. Demo tenants pull :latest from ghcr.io/soctalk instead.
 tenantProvisioning:
-  adapterImageTag: latest
-  runsWorkerImageTag: latest
-  # linux-ep too: demo tracks head, and the chart default now points at
-  # the (unpublished-until-release) pinned tag. Without this, a freshly
-  # provisioned demo tenant's linuxep-0 pod ImagePullBackOffs and
-  # wait_workloads times out (caught by the deploy smoke test).
-  linuxEpImageTag: latest
+  adapterImageTag: "0.2.1"
+  runsWorkerImageTag: "0.2.1"
+  # linux-ep pinned too: all five 0.2.1 images (api, app-ui, orchestrator,
+  # adapter, linux-ep) are published to public ghcr by the release cut, so a
+  # freshly provisioned tenant pulls the same released bits as the system.
+  linuxEpImageTag: "0.2.1"
