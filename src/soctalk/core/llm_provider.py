@@ -34,27 +34,84 @@ ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
 # ``openai`` env-side).
 DEFAULT_PROVIDER = "openai-compatible"
 
+_HTTPX_DOT_FOLD = str.maketrans({
+    "\u3002": ".",
+    "\uff0e": ".",
+    "\uff61": ".",
+})
+
+# Hosted authorities whose billing/provider identity wins over any stale served
+# engine claim. Keep this low-level so pricing, runtime config, and write guards
+# all ask the same table.
+HOSTED_LLM_AUTHORITIES: dict[str, str] = {
+    "openrouter.ai": "openrouter",
+    "api.openai.com": "openai",
+    "api.anthropic.com": "anthropic",
+}
+
+SERVED_LLM_ENGINES = frozenset({"openai_compatible", "vllm", "sglang"})
+
+
+def authority_host_for_base_url(base_url: str | None) -> str:
+    """Hostname normalized the same way httpx normalizes dot equivalents.
+
+    ``httpx`` folds the IDNA dot characters U+3002, U+FF0E, and U+FF61 to
+    ``.`` before connecting, but it does not decode ``%2e`` inside the
+    authority. DNS treats one trailing root dot as the same absolute host, so
+    strip exactly one after folding. Keep that exact boundary so hosted-vendor
+    checks agree with the actual request destination.
+    """
+    host = urlparse(base_url or "").hostname or ""
+    host = host.translate(_HTTPX_DOT_FOLD).lower()
+    return host[:-1] if host.endswith(".") else host
+
+
+def _host_matches_domain(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def hosted_provider_kind_for_base_url(base_url: str | None) -> str | None:
+    host = authority_host_for_base_url(base_url)
+    for domain, provider_kind in HOSTED_LLM_AUTHORITIES.items():
+        if _host_matches_domain(host, domain):
+            return provider_kind
+    return None
+
+
+def effective_llm_engine(
+    provider: str | None, engine: str | None, base_url: str | None
+) -> str | None:
+    """Return the engine SocTalk should actually render/run/price.
+
+    Historical rows can carry ``engine=sglang`` or ``vllm`` while their base URL
+    points at a hosted authority. The request still goes to that hosted service,
+    so the served-engine claim is inert and must not be inherited by tiers or
+    pricing. Validation still rejects new writes before they reach storage.
+    """
+    normalized = (engine or "").strip().lower() or None
+    if normalized in SERVED_LLM_ENGINES and (provider or "").strip().lower() in {
+        "openai",
+        DEFAULT_PROVIDER,
+    }:
+        if hosted_provider_kind_for_base_url(base_url) is not None:
+            return None
+    return normalized
+
 
 def has_usable_served_base_url(base_url: str | None) -> bool:
     """Return true only for a non-empty custom served-engine endpoint.
 
-    Hosted first-party vendor authorities are not usable for vLLM/SGLang: the
+    Hosted vendor authorities are not usable for vLLM/SGLang: the
     request would still go to the vendor API while pricing calls it self-hosted.
-    Reuse pricing's authority classifier so the hosted-OpenAI decision has one
-    definition across runtime validation and cost classification.
+    Reuse the same authority table as pricing so runtime validation and cost
+    classification cannot drift.
     """
     normalized = (base_url or "").strip()
     if not normalized:
         return False
     if not urlparse(normalized).hostname:
         return False
-
-    from soctalk.core.pricing.resolve import provider_kind_for
-
-    return provider_kind_for(DEFAULT_PROVIDER, normalized) not in {
-        "openai",
-        "anthropic",
-    }
+    return hosted_provider_kind_for_base_url(normalized) is None
 
 
 def normalize_provider(provider: str | None) -> str | None:

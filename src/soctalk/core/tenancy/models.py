@@ -33,7 +33,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel, Text
 
 from soctalk.core.llm_provider import (
-    OPENAI_SENTINEL_BASE_URL,
+    SERVED_LLM_ENGINES,
     has_usable_served_base_url,
 )
 
@@ -241,7 +241,7 @@ _ALLOWED_LLM_TIERS: frozenset[str] = frozenset({"fast", "reasoning"})
 ALLOWED_LLM_ENGINES = frozenset(
     {"frontier", "openai_compatible", "vllm", "sglang"}
 )
-SERVED_ENGINES = frozenset({"openai_compatible", "vllm", "sglang"})
+SERVED_ENGINES = SERVED_LLM_ENGINES
 
 
 def normalize_llm_engine(engine: str | None) -> str | None:
@@ -301,8 +301,7 @@ def check_primary_llm_engine_config(
     if normalized in SERVED_ENGINES and not has_usable_served_base_url(url):
         raise ValueError(
             f"engine {normalized!r} requires a custom llm_base_url; "
-            f"{OPENAI_SENTINEL_BASE_URL!r} is the hosted OpenAI default and "
-            "the tenant chart does not render OPENAI_BASE_URL for it"
+            "hosted vendor API endpoints are not valid served/gateway backends"
         )
 
 

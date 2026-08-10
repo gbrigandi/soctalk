@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 from uuid import UUID
 
 import structlog
@@ -27,8 +26,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.policies import resolve_cost_tracking
-from soctalk.core.pricing.names import base_model_id
+from soctalk.core.llm_provider import (
+    HOSTED_LLM_AUTHORITIES,
+    _host_matches_domain,
+    authority_host_for_base_url,
+    effective_llm_engine,
+)
+from soctalk.core.llm_provider import (
+    hosted_provider_kind_for_base_url as _shared_hosted_provider_kind_for_base_url,
+)
 from soctalk.core.pricing import catalog
+from soctalk.core.pricing.names import base_model_id
 from soctalk.core.tenancy.models import IntegrationConfig
 
 logger = structlog.get_logger(__name__)
@@ -65,42 +73,15 @@ _HOST_VENDORS = {
 # carries self_hosted rows at $0 rather than leaving them unpriced.
 _SELF_HOSTED_ENGINES = frozenset({"vllm", "sglang"})
 
-_HTTPX_DOT_FOLD = str.maketrans({
-    "\u3002": ".",
-    "\uff0e": ".",
-    "\uff61": ".",
-})
-
-
-def authority_host_for_base_url(base_url: str | None) -> str:
-    """Hostname normalized the same way httpx normalizes dot equivalents.
-
-    ``httpx`` folds the IDNA dot characters U+3002, U+FF0E, and U+FF61 to
-    ``.`` before connecting, but it does not decode ``%2e`` inside the
-    authority. DNS treats one trailing root dot as the same absolute host, so
-    strip exactly one after folding. Keep that exact boundary so hosted-vendor
-    checks agree with the actual request destination.
-    """
-    host = urlparse(base_url or "").hostname or ""
-    host = host.translate(_HTTPX_DOT_FOLD).lower()
-    return host[:-1] if host.endswith(".") else host
-
-
-def _host_matches_domain(host: str, domain: str) -> bool:
-    return host == domain or host.endswith("." + domain)
-
 
 def hosted_provider_kind_for_base_url(base_url: str | None) -> str | None:
-    return _provider_kind_from_authority(authority_host_for_base_url(base_url))
+    return _shared_hosted_provider_kind_for_base_url(base_url)
 
 
 def _provider_kind_from_authority(host: str) -> str | None:
-    if _host_matches_domain(host, "openrouter.ai"):
-        return "openrouter"
-    if _host_matches_domain(host, "api.openai.com"):
-        return "openai"
-    if _host_matches_domain(host, "api.anthropic.com"):
-        return "anthropic"
+    for domain, provider_kind in HOSTED_LLM_AUTHORITIES.items():
+        if _host_matches_domain(host, domain):
+            return provider_kind
     return None
 
 
@@ -270,6 +251,11 @@ def roles_for_config(
     fastModel / reasoningModel.
     """
     tiers = tiers or (getattr(cfg, "llm_tiers", None) or {})
+    primary_engine = effective_llm_engine(
+        getattr(cfg, "llm_provider", None),
+        getattr(cfg, "llm_engine", None),
+        getattr(cfg, "llm_base_url", None),
+    )
     roles: dict[str, dict[str, Any]] = {}
     for role, fallback_model in (
         ("fast", cfg.llm_fast_model or cfg.llm_model),
@@ -299,7 +285,7 @@ def roles_for_config(
         # without it a single-provider self-hosted tenant resolved by host and
         # stayed openai_compatible, missing its own self_hosted price. A tier's
         # engine still wins, since it describes that tier's own backend.
-        engine = tier.get("engine") or getattr(cfg, "llm_engine", None)
+        engine = tier.get("engine") or primary_engine
         if not model:
             continue
         entry = {

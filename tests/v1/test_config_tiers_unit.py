@@ -229,6 +229,9 @@ def test_served_engine_without_base_url_rejected(clean_env):
         "https://api.openai.com\u3002/v1",
         "https://api.openai.com\uff0e/v1",
         "https://api.openai.com\uff61/v1",
+        "https://openrouter.ai/api/v1",
+        "https://gateway.openrouter.ai/api/v1",
+        "https://OPENROUTER.AI/api/v1",
     ),
 )
 def test_chat_served_engine_rejects_global_openai_sentinel_base_url(
@@ -254,6 +257,9 @@ def test_chat_served_engine_rejects_global_openai_sentinel_base_url(
         "https://api.openai.com\u3002/v1",
         "https://api.openai.com\uff0e/v1",
         "https://api.openai.com\uff61/v1",
+        "https://openrouter.ai/api/v1",
+        "https://gateway.openrouter.ai/api/v1",
+        "https://OPENROUTER.AI/api/v1",
     ),
 )
 def test_served_engine_rejects_tier_openai_sentinel_base_url(clean_env, base_url):
@@ -306,6 +312,9 @@ def test_served_engine_accepts_global_openai_base_url(clean_env):
         "https://api\u3002openai\u3002com/v1",
         "https://api\uff0eopenai\uff0ecom/v1",
         "https://api\uff61openai\uff61com/v1",
+        "https://openrouter.ai/api/v1",
+        "https://gateway.openrouter.ai/api/v1",
+        "https://OPENROUTER.AI/api/v1",
     ),
 )
 def test_primary_served_engine_ignored_for_hosted_openai_base_url(clean_env, base_url):
@@ -316,6 +325,17 @@ def test_primary_served_engine_ignored_for_hosted_openai_base_url(clean_env, bas
         OPENAI_API_KEY="o",
     )
 
+    assert cfg.engine is None
+
+
+def test_openrouter_without_engine_is_valid_runtime_base_url(clean_env):
+    cfg = clean_env(
+        SOCTALK_LLM_PROVIDER="openai",
+        OPENAI_BASE_URL="https://openrouter.ai/api/v1",
+        OPENAI_API_KEY="o",
+    )
+
+    assert cfg.openai_base_url == "https://openrouter.ai/api/v1"
     assert cfg.engine is None
 
 

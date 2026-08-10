@@ -87,9 +87,11 @@ def test_install_default_fast_tier_from_env(monkeypatch):
     (
         " https://api.openai.com/v1 ",
         "https://api\u3002openai\u3002com/v1",
+        "https://openrouter.ai/api/v1",
+        "https://gateway.openrouter.ai/api/v1",
     ),
 )
-def test_install_default_fast_tier_rejects_hosted_openai_served_engine(
+def test_install_default_fast_tier_rejects_hosted_vendor_served_engine(
     monkeypatch, base_url: str,
 ):
     from soctalk.core.api.tenants import _install_default_llm_tiers
@@ -116,6 +118,12 @@ def test_validate_llm_tiers_ok_normalizes():
     assert "engine" not in out2["reasoning"]
     out3 = validate_llm_tiers({"fast": {**_FAST, "engine": ""}})
     assert "engine" not in out3["fast"]
+    out4 = validate_llm_tiers({"fast": {
+        "provider": "openai-compatible",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "deepseek/deepseek-chat",
+    }})
+    assert out4["fast"]["base_url"] == "https://openrouter.ai/api/v1"
 
 
 def test_validate_llm_tiers_none_and_empty():
@@ -208,6 +216,10 @@ def test_validate_llm_tiers_rejects_served_engine_hosted_vendor_base_url():
         "https://api\u3002anthropic\u3002com",
         "https://api\uff0eanthropic\uff0ecom",
         "https://api\uff61anthropic\uff61com",
+        "https://openrouter.ai/api/v1",
+        "https://gateway.openrouter.ai/api/v1",
+        "https://OPENROUTER.AI/api/v1",
+        "https://openrouter.ai./api/v1",
     ):
         with pytest.raises(ValueError, match="requires a custom base_url"):
             validate_llm_tiers({"fast": {**_FAST, "base_url": base_url}})
@@ -304,7 +316,7 @@ def test_hybrid_render_tiers_and_ports():
     assert v["networkPolicies"]["extraLlmEgressPorts"] == [8000]
 
 
-def test_render_rejects_bad_stored_tier_served_engine_hosted_openai_base_url():
+def test_render_rejects_bad_stored_tier_served_engine_hosted_base_url():
     # Simulates a historical/manual JSONB write that bypassed LLMTierConfig.
     integ = _integration(
         uuid4(),

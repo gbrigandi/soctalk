@@ -1335,6 +1335,69 @@ async def test_onboard_rejects_served_engine_with_default_base_url(
     assert rows == []
 
 
+async def test_onboard_rejects_served_engine_with_openrouter_base_url(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"or{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="OpenRouter With Served Engine",
+        profile="poc",
+        llm_base_url="https://openrouter.ai/api/v1",
+        llm_engine="sglang",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+    assert "requires a custom llm_base_url" in str(exc_info.value.detail)
+
+    rows = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalars().all()
+    assert rows == []
+
+
+async def test_onboard_accepts_openrouter_base_url_without_engine(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"or{uuid4().hex[:8]}",
+        display_name="OpenRouter No Engine",
+        profile="poc",
+        llm_base_url="https://openrouter.ai/api/v1",
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_base_url == "https://openrouter.ai/api/v1"
+    assert integration.llm_engine is None
+
+
 async def test_onboard_poc_without_llm_key_still_succeeds(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
@@ -1713,7 +1776,12 @@ async def test_patch_llm_engine_only_persists_with_custom_base_url(
 
 @pytest.mark.parametrize(
     "base_url",
-    ("https://api.openai.com/v1", "https://api.openai.com./v1"),
+    (
+        "https://api.openai.com/v1",
+        "https://api.openai.com./v1",
+        "https://openrouter.ai/api/v1",
+        "https://gateway.openrouter.ai/api/v1",
+    ),
 )
 async def test_patch_llm_base_url_to_sentinel_rejected_when_engine_set(
     mssp_session: AsyncSession, seeded_org: Organization, base_url: str
@@ -1770,6 +1838,40 @@ async def test_patch_llm_base_url_to_sentinel_rejected_when_engine_set(
     assert await _llm_jobs_by_kind(mssp_session, tenant_id) == {}
 
 
+async def test_patch_llm_openrouter_base_url_without_engine_accepted(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(base_url="https://openrouter.ai/api/v1"),
+        FakeRequest(),
+    )
+
+    assert result.base_url == "https://openrouter.ai/api/v1"
+    assert result.engine is None
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    assert cfg.llm_base_url == "https://openrouter.ai/api/v1"
+    assert cfg.llm_engine is None
+
+
 async def test_patch_llm_anthropic_served_engine_rejected(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
@@ -1798,10 +1900,14 @@ async def test_patch_llm_anthropic_served_engine_rejected(
     assert "not valid with provider 'anthropic'" in str(exc_info.value.detail)
 
 
-async def test_patch_llm_tier_served_engine_hosted_openai_base_url_rejected(
-    mssp_session: AsyncSession, seeded_org: Organization
+@pytest.mark.parametrize(
+    "base_url",
+    ("https://api.openai.com/v1", "https://openrouter.ai/api/v1"),
+)
+async def test_patch_llm_tier_served_engine_hosted_base_url_rejected(
+    mssp_session: AsyncSession, seeded_org: Organization, base_url: str
 ):
-    """A tier PATCH must not persist a served engine on hosted OpenAI.
+    """A tier PATCH must not persist a served engine on a hosted vendor URL.
 
     That persisted JSONB would render SOCTALK_FAST_BASE_URL +
     SOCTALK_FAST_ENGINE and make the tenant worker fail load_config().
@@ -1828,7 +1934,7 @@ async def test_patch_llm_tier_served_engine_hosted_openai_base_url_rejected(
                 tiers={
                     "fast": {
                         "provider": "openai-compatible",
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": base_url,
                         "model": "qwen3-32b",
                         "engine": "sglang",
                     }

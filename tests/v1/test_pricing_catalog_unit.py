@@ -18,7 +18,6 @@ from soctalk.core.pricing.resolve import (
 )
 from soctalk.graph import budget
 
-
 # ----------------------------------------------------------------- catalog
 
 
@@ -932,6 +931,61 @@ def test_hybrid_roles_keep_both_backends_for_one_model_string():
     assert roles["reasoning"]["provider_kind"] == "anthropic"
     # Chat shares the string, so it is the one that collapses.
     assert "chat" not in roles
+
+
+def test_stale_hosted_primary_engine_is_not_inherited_by_pricing_or_runtime():
+    """Pricing must inherit the effective primary engine, not the raw DB field."""
+    from types import SimpleNamespace
+
+    from soctalk.config import LLMConfig
+    from soctalk.core.llm_provider import OPENAI_SENTINEL_BASE_URL
+    from soctalk.core.pricing.resolve import roles_for_config
+    from soctalk.core.provisioning.render import primary_llm_engine_for_render
+    from soctalk.inference import InferenceTier, ProviderEngine, resolve_tier
+
+    cfg = SimpleNamespace(
+        llm_model="gpt-4o",
+        llm_fast_model=None,
+        llm_reasoning_model=None,
+        llm_provider="openai-compatible",
+        llm_base_url=OPENAI_SENTINEL_BASE_URL,
+        llm_engine="sglang",
+        llm_tiers={
+            "fast": {
+                "provider": "openai-compatible",
+                "base_url": "https://llm-gateway.corp.example/v1",
+                "model": "qwen3-32b",
+            }
+        },
+    )
+
+    assert (
+        primary_llm_engine_for_render(
+            cfg.llm_provider, cfg.llm_engine, cfg.llm_base_url
+        )
+        is None
+    )
+    roles = roles_for_config(cfg)
+    assert roles["fast"]["provider_kind"] == "openai_compatible"
+
+    runtime_cfg = LLMConfig(
+        provider="openai",
+        openai_api_key="sk-test",
+        openai_base_url=OPENAI_SENTINEL_BASE_URL,
+        engine="sglang",
+        fast_model="gpt-4o",
+        reasoning_model="gpt-4o",
+        tiers={
+            "router": {
+                "provider": "openai",
+                "base_url": "https://llm-gateway.corp.example/v1",
+                "model": "qwen3-32b",
+            }
+        },
+    )
+    resolved = resolve_tier(runtime_cfg, InferenceTier.ROUTER)
+    assert resolved.engine == ProviderEngine.FRONTIER
+    assert resolved.llm_config.openai_base_url == "https://llm-gateway.corp.example/v1"
 
 
 def test_chat_dedupe_uses_the_same_normalisation_as_snapshot_matching():

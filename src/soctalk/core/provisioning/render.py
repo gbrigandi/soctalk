@@ -22,13 +22,17 @@ import os
 import re
 from typing import Any, Literal
 
+from soctalk.core.llm_provider import (
+    effective_llm_engine,
+    hosted_provider_kind_for_base_url,
+)
 from soctalk.core.tenancy.models import (
-    BrandingConfig,
-    check_primary_llm_engine_config,
-    IntegrationConfig,
-    normalize_llm_engine,
     SERVED_ENGINES,
+    BrandingConfig,
+    IntegrationConfig,
     Tenant,
+    check_primary_llm_engine_config,
+    normalize_llm_engine,
     validate_llm_tiers,
 )
 
@@ -147,12 +151,11 @@ def primary_llm_engine_for_render(
     and remain rejected at the API boundary.
     """
     normalized = normalize_llm_engine(engine)
-    if normalized in SERVED_ENGINES and (provider or "").strip().lower() in {
+    effective = effective_llm_engine(provider, normalized, base_url)
+    if normalized in SERVED_ENGINES and effective is None and (provider or "").strip().lower() in {
         "openai",
         "openai-compatible",
     }:
-        from soctalk.core.pricing.resolve import hosted_provider_kind_for_base_url
-
         hosted_kind = hosted_provider_kind_for_base_url(base_url)
         if hosted_kind is not None:
             import structlog
@@ -165,8 +168,8 @@ def primary_llm_engine_for_render(
             )
             return None
 
-    check_primary_llm_engine_config(provider, normalized, base_url)
-    return normalized
+    check_primary_llm_engine_config(provider, effective, base_url)
+    return effective
 
 
 def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[str, str]:

@@ -89,6 +89,10 @@ def test_served_base_url_rejects_other_first_party_vendor_authority():
     assert has_usable_served_base_url("https://API.ANTHROPIC.COM") is False
     assert has_usable_served_base_url("https://api.anthropic.com.") is False
     assert has_usable_served_base_url("https://gateway.api.anthropic.com") is False
+    assert has_usable_served_base_url("https://openrouter.ai/api/v1") is False
+    assert has_usable_served_base_url("https://gateway.openrouter.ai/api/v1") is False
+    assert has_usable_served_base_url("https://OPENROUTER.AI/api/v1") is False
+    assert has_usable_served_base_url("https://openrouter.ai./api/v1") is False
     assert has_usable_served_base_url(
         "https://api\u3002anthropic\u3002com"
     ) is False
@@ -112,8 +116,9 @@ def test_served_base_url_accepts_genuine_custom_and_gateway_authorities():
         "https://API.OPENAI.COM.gateway.example:8443/V1",
         "https://evilapi.openai.com/v1",
         "https://notapi.anthropic.com",
-        "https://openrouter.ai/api/v1",
+        "https://evilopenrouter.ai/api/v1",
         "https://api%2eopenai%2ecom/v1",
         "https://api%2eanthropic%2ecom",
+        "https://openrouter%2eai/api/v1",
     ):
         assert has_usable_served_base_url(url) is True

@@ -11,7 +11,12 @@ import structlog
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-from soctalk.core.llm_provider import has_usable_served_base_url
+from soctalk.core.llm_provider import (
+    OPENAI_SENTINEL_BASE_URL,
+    effective_llm_engine,
+    has_usable_served_base_url,
+    hosted_provider_kind_for_base_url,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -149,7 +154,7 @@ def _load_tier_configs() -> dict[str, dict]:
                 raise ValueError(
                     f"{prefix}_ENGINE={entry['engine']} requires {prefix}_BASE_URL "
                     "(or a custom global OPENAI_BASE_URL) — a served/gateway engine "
-                    "cannot use the hosted OpenAI default endpoint."
+                    "cannot use a hosted vendor endpoint."
                 )
         if "default_decoding_mode" in entry:
             from soctalk.inference import DecodingMode
@@ -379,23 +384,26 @@ def load_config(env_file: Optional[Path] = None) -> Config:
                 f"SOCTALK_LLM_ENGINE={primary_engine!r} is OpenAI-compatible; "
                 "not valid with SOCTALK_LLM_PROVIDER='anthropic'."
             )
-        hosted_kind = None
-        if openai_base_url:
-            from soctalk.core.pricing.resolve import hosted_provider_kind_for_base_url
-
-            hosted_kind = hosted_provider_kind_for_base_url(openai_base_url)
-        if provider == "openai" and (hosted_kind is not None or not openai_base_url):
+        effective_engine_base_url = openai_base_url or OPENAI_SENTINEL_BASE_URL
+        effective_engine = effective_llm_engine(
+            provider, primary_engine, effective_engine_base_url
+        )
+        if provider == "openai" and effective_engine is None:
+            hosted_kind = (
+                hosted_provider_kind_for_base_url(effective_engine_base_url)
+                or "openai"
+            )
             logger.warning(
                 "llm_engine_ignored_for_hosted_authority",
                 engine=primary_engine,
-                hosted_provider_kind=hosted_kind or "openai",
+                hosted_provider_kind=hosted_kind,
             )
             primary_engine = None
         elif primary_engine_is_served and not has_usable_served_base_url(openai_base_url):
             raise ValueError(
                 f"SOCTALK_LLM_ENGINE={primary_engine} requires OPENAI_BASE_URL "
                 "(or OPENAI_API_BASE) set to a custom endpoint — a served/gateway "
-                "engine cannot use the hosted OpenAI default endpoint."
+                "engine cannot use a hosted vendor endpoint."
             )
 
     # The global-provider key is the fallback for tiers without their own

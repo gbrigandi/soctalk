@@ -66,6 +66,7 @@ _HOSTED_VENDOR_SERVED_BASE_URL_REF = "#/$defs/hostedVendorServedBaseUrl"
 _HOSTED_VENDOR_DOT = "[.\u3002\uff0e\uff61]"
 _HOSTED_VENDOR_SERVED_BASE_URL_PATTERN = (
     r"^\s*(?:$|[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/?#\s]+@)?"
+    r"(?:"
     r"(?:[A-Za-z0-9-]+"
     + _HOSTED_VENDOR_DOT
     + r")*"
@@ -75,6 +76,14 @@ _HOSTED_VENDOR_SERVED_BASE_URL_PATTERN = (
     r"[aA][nN][tT][hH][rR][oO][pP][iI][cC])"
     + _HOSTED_VENDOR_DOT
     + r"[cC][oO][mM]"
+    r"|"
+    r"(?:[A-Za-z0-9-]+"
+    + _HOSTED_VENDOR_DOT
+    + r")*"
+    r"[oO][pP][eE][nN][rR][oO][uU][tT][eE][rR]"
+    + _HOSTED_VENDOR_DOT
+    + r"[aA][iI]"
+    r")"
     r"(?:"
     + _HOSTED_VENDOR_DOT
     + r")?"
@@ -87,6 +96,9 @@ _HOSTED_UNICODE_DOT_BASE_URLS = (
     "https://api\u3002anthropic\u3002com",
     "https://api\uff0eanthropic\uff0ecom",
     "https://api\uff61anthropic\uff61com",
+    "https://openrouter\u3002ai/api/v1",
+    "https://openrouter\uff0eai/api/v1",
+    "https://openrouter\uff61ai/api/v1",
 )
 _HOSTED_VENDOR_REJECT_BASE_URLS = (
     OPENAI_SENTINEL_BASE_URL,
@@ -99,6 +111,10 @@ _HOSTED_VENDOR_REJECT_BASE_URLS = (
     "https://api.openai.com\uff61/v1",
     "https://gateway.api.openai.com/v1",
     "https://gateway.api.anthropic.com",
+    "https://openrouter.ai/api/v1",
+    "https://gateway.openrouter.ai/api/v1",
+    "https://OPENROUTER.AI/api/v1",
+    "https://openrouter.ai./api/v1",
     "https://API.OPENAI.COM/v1",
     "https://API.OPENAI.COM/V1",
     " https://Api.OpenAI.Com:443/v1 ",
@@ -333,10 +349,15 @@ def test_chart_schemas_share_hosted_vendor_served_base_url_guard():
         "https://api.openai.com\u3002/v1",
         "https://gateway.api.openai.com/v1",
         "https://gateway.api.anthropic.com",
+        "https://openrouter.ai/api/v1",
+        "https://gateway.openrouter.ai/api/v1",
+        "https://OPENROUTER.AI/api/v1",
+        "https://openrouter.ai./api/v1",
         "https://API.ANTHROPIC.COM",
         _HOSTED_SUBSTRING_GATEWAY_BASE_URL,
         "https://evilapi.openai.com/v1",
         "https://notapi.anthropic.com",
+        "https://evilopenrouter.ai/api/v1",
         "https://gateway.example/API.OPENAI.COM/v1",
         " http://SGLANG.INTERNAL:8000/V1 ",
         *_HOSTED_UNICODE_DOT_BASE_URLS,
@@ -613,6 +634,15 @@ def test_system_chart_schema_rejects_default_fast_tier_served_engine_hosted_base
             ("engine",),
         ),
         (
+            "openrouter hosted no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "https://openrouter.ai/api/v1",
+                "model": "deepseek/deepseek-chat",
+            },
+            ("engine",),
+        ),
+        (
             "gateway base URL no engine",
             {
                 "provider": "openai-compatible",
@@ -723,6 +753,14 @@ def test_system_chart_schema_accepts_legitimate_llm_default_shapes(
             },
         ),
         (
+            "openrouter hosted no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "https://openrouter.ai/api/v1",
+                "model": "deepseek/deepseek-chat",
+            },
+        ),
+        (
             "gateway engine custom base URL",
             {
                 "provider": "openai-compatible",
@@ -816,6 +854,14 @@ def test_system_chart_schema_accepts_legitimate_default_fast_tier_shapes(
                 "provider": "openai-compatible",
                 "baseUrl": _HOSTED_MIXED_CASE_BASE_URL,
                 "model": "gpt-4o",
+            },
+        ),
+        (
+            "openrouter hosted no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "https://openrouter.ai/api/v1",
+                "model": "deepseek/deepseek-chat",
             },
         ),
         (
@@ -922,6 +968,14 @@ def test_tenant_chart_schema_accepts_legitimate_primary_llm_shapes(
                 "provider": "openai",
                 "baseUrl": _HOSTED_MIXED_CASE_BASE_URL,
                 "model": "gpt-4o",
+            },
+        ),
+        (
+            "openrouter hosted no engine",
+            {
+                "provider": "openai",
+                "baseUrl": "https://openrouter.ai/api/v1",
+                "model": "deepseek/deepseek-chat",
             },
         ),
         (

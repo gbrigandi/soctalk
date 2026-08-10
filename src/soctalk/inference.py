@@ -32,6 +32,7 @@ from urllib.parse import urlsplit
 from langchain_core.messages import HumanMessage
 
 from soctalk.config import LLMConfig
+from soctalk.core.llm_provider import OPENAI_SENTINEL_BASE_URL, effective_llm_engine
 from soctalk.llm import (
     SchemaValidationError,
     ServerlessUnavailableError,
@@ -276,11 +277,29 @@ def resolve_tier(
     tconf = tiers.get(tier.value) or tiers.get(tier) or {}
 
     explicit_provider = tconf.get("provider")
-    engine_raw = tconf.get("engine") or getattr(cfg, "engine", None)
+    primary_base_url = (
+        cfg.anthropic_base_url if cfg.provider == "anthropic" else cfg.openai_base_url
+    )
+    if cfg.provider == "openai" and not primary_base_url:
+        primary_base_url = OPENAI_SENTINEL_BASE_URL
+    primary_engine = effective_llm_engine(
+        cfg.provider, getattr(cfg, "engine", None), primary_base_url
+    )
+
+    base_provider = explicit_provider or cfg.provider
+    engine_base_url = (
+        (tconf.get("base_url") or cfg.anthropic_base_url)
+        if base_provider == "anthropic"
+        else (tconf.get("base_url") or cfg.openai_base_url)
+    )
+    if base_provider == "openai" and not engine_base_url:
+        engine_base_url = OPENAI_SENTINEL_BASE_URL
+    engine_raw = effective_llm_engine(
+        base_provider, tconf.get("engine") or primary_engine, engine_base_url
+    )
     if engine_raw:
         engine = ProviderEngine(engine_raw)
     else:
-        base_provider = explicit_provider or cfg.provider
         engine = (ProviderEngine.FRONTIER if base_provider in ("anthropic", "openai")
                   else ProviderEngine.OPENAI_COMPATIBLE)
     # A served / generic OpenAI-compatible engine (vLLM, SGLang, a gateway) speaks
