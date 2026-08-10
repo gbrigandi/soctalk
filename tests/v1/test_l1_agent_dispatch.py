@@ -489,6 +489,37 @@ async def test_l2_install_spec_rejects_stored_anthropic_served_engine(
     assert "not valid with provider 'anthropic'" in str(exc_info.value.detail)
 
 
+async def test_l2_install_spec_rejects_stored_served_engine_with_sentinel_base_url(
+    mssp_session: AsyncSession, seeded_tenant: Tenant,
+):
+    from fastapi import HTTPException
+
+    installation_id, _preflight = await _drive_through_register(
+        mssp_session, seeded_tenant
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_provider = "openai-compatible"
+    cfg.llm_base_url = "https://api.openai.com/v1"
+    cfg.llm_engine = "sglang"
+    await mssp_session.commit()
+    installation = (
+        await mssp_session.execute(
+            select(TenantInstallation).where(TenantInstallation.id == installation_id)
+        )
+    ).scalar_one()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _build_install_helm_release_spec(mssp_session, installation)
+    assert exc_info.value.status_code == 422
+    assert "requires a custom llm_base_url" in str(exc_info.value.detail)
+
+
 async def test_install_success_enqueues_wait_for_ready_with_correct_probe(
     mssp_session: AsyncSession, seeded_tenant: Tenant,
 ):

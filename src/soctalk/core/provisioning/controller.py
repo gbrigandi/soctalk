@@ -53,7 +53,7 @@ from soctalk.core.provisioning.secrets_gen import (
 )
 from soctalk.core.tenancy.models import (
     BrandingConfig,
-    check_engine_provider_combo,
+    check_primary_llm_engine_config,
     IntegrationConfig,
     Organization,
     Tenant,
@@ -1232,8 +1232,10 @@ class TenantController:
             f"{self.settings.soctalk_system_namespace}.svc.cluster.local"
         )
         try:
-            check_engine_provider_combo(
-                ctx.integration.llm_provider, ctx.integration.llm_engine
+            check_primary_llm_engine_config(
+                ctx.integration.llm_provider,
+                ctx.integration.llm_engine,
+                ctx.integration.llm_base_url,
             )
         except ValueError as exc:
             raise ProvisionError(str(exc), step="helm_apply_tenant") from exc

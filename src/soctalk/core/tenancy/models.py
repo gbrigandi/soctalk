@@ -32,6 +32,8 @@ from sqlalchemy import Column, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel, Text
 
+from soctalk.core.llm_provider import OPENAI_SENTINEL_BASE_URL
+
 
 class Role(str, Enum):
     """Roles across three functional tiers per audience (see
@@ -276,6 +278,30 @@ def check_engine_provider_combo(provider: str | None, engine: str | None) -> Non
         raise ValueError(
             f"engine {normalized!r} is OpenAI-compatible; "
             "not valid with provider 'anthropic'"
+        )
+
+
+def check_primary_llm_engine_config(
+    provider: str | None, engine: str | None, base_url: str | None
+) -> None:
+    """Reject a primary LLM engine config the tenant chart cannot render.
+
+    The primary chart block suppresses OPENAI_BASE_URL when ``llm.baseUrl`` is
+    absent or still the hosted OpenAI sentinel. Served/gateway engines have no
+    public default endpoint, so that stored pair would render a runs-worker that
+    fails ``load_config()`` at startup. Keep this outside ``IntegrationConfig``
+    validators because ``table=True`` SQLModel validators do not run for DB rows.
+    """
+    normalized = normalize_llm_engine(engine)
+    check_engine_provider_combo(provider, normalized)
+    url = (base_url or "").strip()
+    if normalized in SERVED_ENGINES and (
+        not url or url == OPENAI_SENTINEL_BASE_URL
+    ):
+        raise ValueError(
+            f"engine {normalized!r} requires a custom llm_base_url; "
+            f"{OPENAI_SENTINEL_BASE_URL!r} is the hosted OpenAI default and "
+            "the tenant chart does not render OPENAI_BASE_URL for it"
         )
 
 

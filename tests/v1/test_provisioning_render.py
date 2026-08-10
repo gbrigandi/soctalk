@@ -213,6 +213,25 @@ def test_render_tenant_values_rejects_bad_stored_primary_engine():
         )
 
 
+def test_render_tenant_values_rejects_served_engine_with_suppressed_base_url():
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)
+    integration.llm_provider = "openai-compatible"
+    integration.llm_base_url = "https://api.openai.com/v1"
+    integration.llm_engine = "sglang"
+
+    with pytest.raises(ValueError, match="requires a custom llm_base_url"):
+        render_tenant_values(
+            tenant=t,
+            integration=integration,
+            branding=_make_branding(t.id),
+            mssp_id=str(uuid4()),
+            install_id=str(uuid4()),
+            llm_secret_name="tenant-x-llm",
+            profile="poc",
+        )
+
+
 def test_tenant_chart_schema_rejects_anthropic_primary_served_engine():
     t = _make_tenant("poc")
     v = render_tenant_values(

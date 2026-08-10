@@ -24,7 +24,7 @@ from typing import Any, Literal
 
 from soctalk.core.tenancy.models import (
     BrandingConfig,
-    check_engine_provider_combo,
+    check_primary_llm_engine_config,
     IntegrationConfig,
     normalize_llm_engine,
     Tenant,
@@ -327,7 +327,9 @@ def render_tenant_values(
         integration, include_llm_api_key=include_llm_api_key, primary_port=llm_egress_port
     )
     llm_engine = normalize_llm_engine(integration.llm_engine)
-    check_engine_provider_combo(integration.llm_provider, llm_engine)
+    check_primary_llm_engine_config(
+        integration.llm_provider, llm_engine, integration.llm_base_url
+    )
 
     # 'provided' = tenant brings their OWN externally-deployed Wazuh stack.
     # SocTalk deploys only the adapter + runs-worker here and points the

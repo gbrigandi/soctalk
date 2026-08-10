@@ -36,6 +36,7 @@ from soctalk.core.llm_provider import normalize_provider
 from soctalk.core.pricing import catalog, gate
 from soctalk.core.tenancy.models import (
     check_engine_provider_combo,
+    check_primary_llm_engine_config,
     normalize_llm_engine,
 )
 from soctalk.core.pricing.resolve import (
@@ -539,23 +540,31 @@ async def update_tenant_llm(
         prior_temperature = cfg.llm_temperature
         prior_max_tokens = cfg.llm_max_tokens
         prior_tiers = cfg.llm_tiers
-        if payload.provider is not None:
-            cfg.llm_provider = payload.provider
-        if payload.base_url is not None:
-            cfg.llm_base_url = payload.base_url
-        if payload.model is not None:
-            cfg.llm_model = payload.model
         # Tri-state (see the field comment): '' clears it, so a tenant can
         # move off a self-hosted endpoint without the stale engine keeping
         # the new gateway priced as self_hosted (#142, Codex round 14).
+        next_provider = (
+            payload.provider if payload.provider is not None else cfg.llm_provider
+        )
+        next_base_url = (
+            payload.base_url if payload.base_url is not None else cfg.llm_base_url
+        )
+        next_model = payload.model if payload.model is not None else cfg.llm_model
+        next_engine = cfg.llm_engine
         if payload.engine is not None:
-            cfg.llm_engine = payload.engine or None
-        # Validate the RESULT, not the payload: provider and engine can arrive
-        # in separate PATCHes, and only the combination is wrong.
+            next_engine = payload.engine or None
+        # Validate the RESULT, not the payload: provider, base_url, and engine
+        # can arrive in separate PATCHes, and only the merged render is wrong.
         try:
-            check_engine_provider_combo(cfg.llm_provider, cfg.llm_engine)
+            check_primary_llm_engine_config(
+                next_provider, next_engine, next_base_url
+            )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        cfg.llm_provider = next_provider
+        cfg.llm_base_url = next_base_url
+        cfg.llm_model = next_model
+        cfg.llm_engine = next_engine
         # Tri-state override semantics (see LlmConfigUpdate docstring):
         # None = unchanged; ''/whitespace = clear to NULL (revert to the
         # llm_model fallback); anything else = set verbatim.

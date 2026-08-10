@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.llm_provider import (
+    OPENAI_SENTINEL_BASE_URL,
     infer_provider_from_key,
     normalize_provider,
     reconcile_provider_base_url,
@@ -34,6 +35,7 @@ from soctalk.core.pricing import gate
 from soctalk.core.tenancy.models import (
     BrandingConfig,
     check_engine_provider_combo,
+    check_primary_llm_engine_config,
     IntegrationConfig,
     normalize_llm_engine,
     Organization,
@@ -338,24 +340,32 @@ def _install_default_llm_tiers() -> dict[str, Any] | None:
 
 
 def _check_onboard_folded_llm_defaults(payload: TenantOnboard) -> None:
-    """Validate the provider/engine pair after install defaults would apply.
+    """Validate the primary LLM engine config after defaults would apply.
 
     ``TenantOnboard`` validates only the request body. The install-wide
-    ``SOCTALK_LLM_*_DEFAULT`` env values are folded in below, so check the same
-    resolved pair before any tenant row is written.
+    ``SOCTALK_LLM_*_DEFAULT`` env values, key-inferred provider, and DB column
+    defaults are folded in below, so check the same resolved config before any
+    tenant row is written.
     """
     provider = payload.llm_provider
     engine = payload.llm_engine
+    base_url = payload.llm_base_url
+    if provider is None and payload.llm_api_key:
+        provider = infer_provider_from_key(payload.llm_api_key)
     if provider is None:
         env_provider = os.getenv("SOCTALK_LLM_PROVIDER_DEFAULT", "").strip()
         if env_provider:
             provider = normalize_provider(env_provider)
+            if base_url == OPENAI_SENTINEL_BASE_URL:
+                env_base_url = os.getenv("SOCTALK_LLM_BASE_URL_DEFAULT", "").strip()
+                if env_base_url:
+                    base_url = env_base_url
             if engine is None:
                 engine = normalize_llm_engine(
                     os.getenv("SOCTALK_LLM_ENGINE_DEFAULT", "")
                 )
     try:
-        check_engine_provider_combo(provider, engine)
+        check_primary_llm_engine_config(provider, engine, base_url)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -457,7 +467,7 @@ async def onboard_tenant(
             # (the anthropic client uses ANTHROPIC_BASE_URL, not this field)
             # but confusing in the tenant detail UI — replace it with the
             # install's own base_url default so the stored row is coherent.
-            if llm_base_url == "https://api.openai.com/v1":
+            if llm_base_url == OPENAI_SENTINEL_BASE_URL:
                 env_base_url = os.getenv("SOCTALK_LLM_BASE_URL_DEFAULT", "").strip()
                 if env_base_url:
                     llm_base_url = env_base_url
@@ -490,7 +500,7 @@ async def onboard_tenant(
                 llm_provider, llm_reasoning_model
             )
     try:
-        check_engine_provider_combo(llm_provider, llm_engine)
+        check_primary_llm_engine_config(llm_provider, llm_engine, llm_base_url)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     # Only pass llm_provider when set so the column default

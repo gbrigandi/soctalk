@@ -1300,6 +1300,41 @@ async def test_onboard_folded_defaults_reject_anthropic_served_engine(
     assert rows == []
 
 
+async def test_onboard_rejects_served_engine_with_default_base_url(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """A served primary engine needs a real endpoint at onboard too; otherwise
+    the stored row would render SOCTALK_LLM_ENGINE but no OPENAI_BASE_URL.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"sb{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="Served Without Endpoint",
+        profile="poc",
+        llm_engine="sglang",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+    assert "requires a custom llm_base_url" in str(exc_info.value.detail)
+
+    rows = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalars().all()
+    assert rows == []
+
+
 async def test_onboard_poc_without_llm_key_still_succeeds(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
@@ -1417,7 +1452,11 @@ async def test_onboard_422_detail_never_contains_llm_key(
 
 
 async def _seed_llm_tenant(
-    mssp_session: AsyncSession, seeded_org: Organization, *, state: str
+    mssp_session: AsyncSession,
+    seeded_org: Organization,
+    *,
+    state: str,
+    llm_base_url: str = "https://api.openai.com/v1",
 ) -> Tenant:
     tenant = Tenant(
         slug=f"lm{uuid4().hex[:8]}",
@@ -1431,20 +1470,20 @@ async def _seed_llm_tenant(
     mssp_session.add(
         IntegrationConfig(
             tenant_id=tenant.id,
-            llm_base_url="https://api.openai.com/v1",
-        # Cost accounting is ON in CI (#141 phase 3), and these tenants point at
-        # gateway endpoints whose (provider_kind, model) pairs are deliberately
-        # absent from the catalog — a gateway's price for a model is not the
-        # vendor's price for it. A tenant price override is exactly what a real
-        # operator sets in that situation, so the fixture sets one instead of
-        # the suite switching the feature off.
-        llm_model_prices={
-            m: {"input": 1.0, "output": 2.0}
-            for m in (
-                "gpt-4o", "gpt-4o-mini", "gpt-4", "o3",
-                "claude-3-5-haiku-latest", "claude-3-5-haiku",
-            )
-        },
+            llm_base_url=llm_base_url,
+            # Cost accounting is ON in CI (#141 phase 3), and these tenants
+            # point at gateway endpoints whose (provider_kind, model) pairs are
+            # deliberately absent from the catalog - a gateway's price for a
+            # model is not the vendor's price for it. A tenant price override is
+            # exactly what a real operator sets in that situation, so the
+            # fixture sets one instead of the suite switching the feature off.
+            llm_model_prices={
+                m: {"input": 1.0, "output": 2.0}
+                for m in (
+                    "gpt-4o", "gpt-4o-mini", "gpt-4", "o3",
+                    "claude-3-5-haiku-latest", "claude-3-5-haiku",
+                )
+            },
         )
     )
     await mssp_session.commit()
@@ -1578,7 +1617,50 @@ async def test_patch_llm_unknown_engine_rejected_at_payload_boundary():
         LlmConfigUpdate(engine="banana")
 
 
-async def test_patch_llm_engine_only_persists_and_enqueues_reconcile(
+async def test_patch_llm_engine_only_rejects_suppressed_base_url(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Round-16 trigger: engine-only PATCH cannot pair sglang with the hosted
+    OpenAI sentinel, because the chart suppresses OPENAI_BASE_URL for it.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    tenant_id = tenant.id
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_tenant_llm(
+            tenant.id,
+            LlmConfigUpdate(engine="sglang"),
+            FakeRequest(),
+        )
+    assert exc_info.value.status_code == 422
+    assert "requires a custom llm_base_url" in str(exc_info.value.detail)
+
+    await mssp_session.rollback()
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one()
+    assert cfg.llm_base_url == "https://api.openai.com/v1"
+    assert cfg.llm_engine is None
+    assert await _llm_jobs_by_kind(mssp_session, tenant_id) == {}
+
+
+async def test_patch_llm_engine_only_persists_with_custom_base_url(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
     """Changing only llm_engine is chart-affecting: it must enqueue reconcile.
@@ -1589,7 +1671,10 @@ async def test_patch_llm_engine_only_persists_and_enqueues_reconcile(
     from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
 
     tenant = await _seed_llm_tenant(
-        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+        mssp_session,
+        seeded_org,
+        state=TenantState.ACTIVE.value,
+        llm_base_url="http://sglang.internal:8000/v1",
     )
 
     class FakeRequest:
@@ -1624,6 +1709,61 @@ async def test_patch_llm_engine_only_persists_and_enqueues_reconcile(
     assert result.engine is None
     await mssp_session.refresh(cfg)
     assert cfg.llm_engine is None
+
+
+async def test_patch_llm_base_url_to_sentinel_rejected_when_engine_set(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """A base-url-only PATCH is also validated after merge: an existing served
+    engine cannot be moved back to the suppressed hosted sentinel.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session,
+        seeded_org,
+        state=TenantState.ACTIVE.value,
+        llm_base_url="http://sglang.internal:8000/v1",
+    )
+    tenant_id = tenant.id
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_engine = "sglang"
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_tenant_llm(
+            tenant.id,
+            LlmConfigUpdate(base_url="https://api.openai.com/v1"),
+            FakeRequest(),
+        )
+    assert exc_info.value.status_code == 422
+    assert "requires a custom llm_base_url" in str(exc_info.value.detail)
+
+    await mssp_session.rollback()
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one()
+    assert cfg.llm_base_url == "http://sglang.internal:8000/v1"
+    assert cfg.llm_engine == "sglang"
+    assert await _llm_jobs_by_kind(mssp_session, tenant_id) == {}
 
 
 async def test_patch_llm_anthropic_served_engine_rejected(
