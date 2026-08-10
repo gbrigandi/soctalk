@@ -32,6 +32,12 @@ ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
 DEFAULT_PROVIDER = "openai-compatible"
 
 
+def has_usable_served_base_url(base_url: str | None) -> bool:
+    """Return true only for a non-empty custom served-engine endpoint."""
+    normalized = (base_url or "").strip()
+    return bool(normalized) and normalized != OPENAI_SENTINEL_BASE_URL
+
+
 def normalize_provider(provider: str | None) -> str | None:
     """Canonicalize ``openai`` → ``openai-compatible`` for storage.
 

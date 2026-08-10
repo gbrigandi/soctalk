@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import pytest
 
+from soctalk.core.llm_provider import OPENAI_SENTINEL_BASE_URL
 from soctalk.core.provisioning.render import (
     _profile_tenant_overrides,
     render_tenant_values,
@@ -168,6 +169,18 @@ def _system_values_schema() -> dict:
     return json.loads(schema_path.read_text())
 
 
+def _system_default_values() -> dict:
+    """Load the soctalk-system chart defaults as a complete schema instance."""
+    yaml = pytest.importorskip("yaml")
+    values_path = (
+        Path(__file__).resolve().parents[2]
+        / "charts"
+        / "soctalk-system"
+        / "values.yaml"
+    )
+    return yaml.safe_load(values_path.read_text())
+
+
 def _assert_validates_against_tenant_schema(values: dict) -> None:
     """The rendered values must satisfy the tenant chart's JSON Schema."""
     jsonschema = pytest.importorskip("jsonschema")
@@ -253,20 +266,109 @@ def test_tenant_chart_schema_rejects_anthropic_primary_served_engine():
 
 def test_system_chart_schema_rejects_contradictory_llm_defaults():
     jsonschema = pytest.importorskip("jsonschema")
-    for engine in ("openai_compatible", "sglang"):
-        values = {
-            "defaults": {
-                "llm": {
-                    "provider": "anthropic",
-                    "baseUrl": "https://api.anthropic.com",
-                    "model": "claude-sonnet-4-6",
-                    "engine": engine,
-                }
+    for engine in ("openai_compatible", "vllm", "sglang"):
+        values = _system_default_values()
+        values["defaults"]["llm"].update(
+            {
+                "provider": "anthropic",
+                "baseUrl": "https://api.anthropic.com",
+                "model": "claude-sonnet-4-6",
+                "engine": engine,
             }
-        }
+        )
 
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(instance=values, schema=_system_values_schema())
+
+
+@pytest.mark.parametrize("engine", ("openai_compatible", "vllm", "sglang"))
+@pytest.mark.parametrize("base_url", (None, "", OPENAI_SENTINEL_BASE_URL))
+def test_system_chart_schema_rejects_served_engine_without_custom_base_url(
+    engine: str, base_url: str | None
+):
+    jsonschema = pytest.importorskip("jsonschema")
+    values = _system_default_values()
+    values["defaults"]["llm"]["engine"] = engine
+    if base_url is None:
+        values["defaults"]["llm"].pop("baseUrl", None)
+    else:
+        values["defaults"]["llm"]["baseUrl"] = base_url
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=values, schema=_system_values_schema())
+
+
+@pytest.mark.parametrize(
+    "label,llm_patch,drop_keys",
+    [
+        (
+            "hosted default no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+            },
+            ("engine",),
+        ),
+        (
+            "gateway base URL no engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "https://llm-gateway.example/v1",
+                "model": "gpt-4o",
+            },
+            ("engine",),
+        ),
+        (
+            "anthropic provider no base URL",
+            {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+            ("baseUrl", "engine"),
+        ),
+        (
+            "frontier engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "frontier",
+            },
+            (),
+        ),
+        (
+            "empty engine",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": OPENAI_SENTINEL_BASE_URL,
+                "model": "gpt-4o",
+                "engine": "",
+            },
+            (),
+        ),
+        (
+            "served engine custom base URL",
+            {
+                "provider": "openai-compatible",
+                "baseUrl": "http://sglang.internal:8000/v1",
+                "model": "qwen3-32b",
+                "engine": "sglang",
+            },
+            (),
+        ),
+    ],
+)
+def test_system_chart_schema_accepts_legitimate_llm_default_shapes(
+    label: str, llm_patch: dict, drop_keys: tuple[str, ...]
+):
+    jsonschema = pytest.importorskip("jsonschema")
+    values = _system_default_values()
+    values["defaults"]["llm"].update(llm_patch)
+    for key in drop_keys:
+        values["defaults"]["llm"].pop(key, None)
+
+    try:
+        jsonschema.validate(instance=values, schema=_system_values_schema())
+    except jsonschema.ValidationError as exc:
+        pytest.fail(f"{label} should validate: {exc.message}")
 
 
 def test_render_provided_profile():

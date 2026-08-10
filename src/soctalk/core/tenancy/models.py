@@ -32,7 +32,10 @@ from sqlalchemy import Column, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel, Text
 
-from soctalk.core.llm_provider import OPENAI_SENTINEL_BASE_URL
+from soctalk.core.llm_provider import (
+    OPENAI_SENTINEL_BASE_URL,
+    has_usable_served_base_url,
+)
 
 
 class Role(str, Enum):
@@ -295,9 +298,7 @@ def check_primary_llm_engine_config(
     normalized = normalize_llm_engine(engine)
     check_engine_provider_combo(provider, normalized)
     url = (base_url or "").strip()
-    if normalized in SERVED_ENGINES and (
-        not url or url == OPENAI_SENTINEL_BASE_URL
-    ):
+    if normalized in SERVED_ENGINES and not has_usable_served_base_url(url):
         raise ValueError(
             f"engine {normalized!r} requires a custom llm_base_url; "
             f"{OPENAI_SENTINEL_BASE_URL!r} is the hosted OpenAI default and "

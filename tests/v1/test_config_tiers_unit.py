@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from soctalk.config import load_config
+from soctalk.core.llm_provider import OPENAI_SENTINEL_BASE_URL
 from soctalk.inference import InferenceTier, ProviderEngine, resolve_tier
 
 _PREFIXES = ("SOCTALK_", "ANTHROPIC_", "OPENAI_")
@@ -218,6 +219,26 @@ def test_served_engine_without_base_url_rejected(clean_env):
                   ANTHROPIC_API_KEY="a")
 
 
+def test_chat_served_engine_rejects_global_openai_sentinel_base_url(clean_env):
+    # This is the system-chart fleet-chat failure mode: SOCTALK_CHAT_ENGINE made
+    # chat price as self-hosted while OPENAI_BASE_URL still pointed at hosted OpenAI.
+    with pytest.raises(ValueError, match="requires SOCTALK_CHAT_BASE_URL"):
+        clean_env(
+            SOCTALK_CHAT_ENGINE="sglang",
+            OPENAI_BASE_URL=OPENAI_SENTINEL_BASE_URL,
+            OPENAI_API_KEY="o",
+        )
+
+
+def test_served_engine_rejects_tier_openai_sentinel_base_url(clean_env):
+    with pytest.raises(ValueError, match="requires SOCTALK_FAST_BASE_URL"):
+        clean_env(
+            SOCTALK_FAST_ENGINE="vllm",
+            SOCTALK_FAST_BASE_URL=OPENAI_SENTINEL_BASE_URL,
+            OPENAI_API_KEY="o",
+        )
+
+
 def test_served_engine_with_base_url_ok(clean_env):
     cfg = clean_env(SOCTALK_FAST_ENGINE="sglang", SOCTALK_FAST_PROVIDER="openai",
                     SOCTALK_FAST_BASE_URL="http://sglang:8000/v1", ANTHROPIC_API_KEY="a")
@@ -230,6 +251,16 @@ def test_served_engine_accepts_global_openai_base_url(clean_env):
     cfg = clean_env(SOCTALK_FAST_ENGINE="vllm", OPENAI_BASE_URL="http://vllm:8000/v1",
                     ANTHROPIC_API_KEY="a")
     assert cfg.tiers["router"]["engine"] == "vllm"
+
+
+def test_primary_served_engine_rejects_openai_sentinel_base_url(clean_env):
+    with pytest.raises(ValueError, match="requires OPENAI_BASE_URL"):
+        clean_env(
+            SOCTALK_LLM_PROVIDER="openai",
+            SOCTALK_LLM_ENGINE="sglang",
+            OPENAI_BASE_URL=OPENAI_SENTINEL_BASE_URL,
+            OPENAI_API_KEY="o",
+        )
 
 
 def test_base_url_only_tier_does_not_relax_guard(clean_env):

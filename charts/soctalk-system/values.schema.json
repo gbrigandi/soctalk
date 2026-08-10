@@ -255,6 +255,28 @@
                   }
                 }
               }
+            },
+            {
+              "not": {
+                "required": [
+                  "engine"
+                ],
+                "properties": {
+                  "engine": {
+                    "enum": [
+                      "openai_compatible",
+                      "vllm",
+                      "sglang"
+                    ]
+                  },
+                  "baseUrl": {
+                    "enum": [
+                      "",
+                      "https://api.openai.com/v1"
+                    ]
+                  }
+                }
+              }
             }
           ],
           "properties": {
