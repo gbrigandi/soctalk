@@ -29,8 +29,13 @@ ingress:
   tls:
     issuerRef: letsencrypt-prod
     secretName: soctalk-tls
+  # Two hostnames, two surfaces: mssp.soctalk.ai (CNAME to demo) serves the
+  # cross-tenant MSSP UI for staff; demo.soctalk.ai stays the prospect-facing
+  # tenant experience (its leftmost label is the demo tenant's slug, so the
+  # app auto-pins that tenant there). The chart derives the CSRF origin list
+  # and templates one ingress + cert per host from this map.
   hostnames:
-    mssp: demo.soctalk.ai
+    mssp: mssp.soctalk.ai
     customer: demo.soctalk.ai
 
 install:
