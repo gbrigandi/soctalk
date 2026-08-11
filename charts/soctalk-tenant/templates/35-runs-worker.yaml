@@ -67,6 +67,17 @@ spec:
               {{- else -}}
                 "http://{{ .Values.adapter.api.serviceHost }}:{{ .Values.adapter.api.servicePort }}"
               {{- end }}
+            {{/*
+            TLS verification for the L1 (MSSP) API client — the runs-worker
+            reaches back to L1 to CLAIM runs, the same self-signed-cert path the
+            adapter's heartbeat/forwarding hits. Without this the worker's claim
+            client verifies the cert and every claim fails with
+            CERTIFICATE_VERIFY_FAILED, so cross-cluster runs never execute
+            (found via a launchpad L2 deploy). Mirror the adapter's knob exactly:
+            hasKey guard so an explicit false isn't clobbered; default "true".
+            */}}
+            - name: SOCTALK_API_VERIFY_SSL
+              value: {{ if hasKey .Values.soctalkSystem "verifySsl" }}{{ .Values.soctalkSystem.verifySsl | quote }}{{ else }}"true"{{ end }}
             - name: WORKER_TOKEN_PATH
               value: /run/secrets/runs-worker/token
             {{- if .Values.runsWorker.demoTiSeeding }}

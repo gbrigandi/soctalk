@@ -55,6 +55,22 @@ def _api_url() -> str:
     return os.environ["SOCTALK_API_URL"].rstrip("/")
 
 
+def _api_verify_ssl() -> bool:
+    """Whether to verify the L1 API's TLS cert on the claim/heartbeat client.
+
+    The runs-worker reaches back to L1 to claim runs. A cross-cluster (L2)
+    tenant whose MSSP serves a self-signed cert sets
+    ``SOCTALK_API_VERIFY_SSL=false`` (rendered from ``soctalkSystem.verifySsl``,
+    the same knob the adapter honors). Without honoring it here, every claim
+    fails with CERTIFICATE_VERIFY_FAILED and cross-cluster runs never execute
+    (found via a launchpad L2 deploy). Defaults to verifying when unset.
+    """
+    return os.getenv("SOCTALK_API_VERIFY_SSL", "true").strip().lower() not in {
+        "false",
+        "0",
+    }
+
+
 def _disposition_from_final(final: dict[str, Any], run_status: str) -> str:
     """Map graph terminal state → case disposition L1 should apply.
 
@@ -1077,7 +1093,7 @@ async def main() -> int:
         max_connections=max(10, concurrency * 2 + 4),
         max_keepalive_connections=max(10, concurrency * 2 + 4),
     )
-    async with httpx.AsyncClient(limits=limits) as client:
+    async with httpx.AsyncClient(limits=limits, verify=_api_verify_ssl()) as client:
         loops = [
             asyncio.create_task(
                 _worker_loop(client, stop, idle_sleep, busy_sleep, slot),
