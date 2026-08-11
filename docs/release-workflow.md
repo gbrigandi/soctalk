@@ -493,12 +493,13 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   appliance on a routable network has a known-credential `NOPASSWD:ALL` account.
 - **Wazuh ingestion is NOT covered by the matrix.** Every row proves the LLM
   path by POSTing to `/api/internal/adapter/events`, which bypasses Wazuh
-  entirely. Validating the RPM + external-Wazuh path exposed two blockers in
-  that untested segment (issue #147): the tenant egress policy hardcodes the
-  SIEM ports `9200`/`55000` (host is derived from the URL, port is not), and the
-  wazuh chart mints an indexer password it never applies to the indexer, so the
-  adapter gets 401. Add a row (or an assertion) that proves an alert flows
-  **from Wazuh** into an investigation.
+  entirely. Ingestion itself *does* work — validated out-of-band on the RPM +
+  external-Wazuh path (`ingest_ok forwarded=3` → investigations → real verdict)
+  — but no row asserts it, so a regression there would pass the whole matrix.
+  Add a row (or an assertion) that proves an alert flows **from Wazuh** into an
+  investigation. Related limitation: the tenant egress policy hardcodes the SIEM
+  ports 9200/55000 (issue #147), pre-existing since 0.2.0, so a BYO Wazuh on
+  other ports is dropped.
 - **OS packages have no published checksums.** `SHA256SUMS.txt` is written by
   `build-packer-images.yml` over `*.xz`/`*.ova` only; `packages.yml` publishes
   none, so `.deb`/`.rpm` downloads cannot be verified.

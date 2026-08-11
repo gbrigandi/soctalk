@@ -292,7 +292,16 @@ non-standard ports will not ingest until the policy learns the port. Tracked in
 issue #147. Until then, expose the external indexer/manager on `:9200`/`:55000`
 to the cluster, or relax the tenant egress policy for that host.
 
-### 5.2 What needs no manual step in 0.2.1
+### 5.2 Validated end to end
+
+BYO Wazuh works. Validated on 0.2.1 against an external Wazuh from an RPM
+install on stock k3s: the adapter queries the external indexer
+(`POST https://<indexer>:9200/wazuh-alerts-*/_search` → `200 OK`), logs
+`ingest_ok forwarded=3`, the forwarded alerts become investigations, and triage
+produces a real verdict. The requirements are simply the ones below: reachable
+on `:9200`/`:55000`, and credentials your indexer actually accepts.
+
+### 5.3 What needs no manual step in 0.2.1
 
 The controller creates `Secret/tenant-external-siem-creds` (all four keys) as
 part of provisioning a `provided` tenant. **Do not hand-create it** — onboarding
@@ -312,7 +321,7 @@ through failed runs and the detail page's **LLM** panel.
 |---|---|---|
 | **Authentication failure** | Wrong/expired indexer or API credentials; rotated on the customer side; `WAZUH_API_TOKEN` expired | Adapter ingest returns 401/403 → `adapter-status.last_ingest_error` shows the auth error; the chat resolver surfaces `external Wazuh API not configured` (a typed `ExternalSiemNotConfigured`, never an unhandled 500). Fix by `PATCH /api/mssp/tenants/{id}/external-siem` with fresh creds (which rolls the adapter). |
 | **Network unreachable** | On a non-Cilium cluster: the external SIEM is **not on `:9200`/`:55000`** — the standard egress policy hardcodes those ports (§5.1, issue #147). Otherwise: FQDN allow-list missing the host; external Wazuh down; DNS or firewall blocking; wrong URL | Adapter / resolver connection times out → `adapter-status` returns `{"reachable": false, "error": "<msg>"}`. Fix by confirming `externalSiemHosts` covers both URLs, the `soctalk-system` egress reaches `:55000`, DNS resolves, and the external Wazuh is up. |
-| **401 from the indexer with credentials you believe are correct** | If your external Wazuh was deployed from this repo's `charts/wazuh`: the chart mints an `INDEXER_PASSWORD` into `*-wazuh-creds` but **never applies it to the indexer** — the indexer still only accepts the Wazuh image's built-in default, so the minted password is rejected (issue #147). Verify with `curl -sk -u <user>:<pw> https://<indexer>:9200/` before assuming SocTalk is at fault, and onboard with credentials the indexer actually accepts. | Adapter logs `ingest_failed: Client error '401 Unauthorized' for url '…/wazuh-alerts-*/_search'` while heartbeat stays `ok`. |
+| **401 from the indexer** | The credentials you supplied are not ones the external indexer accepts. Confirm them independently first — `curl -sk -u <user>:<pw> https://<indexer>:9200/` should return 200 — then onboard (or `PATCH .../external-siem`) with those. Note if your "external" Wazuh was itself deployed from this repo's `charts/wazuh`: that chart mints an `INDEXER_PASSWORD` into `*-wazuh-creds` but does not apply it to the indexer, so the minted value is *not* the working credential (issue #147). | Adapter logs `ingest_failed: Client error '401 Unauthorized' for url '…/wazuh-alerts-*/_search'` while heartbeat stays `ok` — note the connection succeeded, so this is auth, not networking. |
 | **TLS verification failure** | Self-signed external indexer/manager cert with verification on | Connection fails on cert validation. Set `verify_ssl = false` (→ `WAZUH_INDEXER_VERIFY_SSL=false` and resolver `verify=false`) via onboard or the PATCH endpoint when the external cert is self-signed. |
 | **Invalid LLM key** | Wrong/revoked `llm_api_key` supplied at onboard; rotated on the provider side | Provisioning still **succeeds** — the key is not validated at provision time. Runs fail at runtime with provider 401s from the runs-worker's LLM calls. Fix via the detail page's **LLM** panel or `PATCH /api/mssp/tenants/{id}/llm` (which rewrites the Secret and rolls the runs-worker). |
 | **LLM endpoint unreachable** | Custom `llm_base_url` host missing from the rendered egress allow-list | `render.py` derives `networkPolicies.allowedLlmHosts` from the host portion of `llm_base_url`; a policy rendered before a base-URL change drops the runs-worker's LLM egress. A `tenant.reconcile` re-render updates the allow-list (enqueued automatically when a chart-affecting `PATCH /llm` lands on an active tenant). |
