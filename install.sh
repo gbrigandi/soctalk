@@ -220,7 +220,27 @@ check_firewalld() {
 # operator has just said they are not using — and the install reports success
 # while every triage run 401s on first contact (#138). Fail here instead: the
 # whole point of choosing "compatible" is that the endpoint is elsewhere.
+# The system chart's values.schema.json accepts only "openai-compatible" and
+# "anthropic" for defaults.llm.provider. The installer historically accepted
+# openai-compatible-family aliases (self-hosted, self_hosted, compatible,
+# openai_compatible) but render_values wrote the raw string, so an alias passed
+# the installer and then failed Helm on /defaults/llm/provider. Fold aliases to
+# the canonical value so what we validate is what the chart accepts.
+normalize_llm_provider() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    openai-compatible|openai_compatible|compatible|self-hosted|self_hosted)
+      printf 'openai-compatible' ;;
+    anthropic) printf 'anthropic' ;;
+    *) printf '%s' "${1:-}" ;;
+  esac
+}
+
 validate_llm_endpoint() {
+  # In --values-file / --chart-dir mode the operator supplies the full values
+  # (base URL + model live in the file, not SOCTALK_LLM_* env), so env-based
+  # LLM validation is moot and would wrongly die on a values-file install that
+  # set SOCTALK_LLM_PROVIDER. render_values is not called in that mode either.
+  [[ "$MODE" == "values-file" ]] && return 0
   case "$(printf '%s' "$LLM_PROVIDER" | tr '[:upper:]' '[:lower:]')" in
     openai-compatible|openai_compatible|compatible|self-hosted|self_hosted)
       [[ -n "$LLM_BASE_URL" ]] || die \
@@ -744,6 +764,7 @@ parse_args() {
 main() {
   parse_args "$@"
   auto_assume_yes_from_env     # before ANY /dev/tty prompt (issue #108)
+  LLM_PROVIDER="$(normalize_llm_provider "$LLM_PROVIDER")"  # canonical for the chart schema
   need_root                    # k3s (systemd + host install) needs root
   require_systemd              # non-skippable: the whole flow assumes systemd
   [[ "$SKIP_PREFLIGHT" == "true" ]] || preflight
