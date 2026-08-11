@@ -128,7 +128,7 @@ cert-manager. State which variant a row covered.
 
 ## Current release
 
-- **`0.2.1` — git tag `v0.2.1` @ `85da7dc`** (re-cut; see the log). Contains: the
+- **`0.2.1` — git tag `v0.2.1` @ `7e4dcac`** (re-cut; see the log). Contains: the
   full #142 pricing/engine work, frontend audience-wall (#143/#144) + LLM
   base-URL-clear guard, installer LLM model-knob + provider-alias normalization +
   values-file validation skip, the L2 runs-worker `SOCTALK_API_VERIFY_SSL` fix,
@@ -152,7 +152,10 @@ cert-manager. State which variant a row covered.
     and was already satisfied). VMs torn down afterwards.
   - **Row 4 staging — PASS.** Digest gate green on all containers, real verdict
     (22,278 tokens), and the version fix confirmed live (`0.2.1`).
-  - **Row 5 VM appliance — verdict PASS, pinning FAIL.** Booted the released
+  - **Row 5 VM appliance — PASS on `7e4dcac`** (re-validated after the pinning
+    fix: all 5 images `0.2.1`, `gen-certs` on `alpine/openssl:3.5.7`, real
+    verdict 19,973 tokens). On the earlier `85da7dc` build it was
+    **verdict PASS, pinning FAIL**: Booted the released
     `.qcow2` (checksum-verified), drove the real first-boot wizard, reached a
     real verdict (20,031 tokens) — but it ran `soctalk-api:latest` /
     `soctalk-app-ui:latest`, because the setup wizard hardcoded `tag: "latest"`.
@@ -460,7 +463,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 | 0.2.1 | `9a2a2dd` | + L2 runs-worker `SOCTALK_API_VERIFY_SSL` | launchpad L2 re-run → real triage on the tenant |
 | 0.2.1 | `f29c5f8` | + installer alias-normalize + values-file skip (holistic review) | staging coherent by digest (reproducible build, no churn) |
 | 0.2.1 | `85da7dc` | + version hygiene (published 0.2.1 reported `0.2.0` in openapi/adapter heartbeat/worker log/frontend package) + real charts-only recipe in the chart README | rows 1–4 **PASS** — real verdicts on fresh VMs (19,877 / 20,022 / 19,807 / 22,278 tokens); rows 5–6 in progress |
-| 0.2.1 | `7e4dcac` | + hard rule 10 enforcement: no shipped artifact consumes `latest` (setup wizard, packer examples + CI boot-test seed, packer chart-version defaults, `alpine/openssl` in the wazuh chart) | **scoped re-validation** — operator scoped this cut to the previously-failing mode: row 5 re-run in full (pinning + verdict). Rows 1–4, 6 were validated on `85da7dc` and **were NOT re-run on this cut** |
+| 0.2.1 | `7e4dcac` | + hard rule 10 enforcement: no shipped artifact consumes `latest` (setup wizard, packer examples + CI boot-test seed, packer chart-version defaults, `alpine/openssl` in the wazuh chart) | **scoped re-validation** — operator scoped this cut to the previously-failing mode: row 5 re-run in full → **PASS**: all 5 images `0.2.1` (was `latest`), `gen-certs` on `alpine/openssl:3.5.7`, real verdict (19,973 tokens). Rows 1–4, 6 were validated on `85da7dc` and **were NOT re-run on this cut** |
 
 ## Known follow-ups
 
