@@ -142,7 +142,7 @@ install:
 
 image:
   registry: ghcr.io/soctalk
-  tag: "0.2.0"
+  tag: "0.2.1"
 
 ingress:
   enabled: true
@@ -169,7 +169,7 @@ postgres:
 
 ```bash
 helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --namespace soctalk-system --create-namespace \
   -f soctalk-system-values.yaml
 ```

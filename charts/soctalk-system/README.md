@@ -37,24 +37,133 @@ For local development, `scripts/dev-up.sh` at repo root brings up a `k3d` cluste
 
 ```bash
 helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
-    --version 0.2.0 \
+    --version 0.2.1 \
     --namespace soctalk-system --create-namespace \
     -f values.yaml
 ```
 
-Required values (see `values.schema.json`):
+Schema-required values (`values.schema.json` rejects an install without these):
 
 - `install.msspId` (UUID)
 - `install.msspName` (string)
 - `install.installId` (UUID)
+
+Not schema-required, but you almost always want them — the chart defaults are
+empty, so the UI is not reachable by hostname without them:
+
 - `ingress.hostnames.mssp` (MSSP UI hostname)
 - `ingress.hostnames.customer` (customer UI hostname, may be wildcard like `*.customers.example.com`)
+
+### Secrets you must create first
+
+`install.sh` creates these for you; a raw `helm install` does not. Create them
+in the release namespace before installing, or the API will not start:
+
+```bash
+kubectl create namespace soctalk-system
+
+# Bootstrap MSSP admin — keys MUST be `email` and `password`.
+# Use --from-literal: the password is hashed EXACTLY as stored, and
+# `--from-file` keeps the trailing newline that `echo pw > file` adds, which
+# seeds an admin password nobody can type at the login form.
+kubectl -n soctalk-system create secret generic soctalk-system-bootstrap-admin \
+    --from-literal=email='admin@example.com' \
+    --from-literal=password='<admin password>'
+
+# LLM API key. Populate BOTH sub-keys (the chart selects by provider at
+# runtime); point the same key file at both if you use one provider.
+kubectl -n soctalk-system create secret generic soctalk-system-llm-api-key \
+    --from-file=anthropic-api-key=/path/to/llm-key \
+    --from-file=openai-api-key=/path/to/llm-key
+```
+
+Then reference them:
+
+```bash
+--set-string install.bootstrapAdmin.existingSecret=soctalk-system-bootstrap-admin \
+--set-string llm.existingSecret=soctalk-system-llm-api-key
+```
+
+`install.msspId` and `install.installId` are UUIDs that identify this install.
+Generate them once (`uuidgen`) and **keep them stable across upgrades** —
+changing them re-identifies the install.
+
+### LLM provider and model
+
+Always set an explicit model. The chart default is `gpt-4o`; a non-OpenAI
+gateway or self-hosted server does not serve it, so every triage fails with 404
+while the install still reports healthy:
+
+```bash
+--set-string defaults.llm.provider=<provider> \
+--set-string defaults.llm.model=<model that endpoint actually serves>
+```
+
+`defaults.llm.provider` accepts `openai-compatible`, `openai`, `anthropic`,
+`azure`, `ollama`. (`self-hosted` is an `install.sh` alias only — with raw Helm
+use `openai-compatible` for a self-hosted or gateway endpoint.)
+
+For `openai-compatible` you must **also** set the endpoint, and the key must be
+in the `openai-api-key` sub-key:
+
+```bash
+--set-string defaults.llm.baseUrl=<gateway URL>
+```
+
+### Installing on stock k3s
+
+The pre-install hook checks for Cilium/Calico CRDs as a proxy for "an
+NP-enforcing CNI". Stock k3s enforces standard NetworkPolicy through its
+built-in controller but ships neither CRD, so the hook is a false negative
+there — disable just the hook and the tenant NetworkPolicies still render and
+are still enforced:
+
+```bash
+--set preInstallCheck.enabled=false
+```
+
+Those CRDs back only the optional FQDN-egress feature (`CiliumNetworkPolicy`),
+which is capability-gated and no-ops without them. See
+`docs/multi-tenant/cni-networkpolicy.md`.
+
+k3s-specific values (these are environment choices, **not** chart
+requirements — adjust for your cluster's ingress controller and storage):
+
+```bash
+--set-string ingress.className=traefik \
+--set-string ingress.controllerNamespace=kube-system \
+--set-string tenantProvisioning.persistentStorageClass=local-path
+```
+
+Image and tenant-chart versions already default to the chart's own version, so
+you do not need to set `image.tag` or the `tenantProvisioning.*ImageTag` values
+unless you are deliberately pinning something different.
+
+#### Lab installs without TLS
+
+To run without cert-manager over plain HTTP — **lab/PoC only, not a production
+posture** — clear the issuer and allow non-secure cookies:
+
+```bash
+--set-string ingress.tls.issuerRef= \
+--set auth.cookieSecure=false
+```
+
+Clearing `issuerRef` drops both the cert-manager annotation and the Ingress TLS
+stanza. A production install keeps cert-manager (see Prerequisites), a real
+`issuerRef`, and `auth.cookieSecure=true`.
+
+**Validation scope**: this recipe was validated end to end (real LLM triage
+verdict) on stock k3s / Ubuntu 24.04 against `0.2.1`, over **plain HTTP with an
+`anthropic` provider**. The production TLS path and the `openai-compatible`
+provider path have not been validated charts-only and may need additional
+settings.
 
 ## Upgrade
 
 ```bash
 helm upgrade soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
-    --version 0.2.0 \
+    --version 0.2.1 \
     --namespace soctalk-system \
     -f values.yaml
 ```

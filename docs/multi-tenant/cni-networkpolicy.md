@@ -65,6 +65,8 @@ helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
 
 The one-click `install.sh` already renders `preInstallCheck.enabled: false` for exactly this reason. The trade-off of running without Cilium: no FQDN-based egress control (§1, reason 2) — per-tenant LLM egress is allowed by IP/CIDR, not by hostname. If you need hostname-level egress enforcement, install Cilium first (§2 recipe) and leave the hook enabled. A future chart release will broaden the hook to accept any proven NP enforcer (including stock k3s) rather than gating on a specific CNI's CRDs.
 
+Disabling the hook also skips its **cert-manager** check. A charts-only install on stock k3s was validated end to end (real triage verdict, `0.2.1`) with no cert-manager present — but that run was **plain HTTP** (`ingress.tls.issuerRef` cleared, `auth.cookieSecure=false`). Do not read it as "cert-manager is unnecessary": a TLS install still needs cert-manager and a real issuer. See the chart README's "Installing on stock k3s" for the full value set, the Secrets you must pre-create, and the validated scope.
+
 ## 3 NetworkPolicy architecture
 
 Default-deny baseline on every namespace SocTalk manages. Allow rules added explicitly for each legitimate flow.

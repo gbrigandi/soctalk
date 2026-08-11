@@ -25,7 +25,7 @@ from soctalk_wire import (
 logger = logging.getLogger("soctalk.adapter")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 # Startup durable-checkpoint load: retry with a freshly read token so a token
 # renewed just after pod start (see token_renewal) is picked up before we
