@@ -52,6 +52,20 @@ else
 fi
 REGISTRY="ghcr.io/soctalk"
 
+# Preflight: a gate that cannot reach the cluster must FAIL, not pass. Without
+# this, an unreachable/unauthorized kubectl prints its errors to stderr (which
+# the per-namespace query discards), the check loop iterates over zero pods,
+# nothing is ever marked failed, and the script cheerfully reports that every
+# container runs the published digest — the exact false pass it exists to
+# prevent. Probe once, loudly.
+if ! "${KUBECTL[@]}" get ns soctalk-system >/dev/null 2>&1; then
+  echo "cannot reach the cluster (or read namespace soctalk-system) with:" >&2
+  echo "  ${KUBECTL[*]}" >&2
+  echo "Set STAGING_APISERVER and/or KUBECONFIG so this resolves, then re-run." >&2
+  echo "Refusing to report a result from a cluster this script cannot see." >&2
+  exit 2
+fi
+
 # soctalk-api and soctalk-app-ui run in the system namespace; the orchestrator,
 # adapter, and (when the tenant renders the endpoint component) linux-ep run per
 # tenant. linux-ep is optional per tenant, so its published digest is resolved
@@ -74,6 +88,9 @@ published_digest() {
 WORK="$(mktemp -d)"
 DIGESTS="$WORK/digests"
 FAILED="$WORK/failed"
+# Counts containers actually examined. check_ns runs its loop in a pipeline
+# subshell, so this has to be a file, not a variable.
+CHECKED="$WORK/checked"
 
 echo "== what the registry publishes for $VERSION =="
 for img in $SYSTEM_IMAGES $TENANT_IMAGES; do
@@ -109,10 +126,14 @@ fi
 echo
 echo "== what the staging cluster actually runs =="
 rc=0
+# Returns nonzero when the pod read itself failed. Callers MUST check: a failed
+# read produces no output, which is indistinguishable from "namespace is clean"
+# unless the status is honoured. `set -o pipefail` (top of file) makes the
+# pipeline carry kubectl's failure through.
 check_ns() {
   local ns="$1"
   "${KUBECTL[@]}" get pods -n "$ns" \
-    -o jsonpath='{range .items[*].status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}' 2>/dev/null \
+    -o jsonpath='{range .items[*].status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}' \
   | while read -r image imageid; do
       [ -n "$image" ] || continue
       case "$image" in
@@ -120,6 +141,7 @@ check_ns() {
         *) continue ;;
       esac
       short="${image##*/}"; name="${short%%:*}"; tag="${short##*:}"
+      echo x >> "$CHECKED"
       want="$(want_for "$name")"
       got="${imageid##*@}"
       if [ -z "$want" ]; then
@@ -140,11 +162,39 @@ check_ns() {
       fi
     done
 }
-check_ns soctalk-system
-for ns in $("${KUBECTL[@]}" get ns -o name 2>/dev/null | sed 's|namespace/||' | grep '^tenant-'); do
+check_ns soctalk-system || {
+  echo "reading pods in soctalk-system FAILED — cannot verify this namespace." >&2
+  echo "Refusing to report success from an incomplete inspection." >&2
+  exit 2
+}
+
+# Enumerate tenant namespaces with an explicitly checked call. A failed list
+# yields no output, which would otherwise look like "no tenants exist" and let
+# the run pass having verified only soctalk-system.
+if ! ALL_NS="$("${KUBECTL[@]}" get ns -o name)"; then
+  echo "listing namespaces FAILED — cannot enumerate tenant namespaces." >&2
+  echo "Refusing to report success without inspecting them." >&2
+  exit 2
+fi
+for ns in $(printf '%s\n' "$ALL_NS" | sed 's|namespace/||' | grep '^tenant-'); do
   echo "  -- $ns --"
-  check_ns "$ns"
+  check_ns "$ns" || {
+    echo "reading pods in $ns FAILED — cannot verify this namespace." >&2
+    echo "Refusing to report success from an incomplete inspection." >&2
+    exit 2
+  }
 done
+
+# Zero containers examined is not a pass. It means the cluster has no soctalk
+# workloads, or the query silently returned nothing — either way this run proves
+# nothing and must not print a success line.
+if [ ! -s "$CHECKED" ]; then
+  echo
+  echo "checked 0 soctalk containers — nothing was verified."
+  echo "Expected soctalk pods in soctalk-system (and any tenant-* namespaces)."
+  echo "Refusing to report success from a run that inspected nothing."
+  exit 2
+fi
 
 if [ -s "$FAILED" ]; then
   echo
