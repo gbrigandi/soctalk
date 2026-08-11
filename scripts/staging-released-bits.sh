@@ -52,10 +52,14 @@ else
 fi
 REGISTRY="ghcr.io/soctalk"
 
-# soctalk-api and soctalk-app-ui run in the system namespace; the orchestrator
-# and adapter run per tenant.
+# soctalk-api and soctalk-app-ui run in the system namespace; the orchestrator,
+# adapter, and (when the tenant renders the endpoint component) linux-ep run per
+# tenant. linux-ep is optional per tenant, so its published digest is resolved
+# up front but only checked where a linux-ep pod actually runs — a tenant that
+# doesn't render it simply has no such pod, and never trips the unknown-image
+# fail path below.
 SYSTEM_IMAGES="soctalk-api soctalk-app-ui"
-TENANT_IMAGES="soctalk-orchestrator soctalk-adapter"
+TENANT_IMAGES="soctalk-orchestrator soctalk-adapter soctalk-linux-ep"
 
 published_digest() {
   # `--format` is not honoured by every docker/buildx build, and when it is

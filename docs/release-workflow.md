@@ -28,14 +28,22 @@ environment/config and the cluster's Secrets — **not in this doc**.
 
 1. **Verify by digest, never trust a tag.** Chart/image tags are mutable and
    `pullPolicy: IfNotPresent` serves cached layers. A green deploy on an unchanged
-   tag can be running stale bits. Use `scripts/nuc-released-bits.sh` (imageID vs
-   registry digest) as the proof, not "the workflow said success".
+   tag can be running stale bits. Use `scripts/staging-released-bits.sh` (imageID
+   vs registry digest) as the proof, not "the workflow said success".
 2. **`cut-k8s-release.yml` is dispatch-only.** After dispatching, confirm the run
    built **main's HEAD sha**, not an old tag — building the tag is how drift
    started historically.
-3. **A non-test/non-docs push to `main` republishes the `X.Y.Z` chart** (see
-   *Two publish paths*). Order matters: expect the published chart to move when
-   you push before a cut.
+3. **A `main` push that changes chart content republishes the `X.Y.Z` *chart*
+   tag — never the `X.Y.Z` *images*** (see *Two publish paths*). On push,
+   `publish-images` only tags images `latest` + `<short-sha>`; the `X.Y.Z` image
+   tags move **only** on a cut (or a manual dispatch with `inputs.tag`). Charts
+   are re-`helm push`ed at their `Chart.yaml` `version:`, overwriting that tag
+   when their rendered content differs (a code-only push that leaves `charts/`
+   untouched is an effective no-op). Order matters: expect the published chart to
+   move when you push chart changes before a cut. `paths-ignore` (below) skips the
+   whole workflow for pushes touching only docs, tests, `LICENSE`, `.gitignore`,
+   or the two ignored workflow files (`v1-ci.yml`, `deploy-demo.yml`) — note this
+   is those two files only, **not** all of `.github/workflows/`.
 4. **Direct-to-main, explicit paths only.** Never `git add -A`/broad adds — the
    working tree carries the user's unrelated WIP (`src/soctalk/supervisor/`,
    `response/`, `bench/modal/`, `examples/response-playbooks/`,
@@ -67,7 +75,7 @@ environment/config and the cluster's Secrets — **not in this doc**.
 | Artifact | Where | Versioned how |
 |---|---|---|
 | Images | `ghcr.io/soctalk/soctalk-{api,app-ui,orchestrator,adapter,linux-ep}` | `latest`, `<short-sha>`, and (on a cut) `X.Y.Z` |
-| Charts (OCI) | `ghcr.io/soctalk/charts/{soctalk-system,soctalk-tenant,soctalk-cloud-agent,linux-ep}` | each `Chart.yaml` `version:` |
+| Charts (OCI) | `ghcr.io/soctalk/charts/{soctalk-system,soctalk-tenant,wazuh,linux-ep}` | each `Chart.yaml` `version:` |
 | Installer | `raw.githubusercontent.com/soctalk/soctalk/<ref>/install.sh` | pinned by the git ref (a tag = a pinned installer) |
 | VM appliances | attached to the GitHub Release (`.ova/.qcow2.xz/.raw.xz/.vhd(x).xz/.vmdk.xz`, `.deb`, `.rpm`) | the release tag |
 
@@ -77,24 +85,69 @@ token+manifest curl is finicky; real OCI clients resolve it fine).
 ## Mechanism: two publish paths, deliberately separate
 
 - **`publish-images.yml`** (push to `main`, `paths-ignore`: `**.md`, `docs/**`,
-  `tests/**`, `LICENSE`, `.gitignore`): publishes moving `latest` + `<short-sha>`
-  images **and the charts at their current `Chart.yaml` version**. Since all
-  charts pin `0.2.1`, every non-ignored main push re-publishes the `0.2.1` chart
-  (GHCR overwrites — a chart tag is mutable). Auto-updates demo via `deploy-demo`.
+  `tests/**`, `LICENSE`, `.gitignore`, `.github/workflows/v1-ci.yml`,
+  `.github/workflows/deploy-demo.yml`): publishes moving `latest` + `<short-sha>`
+  images **and the charts at their current `Chart.yaml` version** — it does **not**
+  build or move the `X.Y.Z` *image* tags. A non-ignored main push re-`helm push`es
+  the `0.2.1` chart, overwriting the tag when the rendered chart content changed
+  (GHCR overwrites — a chart tag is mutable; identical content is a no-op).
+  Auto-updates demo via `deploy-demo`. Note the two ignored workflow files: a fix
+  to `deploy-demo.yml` or `v1-ci.yml` alone does **not** trigger a publish/redeploy.
 - **`cut-k8s-release.yml`** (`workflow_dispatch` only; inputs `version`,
   `create_release`): rebuilds images from HEAD, tags them `X.Y.Z`, `helm push`es
-  the charts, creates tag `vX.Y.Z` + the GitHub Release, and fires
-  `build-packer-images.yml` (VM appliances) async.
-- **`build-packer-images.yml`**: appliance + `.deb`/`.rpm`, attached to the release.
+  the charts, creates tag `vX.Y.Z` + the GitHub Release, calls `packages.yml`
+  (`.deb`/`.rpm`), and fires `build-packer-images.yml` (VM appliances) async.
+- **`packages.yml`** (called by `cut-k8s-release.yml`): builds and attaches the
+  `.deb`/`.rpm` OS packages to the release.
+- **`build-packer-images.yml`**: builds the VM appliance images
+  (`.ova/.qcow2.xz/.raw.xz/.vhd(x).xz/.vmdk.xz`), attached to the release.
 - **`deploy-demo.yml`** (`workflow_run` after publish-images, or dispatch): SSH to
   the demo host, `helm upgrade --install soctalk-system oci://…/soctalk-system
   --version <ver> -f deploy/demo-values.yaml --wait --atomic`; `pullPolicy: Always`
   + a forced rollout so the moving tag is re-pulled; then the onboard +
   OpenAPI-client smokes gate it.
 
-**Reproducible builds**: an install.sh-/docs-only re-cut yields byte-identical
-image digests, so staging needs **no** re-apply after such a cut. A code/chart
-change does churn digests → re-apply.
+**Digest churn**: the Dockerfiles pull mutable bases and do `apt`/`pip`/`latest`
+downloads, so **same source does not guarantee the same image digest** — do not
+assume reproducibility. In practice an install.sh-/docs-only re-cut has come back
+byte-identical (see the log), letting staging skip a re-apply — but that is an
+observed result you must confirm by digest each time, never a guarantee. A
+code/chart change always churns digests → re-apply. Always run the digest gate
+after a cut/re-cut and act on what it actually reports.
+
+## Immutability model (what is fixed vs what moves)
+
+The release's identity is **immutable by content, audited by log** — but the
+version *tag* on the chart is deliberately mutable, so you never trust the tag.
+
+- **Immutable — the content digest.** The image `sha256:…` digest is the source
+  of truth for "what is running": a given digest is one exact set of bits. (The
+  reverse does not hold — the same source can rebuild to a *different* digest, so
+  never infer "unchanged" from "same commit".) Gate and prove everything by
+  digest (`scripts/staging-released-bits.sh`), never by tag.
+- **Immutable — the release pointer.** A cut binds `vX.Y.Z` (git tag + GitHub
+  Release) to one HEAD sha; always verify the cut built that sha. The *tag → sha*
+  binding is the release of record.
+- **Mutable by design — the `X.Y.Z` *chart* tag on GHCR.** On a non-ignored
+  `main` push `publish-images` re-`helm push`es the chart at its `Chart.yaml`
+  version, overwriting the `X.Y.Z` chart tag when the rendered chart content
+  changed; the demo pipeline depends on that (it installs the `Chart.yaml`
+  version). So the *published* `X.Y.Z` chart can move ahead of the last cut's sha
+  on a chart-affecting push. The `X.Y.Z` *image* tags do **not** move on a push —
+  only on a cut — so a code-only push moves `latest`+sha images but leaves the
+  `X.Y.Z` images alone. This is why rule 1 exists. A digest-gated box stays pinned
+  to the cut's digests until you re-apply; it is not affected by a tag moving
+  under it.
+- **Mutable by intent, but audited — the release log.** During a version's
+  active hardening we may re-cut (delete + recreate `vX.Y.Z` at a newer sha).
+  That is a deliberate mutation, and every one is a row in the *Release &
+  validation log* below (version, tag@sha, why, how gated) — the log is the
+  append-only, immutable audit trail even though the tag itself moved.
+
+Practical consequence: to know exactly what a box runs, read its **digests**, not
+its tags; to know what a version *is*, read the **tag→sha** and the **log**. The
+top follow-up (separate dev-vs-release chart versions) exists to make the chart
+version tag immutable-per-release too, closing the one gap above.
 
 ## Recipe: cut (or re-cut) a release
 
@@ -110,14 +163,18 @@ change does churn digests → re-apply.
 ## Recipe: gate staging by digest
 
 ```
-bash scripts/nuc-released-bits.sh X.Y.Z            # check drift
-bash scripts/nuc-released-bits.sh X.Y.Z --apply    # system chart, pullPolicy=Always + rollout
+bash scripts/staging-released-bits.sh X.Y.Z            # check drift
+bash scripts/staging-released-bits.sh X.Y.Z --apply    # system chart, pullPolicy=Always + rollout
 ```
 Tenant pods default `IfNotPresent`, so `--apply` does NOT move them. For each
 drifted tenant image: on the staging host `sudo k3s crictl rmi <img>`, then
 `kubectl -n <tenant-ns> rollout restart deploy/<name>`; re-run the script until it
-prints "Every soctalk container runs the digest the registry publishes". (The
-script name is historical — it is the digest-verify + system-apply tool.)
+prints "Every soctalk container runs the digest the registry publishes".
+
+The gate covers all **five** images (`soctalk-{api,app-ui,orchestrator,adapter,linux-ep}`).
+`linux-ep` is optional per tenant: its digest is resolved up front but only
+checked where a `linux-ep` pod actually runs, so a tenant that doesn't render it
+neither fails nor is skipped silently.
 
 ## Recipe: real triage (proves the LLM path end to end)
 
@@ -139,7 +196,8 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 ## Recipe: validate a deploy path
 
 - **One-click** (customer path): fresh QEMU VM on the staging host → `curl -sfL
-  …/soctalk/vX.Y.Z/install.sh | sudo -E bash -s -- --demo` with `SOCTALK_LLM_*`.
+  https://raw.githubusercontent.com/soctalk/soctalk/vX.Y.Z/install.sh | sudo -E
+  bash -s -- --demo` with `SOCTALK_LLM_*`.
   The tag-pinned installer self-pins chart+images. **LLM env contract**:
   `SOCTALK_LLM_PROVIDER`, `SOCTALK_LLM_API_KEY`, and for
   `openai-compatible`/`self-hosted` **both** `SOCTALK_LLM_BASE_URL` and
@@ -158,7 +216,9 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   `CERTIFICATE_VERIFY_FAILED`.
 - **Playwright sweeps** run **outside** the target cluster. `domcontentloaded`
   (never `networkidle` — the app holds an open stream). CSRF over a port-forward
-  needs `--host-resolver-rules=MAP host:443 <ip>:18443`. Assert no silent redirect
+  needs `--host-resolver-rules=MAP <surface-hostname>:443 <listener-ip>:18443`
+  (substitute the real surface hostname and the local port-forward listener
+  address; the literal is a placeholder, not the string `host`). Assert no silent redirect
   / no page error / no 5xx / no non-allowlisted 403 / no error-boundary text, plus
   interactions — not just HTTP 200.
 - **Pricing e2e**: `tests/e2e/pricing_enforcement.py` (env-contract). Real-run
@@ -207,7 +267,12 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 - **Separate the dev chart version from release versions** so a post-cut main
   push can't move the published `X.Y.Z` chart (touches the demo pipeline — not
   inside a release).
-- `publish-images` once claimed `helm push` is idempotent; it is not (GHCR
-  overwrites). Comment corrected; the mutable-tag reality stands.
+- **`helm push` semantics, stated precisely** (the workflow comments in
+  `publish-images.yml`/`cut-k8s-release.yml` still call it "idempotent", which is
+  true only for the identical-content case): re-pushing a chart version with the
+  **same** rendered content is a no-op (same digest); re-pushing that version with
+  **changed** content overwrites the tag to a new digest (GHCR allows it). That is
+  the mutable-chart-tag reality rule 1 guards against. Not a pending code change —
+  just don't read "idempotent" as "immutable".
 - **File the launchpad qemu-plugin false-cache-hit bug** (reports a cache hit for
   a base image absent on disk → `qemu-img create` fails).
