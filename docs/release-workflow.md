@@ -491,6 +491,17 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   `infra/packer/README.md` documents locking it before shipping
   (`passwd -l ubuntu`); the published image is not locked. Anyone booting the
   appliance on a routable network has a known-credential `NOPASSWD:ALL` account.
+- **Wazuh ingestion is NOT covered by the matrix.** Every row proves the LLM
+  path by POSTing to `/api/internal/adapter/events`, which bypasses Wazuh
+  entirely. Validating the RPM + external-Wazuh path exposed two blockers in
+  that untested segment (issue #147): the tenant egress policy hardcodes the
+  SIEM ports `9200`/`55000` (host is derived from the URL, port is not), and the
+  wazuh chart mints an indexer password it never applies to the indexer, so the
+  adapter gets 401. Add a row (or an assertion) that proves an alert flows
+  **from Wazuh** into an investigation.
+- **OS packages have no published checksums.** `SHA256SUMS.txt` is written by
+  `build-packer-images.yml` over `*.xz`/`*.ova` only; `packages.yml` publishes
+  none, so `.deb`/`.rpm` downloads cannot be verified.
 - **Appliance cannot use a self-hosted/gateway LLM.** The setup wizard offers
   only `anthropic`/`openai` and collects no model or base URL, so the
   openai-compatible path (the one with the `gpt-4o` 404 footgun) is unreachable
