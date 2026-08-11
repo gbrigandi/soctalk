@@ -4,6 +4,26 @@ How a SocTalk version is built, published, cut, and delivered. This is the
 operational map behind the four GitHub Actions workflows in `.github/workflows/`
 and the one-command installer.
 
+> **This doc is a living record.** Keep it in sync as we release and validate:
+> update the *Current release* line and the *Release & validation log* whenever a
+> version is cut, re-cut, or gated on a box. The log is the running tab.
+
+## Current release
+
+- **`0.2.1` — git tag `v0.2.1` @ `f29c5f8`** (re-cut; see the log for why the tag
+  moved). Contains: the full #142 pricing/engine work, the frontend
+  audience-wall (#143/#144) + LLM base-URL-clear guard, the installer LLM
+  model-knob + provider-alias normalization + values-file validation skip, the
+  L2 runs-worker `SOCTALK_API_VERIFY_SSL` fix, the demo two-hostname topology,
+  and `tests/e2e/pricing_enforcement.py`.
+- **Gated on**: the NUC (all containers verified by digest), and validated to a
+  real triage verdict on three deployment paths — one-click installer (fresh
+  QEMU VM), launchpad L2 (MSSP + tenant across VMs), and the NUC gate. Demo
+  tracks head via `deploy-demo`.
+- **Open**: issue #145 (one-click flannel/no-NetworkPolicy PoC trade-off +
+  charts-only NP-CNI requirement). A launchpad qemu-plugin false-cache-hit bug is
+  known but not yet filed.
+
 ## The moving parts
 
 | Artifact | Where it lives | Versioned how |
@@ -141,6 +161,60 @@ self-signed L1 cert doesn't block claims.
    (`paths-ignore`), so the cut stays intact; any other main push re-publishes
    the `X.Y.Z` chart at the new HEAD.
 
+## Validation gates (what we run before trusting a cut)
+
+Every cut is exercised, not assumed. The gates, in rough order:
+
+- **Full pytest** (`uv run pytest`) — DB up on `localhost:5433`. A handful of
+  RLS/response tests error without the test DB; those are environmental, proven
+  by re-running at a clean HEAD in a throwaway worktree.
+- **Digest gate on the NUC** — `scripts/nuc-released-bits.sh X.Y.Z` asserts every
+  running container's imageID equals the registry-published digest; `--apply`
+  reinstalls the system chart (`pullPolicy=Always` + forced rollout). Tenant
+  pods default `IfNotPresent`, so evict the image (`k3s crictl rmi …`) + rollout
+  restart, then re-run until it exits 0. **Reproducible builds**: an
+  install.sh-/docs-only re-cut produces byte-identical image digests, so the NUC
+  needs no re-apply after such a cut.
+- **Frontend sweeps (Playwright, run OUTSIDE the box)** — MSSP + tenant route
+  sweeps: not just HTTP 200 but no silent redirect, no page error, no 5xx, no
+  non-allowlisted 403, no error-boundary text, plus interactions (open an
+  investigation, Timeline→Replay, fleet replay, logout). Use `domcontentloaded`
+  (`networkidle` never fires — the app holds an open stream). CSRF over a
+  port-forward needs `--host-resolver-rules=MAP host:443 <ip>:18443`.
+- **Pricing e2e** — `tests/e2e/pricing_enforcement.py` (env-contract, urllib):
+  unpriced gate, served-engine invariant, override persistence + rate
+  enforcement on a real run, accounting-off, consumption rollup, budget halt.
+  Real-run steps assert when the worker finishes in-window and SKIP otherwise
+  (single-replica worker throughput is not a pricing regression).
+- **Real triage** — mint an adapter token inside the api pod
+  (`mint_adapter_token`), `POST /api/internal/adapter/events` (schema v2, do NOT
+  set `template_hash` — it's a memoization key that can skip the LLM), poll the
+  investigation for a rendered verdict. Proves the LLM path end to end.
+- **Deploy-path validation** — one-click installer in a fresh QEMU VM on the NUC;
+  launchpad L2 (MSSP + tenant VMs on the tailnet); demo via `deploy-demo`. Each
+  driven through to a real triage verdict.
+- **Codex adversarial review** — every fix reviewed before commit; a fix loop
+  runs until `VERDICT: DONE`. A holistic cross-fix pass at the end catches
+  interaction bugs the per-fix reviews can't (e.g. installer alias vs chart
+  schema, L2 TLS on the worker).
+
+Boxes and access: NUC `ssh gbrigandi@100.102.223.8` (see the `nuc-*` memories /
+`[[demo-box-topology]]`); demo `ssh root@demo.soctalk.ai`, two hostnames
+(`demo.` = customer surface auto-pinned to the demo tenant; `mssp.` = the MSSP
+surface). Throwaway QEMU VMs live under `~/oneclick-vm` / `~/lp-vms` on the NUC.
+
+## Release & validation log
+
+Running tab — newest last. Keep appending as we cut / gate.
+
+| Version | Tag @ sha | What changed / why re-cut | Gated |
+|---|---|---|---|
+| 0.2.1 | `85921ec` | Original cut: #142 pricing/engine work (22 Codex rounds) + uv.lock sync | NUC by digest; MSSP/tenant sweeps; pricing e2e 12/12; real triage |
+| 0.2.1 | `2e097ba` | + frontend audience-wall (#143/#144), base-URL-clear guard, demo `mssp.` hostname | NUC re-applied; demo redeployed; guards verified live |
+| 0.2.1 | `90b576c` | + installer LLM model-knob (gateways got `gpt-4o` → 404) | fresh QEMU one-click → real triage, no patching |
+| 0.2.1 | `9a2a2dd` | + L2 runs-worker honors `SOCTALK_API_VERIFY_SSL` (self-signed L1 blocked claims) | launchpad L2 re-run → real triage on the `acme` tenant |
+| 0.2.1 | `f29c5f8` | + installer provider-alias normalization + values-file validation skip (holistic Codex review) | NUC coherent by digest (reproducible build, no churn) |
+
 ## Known follow-ups
 
 - **Separate the dev chart version from release versions** so a post-cut main
@@ -148,3 +222,6 @@ self-signed L1 cert doesn't block claims.
   outside a release).
 - The `publish-images` comment once claimed `helm push` is idempotent; it is not
   (GHCR overwrites). Corrected in the workflow; the mutable-tag reality stands.
+- **File the launchpad qemu-plugin false-cache-hit bug** (reports a cache hit for
+  a base image absent on disk → `qemu-img create` fails). Worked around by
+  placing a valid image; not yet an issue.
