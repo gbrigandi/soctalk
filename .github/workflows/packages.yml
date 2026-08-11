@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Package version, no leading v (e.g. 0.2.0). Attaches to the vX.Y.Z release."
+        description: "Package version, no leading v (e.g. 0.2.1). Attaches to the vX.Y.Z release."
         required: true
   # … and called by cut-k8s-release.yml so every release gets the packages.
   workflow_call:

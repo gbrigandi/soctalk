@@ -498,12 +498,13 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   external-Wazuh path (`ingest_ok forwarded=3` → investigations → real verdict)
   — but no row asserts it, so a regression there would pass the whole matrix.
   Add a row (or an assertion) that proves an alert flows **from Wazuh** into an
-  investigation. Related limitation: the tenant egress policy hardcodes the SIEM
-  ports 9200/55000 (issue #147), pre-existing since 0.2.0, so a BYO Wazuh on
-  other ports is dropped.
-- **OS packages have no published checksums.** `SHA256SUMS.txt` is written by
-  `build-packer-images.yml` over `*.xz`/`*.ova` only; `packages.yml` publishes
-  none, so `.deb`/`.rpm` downloads cannot be verified.
+  investigation. (The related SIEM-port limitation, #147, is **fixed** in the
+  `5a4faa9` re-cut — the egress ports are derived from the tenant's URLs.)
+- **OS packages have no published checksums** (issue #148). `SHA256SUMS.txt` is
+  written by `build-packer-images.yml` over `*.xz`/`*.ova` only; `packages.yml`
+  publishes none, so `.deb`/`.rpm` downloads cannot be verified — and the
+  documented `sha256sum -c --ignore-missing` recipe *exits 0 having verified
+  nothing* when only a package was downloaded. Docs corrected to say so.
 - **Appliance cannot use a self-hosted/gateway LLM.** The setup wizard offers
   only `anthropic`/`openai` and collects no model or base URL, so the
   openai-compatible path (the one with the `gpt-4o` 404 footgun) is unreachable

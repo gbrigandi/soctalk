@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, no leading v (e.g. 0.2.0). Must match charts/soctalk-system/Chart.yaml."
+        description: "Release version, no leading v (e.g. 0.2.1). Must match charts/soctalk-system/Chart.yaml."
         required: true
       create_release:
         description: "Create the vX.Y.Z git tag + GitHub Release."

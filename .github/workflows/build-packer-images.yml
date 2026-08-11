@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Image version tag (e.g. 0.2.0). Used in filename + AMI name; also the vX.Y.Z release to attach artifacts to."
+        description: "Image version tag (e.g. 0.2.1). Used in filename + AMI name; also the vX.Y.Z release to attach artifacts to."
         required: false
         default: "dev"
       soctalk_chart_version:
