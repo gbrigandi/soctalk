@@ -153,6 +153,25 @@ Clearing `issuerRef` drops both the cert-manager annotation and the Ingress TLS
 stanza. A production install keeps cert-manager (see Prerequisites), a real
 `issuerRef`, and `auth.cookieSecure=true`.
 
+**Consequence — the app's origin becomes `http://`.** With no TLS stanza the
+chart renders `SOCTALK_PUBLIC_ORIGIN=http://<ingress.hostnames.mssp>`, and every
+state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) carrying the session
+cookie must present a matching `Origin`. So on a lab install you must reach the
+UI/API over **http**, not https:
+
+```bash
+# correct on a no-TLS lab install
+curl -b cookies -H "Host: soctalk.local" -H "Origin: http://soctalk.local" \
+     -X POST http://<node>/api/mssp/tenants/onboard -d '{...}'
+```
+
+Using `https://` (even though the ingress still answers on 443 with Traefik's
+default certificate) sends `Origin: https://soctalk.local`, which does not match
+the rendered `http://…` origin, and the API rejects the request with
+`403 {"detail":"CSRF validation failed"}` — while `GET`s and even login still
+succeed, so it looks like a permissions bug rather than a scheme mismatch. If
+you want https, install cert-manager and set a real `issuerRef` instead.
+
 **Validation scope**: this recipe was validated end to end (real LLM triage
 verdict) on stock k3s / Ubuntu 24.04 against `0.2.1`, over **plain HTTP with an
 `anthropic` provider**. The production TLS path and the `openai-compatible`
