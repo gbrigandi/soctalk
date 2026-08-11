@@ -1,227 +1,197 @@
-# SocTalk release workflow
+# SocTalk release & validation — handoff system prompt
 
-How a SocTalk version is built, published, cut, and delivered. This is the
-operational map behind the four GitHub Actions workflows in `.github/workflows/`
-and the one-command installer.
+You are an agent picking up SocTalk **release engineering and validation**. This
+document is your operating brief: the rules, the mechanisms, the exact recipes,
+and the traps. Read it fully before you cut, publish, gate, or validate anything.
+**Keep it in sync** — it is a living record; update *Current release* and the
+*Release & validation log* on every cut/gate (docs-only pushes never republish a
+chart, so editing this is always safe).
 
-> **This doc is a living record.** Keep it in sync as we release and validate:
-> update the *Current release* line and the *Release & validation log* whenever a
-> version is cut, re-cut, or gated on a box. The log is the running tab.
+## Hard rules (violating these breaks releases)
+
+1. **Verify by digest, never trust a tag.** Chart/image tags are mutable and
+   `pullPolicy: IfNotPresent` serves cached layers. A green deploy on an unchanged
+   tag can be running stale bits. Use `scripts/nuc-released-bits.sh` (imageID vs
+   registry digest) as the proof, not "the workflow said success".
+2. **`cut-k8s-release.yml` is dispatch-only.** After dispatching, confirm the run
+   built **main's HEAD sha**, not an old tag — building the tag is how drift
+   started historically.
+3. **A non-test/non-docs push to `main` republishes the `X.Y.Z` chart** (see
+   *Two publish paths*). Order matters: expect the published chart to move when
+   you push before a cut.
+4. **Direct-to-main, explicit paths only.** Never `git add -A`/broad adds — the
+   working tree carries the user's unrelated WIP (`src/soctalk/supervisor/`,
+   `response/`, `bench/modal/`, `examples/response-playbooks/`,
+   `scripts/demo-seed/`, untracked temp files). Stage named paths. `mv` to `/tmp`
+   instead of `rm`.
+5. **Every fix is Codex-reviewed before commit; loop until `VERDICT: DONE`.** At
+   the end of a batch, run one holistic cross-fix review — it catches interaction
+   bugs the per-fix passes miss.
+6. **Never overwrite `ops@demo.soctalk.ai`'s password** (it's the CI
+   `DEMO_ADMIN_PW` secret). For gate work create a throwaway `mssp_admin`, use it,
+   delete it. Same discipline for any shared account.
+7. **Restore what you perturb.** Snapshot tenant LLM config / budgets before an
+   e2e mutates them and restore after; verify the row is byte-identical.
 
 ## Current release
 
-- **`0.2.1` — git tag `v0.2.1` @ `f29c5f8`** (re-cut; see the log for why the tag
-  moved). Contains: the full #142 pricing/engine work, the frontend
-  audience-wall (#143/#144) + LLM base-URL-clear guard, the installer LLM
-  model-knob + provider-alias normalization + values-file validation skip, the
-  L2 runs-worker `SOCTALK_API_VERIFY_SSL` fix, the demo two-hostname topology,
-  and `tests/e2e/pricing_enforcement.py`.
-- **Gated on**: the NUC (all containers verified by digest), and validated to a
-  real triage verdict on three deployment paths — one-click installer (fresh
-  QEMU VM), launchpad L2 (MSSP + tenant across VMs), and the NUC gate. Demo
-  tracks head via `deploy-demo`.
-- **Open**: issue #145 (one-click flannel/no-NetworkPolicy PoC trade-off +
-  charts-only NP-CNI requirement). A launchpad qemu-plugin false-cache-hit bug is
-  known but not yet filed.
+- **`0.2.1` — git tag `v0.2.1` @ `f29c5f8`** (re-cut; see the log). Contains: the
+  full #142 pricing/engine work, frontend audience-wall (#143/#144) + LLM
+  base-URL-clear guard, installer LLM model-knob + provider-alias normalization +
+  values-file validation skip, the L2 runs-worker `SOCTALK_API_VERIFY_SSL` fix,
+  the demo two-hostname topology, and `tests/e2e/pricing_enforcement.py`.
+- **Gated**: NUC on released digests; real triage verdict on three deploy paths
+  (one-click VM, launchpad L2, NUC). Demo tracks head via `deploy-demo`.
+- **Open**: #145 (one-click flannel/no-NetworkPolicy PoC + charts-only NP-CNI).
+  Launchpad qemu-plugin false-cache-hit bug known, not yet filed.
 
-## The moving parts
+## Mechanism: the moving parts
 
-| Artifact | Where it lives | Versioned how |
+| Artifact | Where | Versioned how |
 |---|---|---|
-| Container images | `ghcr.io/soctalk/soctalk-{api,app-ui,orchestrator,adapter,linux-ep}` | `latest`, `<short-sha>`, and (on a cut) `X.Y.Z` |
-| Helm charts (OCI) | `ghcr.io/soctalk/charts/{soctalk-system,soctalk-tenant,soctalk-cloud-agent,linux-ep}` | the `version:` in each `Chart.yaml` |
-| Installer | `raw.githubusercontent.com/soctalk/soctalk/<ref>/install.sh` | pinned by the git ref in the URL (a tag = a pinned installer) |
-| VM appliances | attached to the GitHub Release (`.ova`, `.qcow2.xz`, `.raw.xz`, `.vhd(x).xz`, `.vmdk.xz`) + `.deb`/`.rpm` | the release tag |
+| Images | `ghcr.io/soctalk/soctalk-{api,app-ui,orchestrator,adapter,linux-ep}` | `latest`, `<short-sha>`, and (on a cut) `X.Y.Z` |
+| Charts (OCI) | `ghcr.io/soctalk/charts/{soctalk-system,soctalk-tenant,soctalk-cloud-agent,linux-ep}` | each `Chart.yaml` `version:` |
+| Installer | `raw.githubusercontent.com/soctalk/soctalk/<ref>/install.sh` | pinned by the git ref (a tag = a pinned installer) |
+| VM appliances | attached to the GitHub Release (`.ova/.qcow2.xz/.raw.xz/.vhd(x).xz/.vmdk.xz`, `.deb`, `.rpm`) | the release tag |
 
-All GHCR packages are **public** (anonymous `helm pull` / image pull work); the
-manual token+manifest REST calls are finicky but real OCI clients (helm,
-containerd) resolve them fine.
+All GHCR packages are **public** — anonymous `helm pull` / image pull work (manual
+token+manifest curl is finicky; real OCI clients resolve it fine).
 
-## Two publish paths, deliberately separate
+## Mechanism: two publish paths, deliberately separate
 
-### 1. `publish-images.yml` — the moving dev line (every push to `main`)
+- **`publish-images.yml`** (push to `main`, `paths-ignore`: `**.md`, `docs/**`,
+  `tests/**`, `LICENSE`, `.gitignore`): publishes moving `latest` + `<short-sha>`
+  images **and the charts at their current `Chart.yaml` version**. Since all
+  charts pin `0.2.1`, every non-ignored main push re-publishes the `0.2.1` chart
+  (GHCR overwrites — a chart tag is mutable). Auto-updates demo via `deploy-demo`.
+- **`cut-k8s-release.yml`** (`workflow_dispatch` only; inputs `version`,
+  `create_release`): rebuilds images from HEAD, tags them `X.Y.Z`, `helm push`es
+  the charts, creates tag `vX.Y.Z` + the GitHub Release, and fires
+  `build-packer-images.yml` (VM appliances) async.
+- **`build-packer-images.yml`**: appliance + `.deb`/`.rpm`, attached to the release.
+- **`deploy-demo.yml`** (`workflow_run` after publish-images, or dispatch): SSH to
+  the demo host, `helm upgrade --install soctalk-system oci://…/soctalk-system
+  --version <ver> -f deploy/demo-values.yaml --wait --atomic`; `pullPolicy: Always`
+  + a forced rollout so the moving tag is re-pulled; then the onboard +
+  OpenAPI-client smokes gate it.
 
-- Trigger: `push` to `main`, with `paths-ignore` for `**.md`, `docs/**`,
-  `tests/**`, `LICENSE`, `.gitignore` — a docs/test-only push does **not**
-  republish.
-- Publishes the **moving** `latest` + `<short-sha>` images **and the charts at
-  their current `Chart.yaml` version**.
-- Because all charts currently pin `version: 0.2.1`, every non-ignored main push
-  **re-publishes the `0.2.1` chart** with new content. GHCR overwrites the tag
-  (a chart tag is mutable). This is what auto-updates the demo via
-  `deploy-demo.yml`.
-- **Wart to know:** the dev chart version and the release version are the same
-  string today. So pushing to `main` moves the published `0.2.1` chart away from
-  whatever the cut produced. The git tag `vX.Y.Z` is the release of record; the
-  published *chart* under that version can drift on a later main push. Images are
-  safer — the version-tagged `X.Y.Z` images are only pushed by the cut
-  (below), never by `publish-images`, so a version-tagged image is immutable
-  between cuts.
-- Consequence for verification: **a tag is not evidence — verify by digest.**
-  With `pullPolicy: IfNotPresent` (chart default), a node keeps cached layers
-  under an unchanged tag, so a deploy can "succeed" on stale bits.
+**Reproducible builds**: an install.sh-/docs-only re-cut yields byte-identical
+image digests, so the NUC needs **no** re-apply after such a cut. A code/chart
+change does churn digests → re-apply.
 
-### 2. `cut-k8s-release.yml` — a versioned release (manual, `workflow_dispatch` only)
+## Recipe: cut (or re-cut) a release
 
-Dispatch-only on purpose: creating the `vX.Y.Z` tag here must not re-trigger a
-tag-driven build (no loop), and a release is a deliberate human action.
+1. Land everything on `main` (explicit paths; user WIP stays out). Ensure
+   `charts/*/Chart.yaml` `version:` = target `X.Y.Z`; sync `uv.lock` if bumped.
+2. Re-cut only: `gh release delete vX.Y.Z --yes; git push origin :refs/tags/vX.Y.Z;
+   git tag -d vX.Y.Z`.
+3. `gh workflow run cut-k8s-release.yml --ref main -f version=X.Y.Z -f create_release=true`.
+   (Retry on transient `gh` TLS errors.) Then confirm the run built **HEAD sha**.
+4. Gate the NUC by digest (next recipe).
+5. Append a row to the *Release & validation log*.
 
-Inputs: `version` (no leading `v`, must match `charts/soctalk-system/Chart.yaml`)
-and `create_release` (bool → the git tag + GitHub Release).
-
-What it does, from the dispatched ref (`main`):
-1. Re-builds the images from HEAD and tags them `X.Y.Z` + `latest` + `<short-sha>`.
-2. `helm push`es the charts at their `Chart.yaml` version.
-3. Creates the `vX.Y.Z` git tag and the GitHub Release (when `create_release`).
-4. Fires the Packer VM-image build (`build-packer-images.yml`) via
-   `workflow_dispatch`, async, so the k8s release + packages don't wait on it.
-
-Permissions it needs: `contents: write` (tag + Release), `packages: write`
-(GHCR), `actions: write` (dispatch the VM build).
-
-> Verify the cut built HEAD, not the old tag. A cut dispatched against a stale
-> ref rebuilds the wrong sha — that is how tag/artifact drift starts.
-
-### 3. `build-packer-images.yml`
-
-Builds the VM appliance images (OVA/qcow2/raw/vhd/vhdx/vmdk) and the `.deb`/`.rpm`,
-attaches them to the release. Fired by the cut, runs async on its own runner.
-
-### 4. `deploy-demo.yml` — the demo box
-
-- Trigger: `workflow_run` after `publish-images` succeeds, or `workflow_dispatch`
-  (with an optional `chart_version` input; defaults to `Chart.yaml`'s version).
-- Over SSH to the demo host it runs a **full chart reconcile**:
-  `helm upgrade --install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system
-  --version <ver> -f deploy/demo-values.yaml --wait --atomic`. No local builds —
-  pods pull from `ghcr.io/soctalk`.
-- `deploy/demo-values.yaml` sets `image.pullPolicy: Always` because a moving tag
-  is otherwise cached forever; a **forced rollout** step restarts the app
-  deployments (not postgres) so the fresh tag is actually re-pulled.
-- Then a smoke gate: sweep stale `ci-*` tenants → onboard smoke
-  (`tests/e2e/smoke_onboard.py`, wizard → tenant ACTIVE → Wazuh live →
-  decommission) → OpenAPI-client smoke. A red smoke fails the deploy.
-- Demo tracks `latest` by default; to pin it to a release, set `image.tag` +
-  the `tenantProvisioning.*ImageTag` fields to the version in the values.
-
-## The one-command installer (`install.sh`)
-
-The customer path and the appliance first-boot core (`infra/packer/scripts/firstboot.sh`
-sources it). Pinned by fetching it from a tag:
+## Recipe: gate the NUC by digest
 
 ```
-curl -sfL https://raw.githubusercontent.com/soctalk/soctalk/vX.Y.Z/install.sh | sudo -E bash
+bash scripts/nuc-released-bits.sh X.Y.Z            # check drift
+bash scripts/nuc-released-bits.sh X.Y.Z --apply    # system chart, pullPolicy=Always + rollout
 ```
+Tenant pods default `IfNotPresent`, so `--apply` does NOT move them. For each
+drifted tenant image: `ssh gbrigandi@100.102.223.8 'sudo k3s crictl rmi <img>'`
+then `kubectl -n <tenant-ns> rollout restart deploy/<name>`; re-run the script
+until it prints "Every soctalk container runs the digest the registry publishes".
 
-- The tag-pinned installer self-pins the chart and images: `SOCTALK_CHART_VERSION`
-  and `IMAGE_TAG` both default to the release version it shipped with.
-- Installs k3s + Helm (if missing), then `helm install`s the published OCI
-  `soctalk-system` chart. `--demo` = non-interactive, onboards a `demo` tenant.
-- LLM env contract (unattended): `SOCTALK_LLM_PROVIDER`, `SOCTALK_LLM_API_KEY`,
-  and — for `openai-compatible`/`self-hosted` — **both** `SOCTALK_LLM_BASE_URL`
-  and `SOCTALK_LLM_MODEL` (required; without a model it would default to `gpt-4o`,
-  which a gateway/self-hosted endpoint does not serve → every triage 404s).
-- The tenant LLM key propagates without a per-tenant key: the provisioning
-  controller's `apply_secrets` falls back to the install-wide
-  `soctalk-system-llm-api-key` Secret and writes it into `Secret/tenant-llm-key`.
-- Default `--demo` install runs on k3s **flannel** with `preInstallCheck.enabled:
-  false`, so per-tenant NetworkPolicies are created but **not enforced** — a PoC
-  trade-off. A raw charts-only install fails the pre-install check on default k3s
-  ("requires an NP-enforcing CNI") unless you install Cilium/Calico or disable
-  the check.
+## Recipe: real triage (proves the LLM path end to end)
 
-## Downstream: `soctalk-launchpad`
+Mint an adapter token **inside** the api pod (no secret extraction), inject a
+Wazuh alert, poll for a verdict:
+```
+POD=$(kubectl -n soctalk-system get pods -l app.kubernetes.io/component=api -o name | head -1)
+kubectl -n soctalk-system exec $POD -- python -c \
+  "from soctalk.core.tenancy.auth import mint_adapter_token; from uuid import UUID; \
+   print(mint_adapter_token(UUID('<tenant-id>'), ttl_seconds=3600))"
+# POST /api/internal/adapter/events (schema_version 2, one AdapterEvent) with Bearer token.
+# Do NOT set template_hash — it is a memoization routing key that can skip the LLM.
+# Poll investigations for a non-empty summary (the rendered verdict).
+```
+Use a **unique host per injection** or alerts coalesce into a prior investigation.
+The single-replica runs-worker is serial; heavy injection backlogs it — poll
+generously and treat "worker didn't finish in window" as SKIP, not failure.
 
-Provisions VMs across clouds/hypervisors, joins them to a Tailscale overlay, and
-runs `install.sh` over SSH. It pins the installer to a specific soctalk tag
-(`defaultInstallerURL = …/soctalk/vX.Y.Z/install.sh`) — **bump in lockstep** when
-cutting a launchpad release for a newer soctalk. It threads
-`SOCTALK_LLM_{PROVIDER,API_KEY,BASE_URL,MODEL}` through, so a gateway/self-hosted
-run works with the installer's model requirement. Cross-cluster (L2) runs: the
-tenant runs-worker reaches the MSSP API to claim runs and honors
-`SOCTALK_API_VERIFY_SSL` (rendered from `soctalkSystem.verifySsl`) so a
-self-signed L1 cert doesn't block claims.
+## Recipe: validate a deploy path
 
-## Recipe: cut a new release
+- **One-click** (customer path): fresh QEMU VM on the NUC → `curl -sfL
+  …/soctalk/vX.Y.Z/install.sh | sudo -E bash -s -- --demo` with `SOCTALK_LLM_*`.
+  The tag-pinned installer self-pins chart+images. **LLM env contract**:
+  `SOCTALK_LLM_PROVIDER`, `SOCTALK_LLM_API_KEY`, and for
+  `openai-compatible`/`self-hosted` **both** `SOCTALK_LLM_BASE_URL` and
+  `SOCTALK_LLM_MODEL` (required — else defaults to `gpt-4o`, which a gateway
+  404s). The tenant key propagates without a per-tenant key: the controller's
+  `apply_secrets` falls back to `soctalk-system-llm-api-key` → `tenant-llm-key`.
+  Default `--demo` runs on flannel with `preInstallCheck.enabled: false` →
+  NetworkPolicy NOT enforced (PoC). Charts-only install needs an NP-CNI or the
+  check disabled.
+- **launchpad L2** (`soctalk-launchpad`): provisions MSSP + tenant VMs, joins a
+  Tailscale overlay, runs `install.sh` over SSH. Pins the installer to a soctalk
+  tag (`defaultInstallerURL`) — **bump in lockstep** on a new soctalk. Threads
+  `SOCTALK_LLM_{PROVIDER,API_KEY,BASE_URL,MODEL}`. The tenant runs-worker reaches
+  the MSSP over a self-signed cert and must honor `SOCTALK_API_VERIFY_SSL`
+  (rendered from `soctalkSystem.verifySsl`) or run-claims fail
+  `CERTIFICATE_VERIFY_FAILED`.
+- **Playwright sweeps** run **outside** the box. `domcontentloaded` (never
+  `networkidle` — the app holds an open stream). CSRF over a port-forward needs
+  `--host-resolver-rules=MAP host:443 <ip>:18443`. Assert no silent redirect / no
+  page error / no 5xx / no non-allowlisted 403 / no error-boundary text, plus
+  interactions — not just HTTP 200.
+- **Pricing e2e**: `tests/e2e/pricing_enforcement.py` (env-contract). Real-run
+  steps assert-if-completed / SKIP-if-slow.
 
-1. Land everything on `main` (explicit paths; keep unrelated WIP out).
-2. Ensure `charts/*/Chart.yaml` `version:` = the target `X.Y.Z`; sync `uv.lock`
-   if the version bumped.
-3. `publish-images` fires on the push and republishes the `X.Y.Z` chart —
-   expected; the cut supersedes it.
-4. If re-cutting an existing version: delete the tag + GitHub Release first
-   (`gh release delete vX.Y.Z --yes; git push origin :refs/tags/vX.Y.Z; git tag -d vX.Y.Z`).
-5. Dispatch `cut-k8s-release.yml --ref main -f version=X.Y.Z -f create_release=true`.
-   Verify the run built **main's HEAD sha**.
-6. Gate on the release box **by digest**, not by tag. On the NUC:
-   `scripts/nuc-released-bits.sh X.Y.Z --apply` (system chart, `pullPolicy=Always`
-   + forced rollout), then evict + restart tenant pods (they default
-   `IfNotPresent`) and re-run until it exits 0.
-7. A **test-/docs-only** follow-up push does not republish the chart
-   (`paths-ignore`), so the cut stays intact; any other main push re-publishes
-   the `X.Y.Z` chart at the new HEAD.
+## Boxes & access
 
-## Validation gates (what we run before trusting a cut)
+- **NUC**: `ssh gbrigandi@100.102.223.8` (port 22 on that tailnet IP only);
+  `kubectl --server=https://100.102.223.8:6443 --insecure-skip-tls-verify`;
+  Postgres `kubectl -n soctalk-system exec soctalk-system-postgres-0 -- psql -U
+  soctalk_admin -d soctalk`. Throwaway QEMU VMs under `~/oneclick-vm`, launchpad
+  VMs under `~/lp-vms`. See `[[nuc-build-deploy]]`, `[[nuc-release-gate-recipe]]`.
+- **Demo**: `ssh root@demo.soctalk.ai`. Two hostnames on one box — `demo.` =
+  customer surface (auto-pins the demo tenant; MSSP staff land in the tenant view,
+  use the "Clear" chip to reach cross-tenant), `mssp.` = the MSSP surface. See
+  `[[demo-box-topology]]`.
+- **argon2 hashes contain `$`** — pipe password SQL via stdin, never inline in a
+  double-quoted ssh command. Nested triple-SSH quoting mangles psql; write a
+  script and scp it.
 
-Every cut is exercised, not assumed. The gates, in rough order:
+## Traps that waste time
 
-- **Full pytest** (`uv run pytest`) — DB up on `localhost:5433`. A handful of
-  RLS/response tests error without the test DB; those are environmental, proven
-  by re-running at a clean HEAD in a throwaway worktree.
-- **Digest gate on the NUC** — `scripts/nuc-released-bits.sh X.Y.Z` asserts every
-  running container's imageID equals the registry-published digest; `--apply`
-  reinstalls the system chart (`pullPolicy=Always` + forced rollout). Tenant
-  pods default `IfNotPresent`, so evict the image (`k3s crictl rmi …`) + rollout
-  restart, then re-run until it exits 0. **Reproducible builds**: an
-  install.sh-/docs-only re-cut produces byte-identical image digests, so the NUC
-  needs no re-apply after such a cut.
-- **Frontend sweeps (Playwright, run OUTSIDE the box)** — MSSP + tenant route
-  sweeps: not just HTTP 200 but no silent redirect, no page error, no 5xx, no
-  non-allowlisted 403, no error-boundary text, plus interactions (open an
-  investigation, Timeline→Replay, fleet replay, logout). Use `domcontentloaded`
-  (`networkidle` never fires — the app holds an open stream). CSRF over a
-  port-forward needs `--host-resolver-rules=MAP host:443 <ip>:18443`.
-- **Pricing e2e** — `tests/e2e/pricing_enforcement.py` (env-contract, urllib):
-  unpriced gate, served-engine invariant, override persistence + rate
-  enforcement on a real run, accounting-off, consumption rollup, budget halt.
-  Real-run steps assert when the worker finishes in-window and SKIP otherwise
-  (single-replica worker throughput is not a pricing regression).
-- **Real triage** — mint an adapter token inside the api pod
-  (`mint_adapter_token`), `POST /api/internal/adapter/events` (schema v2, do NOT
-  set `template_hash` — it's a memoization key that can skip the LLM), poll the
-  investigation for a rendered verdict. Proves the LLM path end to end.
-- **Deploy-path validation** — one-click installer in a fresh QEMU VM on the NUC;
-  launchpad L2 (MSSP + tenant VMs on the tailnet); demo via `deploy-demo`. Each
-  driven through to a real triage verdict.
-- **Codex adversarial review** — every fix reviewed before commit; a fix loop
-  runs until `VERDICT: DONE`. A holistic cross-fix pass at the end catches
-  interaction bugs the per-fix reviews can't (e.g. installer alias vs chart
-  schema, L2 TLS on the worker).
+- MagicDNS on the Mac negative-caches new DNS names ~30 min (an ISP resolver in
+  the mix); a new record looks dead locally while `dig @ns1.digitalocean.com`
+  already answers.
+- `helm template`/`lint` passing is not proof; #142 defects rendered perfectly
+  and were wrong at runtime. Verify against the real client stack semantics.
+- `IntegrationConfig` is `table=True` SQLModel — pydantic validators don't run;
+  validate at the API boundary.
+- The provisioning controller reconciles tenant deployments — a manual
+  `kubectl set env`/patch gets reverted; change config via the API (or chart +
+  re-provision).
+- macOS has no `timeout`; use the runner's own timeout / `gtimeout`. Redirect
+  stdin from `/dev/null` for long background commands.
 
-Boxes and access: NUC `ssh gbrigandi@100.102.223.8` (see the `nuc-*` memories /
-`[[demo-box-topology]]`); demo `ssh root@demo.soctalk.ai`, two hostnames
-(`demo.` = customer surface auto-pinned to the demo tenant; `mssp.` = the MSSP
-surface). Throwaway QEMU VMs live under `~/oneclick-vm` / `~/lp-vms` on the NUC.
+## Release & validation log (newest last — append every cut/gate)
 
-## Release & validation log
-
-Running tab — newest last. Keep appending as we cut / gate.
-
-| Version | Tag @ sha | What changed / why re-cut | Gated |
+| Version | Tag @ sha | What / why | Gated |
 |---|---|---|---|
-| 0.2.1 | `85921ec` | Original cut: #142 pricing/engine work (22 Codex rounds) + uv.lock sync | NUC by digest; MSSP/tenant sweeps; pricing e2e 12/12; real triage |
-| 0.2.1 | `2e097ba` | + frontend audience-wall (#143/#144), base-URL-clear guard, demo `mssp.` hostname | NUC re-applied; demo redeployed; guards verified live |
-| 0.2.1 | `90b576c` | + installer LLM model-knob (gateways got `gpt-4o` → 404) | fresh QEMU one-click → real triage, no patching |
-| 0.2.1 | `9a2a2dd` | + L2 runs-worker honors `SOCTALK_API_VERIFY_SSL` (self-signed L1 blocked claims) | launchpad L2 re-run → real triage on the `acme` tenant |
-| 0.2.1 | `f29c5f8` | + installer provider-alias normalization + values-file validation skip (holistic Codex review) | NUC coherent by digest (reproducible build, no churn) |
+| 0.2.1 | `85921ec` | Original cut: #142 (22 Codex rounds) + uv.lock sync | NUC by digest; sweeps; pricing e2e 12/12; real triage |
+| 0.2.1 | `2e097ba` | + audience-wall (#143/#144), base-URL guard, demo `mssp.` host | NUC re-applied; demo redeployed; guards verified live |
+| 0.2.1 | `90b576c` | + installer LLM model-knob (gateway → `gpt-4o` 404) | fresh QEMU one-click → real triage, no patching |
+| 0.2.1 | `9a2a2dd` | + L2 runs-worker `SOCTALK_API_VERIFY_SSL` | launchpad L2 re-run → real triage on `acme` |
+| 0.2.1 | `f29c5f8` | + installer alias-normalize + values-file skip (holistic review) | NUC coherent by digest (reproducible build, no churn) |
 
 ## Known follow-ups
 
 - **Separate the dev chart version from release versions** so a post-cut main
-  push can't move the published `X.Y.Z` chart (touches the demo pipeline — do it
-  outside a release).
-- The `publish-images` comment once claimed `helm push` is idempotent; it is not
-  (GHCR overwrites). Corrected in the workflow; the mutable-tag reality stands.
+  push can't move the published `X.Y.Z` chart (touches the demo pipeline — not
+  inside a release).
+- `publish-images` once claimed `helm push` is idempotent; it is not (GHCR
+  overwrites). Comment corrected; the mutable-tag reality stands.
 - **File the launchpad qemu-plugin false-cache-hit bug** (reports a cache hit for
-  a base image absent on disk → `qemu-img create` fails). Worked around by
-  placing a valid image; not yet an issue.
+  a base image absent on disk → `qemu-img create` fails).
