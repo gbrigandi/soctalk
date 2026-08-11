@@ -110,11 +110,15 @@ cert-manager. State which variant a row covered.
   - **Row 2 charts-only — PASS.** Fresh stock-k3s VM, raw `helm install` per the
     chart README, real verdict (20,022 tokens). This run found the no-TLS
     origin/CSRF trap now documented in the chart README.
-  - **Row 3 launchpad L2 — BLOCKED, NOT VALIDATED.** Requires a
-    `TAILSCALE_API_KEY` and a manual operator ACL-paste gate
-    (`orchestrator.go`), so it cannot run unattended. Note the launchpad
-    binary must also be rebuilt to include the image-cache fix
-    (soctalk-launchpad#1) — the published artifacts predate it.
+  - **Row 3 launchpad L2 — PASS.** Full cross-cluster topology (MSSP VM +
+    tenant VM over the overlay), tenant `active`, Wazuh stack operational, real
+    verdict **on the tenant** (19,807 tokens) — the path that exercises
+    `SOCTALK_API_VERIFY_SSL` over a self-signed MSSP cert. Caveats: run with a
+    **locally built** qemu plugin (the published launchpad artifacts predate the
+    image-cache fix, soctalk-launchpad#1), and the CLI path needs
+    `TAILSCALE_API_KEY` exported (the HTTP API injects it from the stored
+    network) plus `--auto-resolve-gates` (the ACL gate is one-time per tailnet
+    and was already satisfied). VMs torn down afterwards.
   - **Row 4 staging — PASS.** Digest gate green on all containers, real verdict
     (22,278 tokens), and the version fix confirmed live (`0.2.1`).
   - **Rows 5–6 (VM appliance, `.deb`/`.rpm`) — NOT VALIDATED** on any 0.2.1 build.
@@ -343,7 +347,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 | 0.2.1 | `90b576c` | + installer LLM model-knob (gateway → `gpt-4o` 404) | fresh QEMU one-click → real triage, no patching |
 | 0.2.1 | `9a2a2dd` | + L2 runs-worker `SOCTALK_API_VERIFY_SSL` | launchpad L2 re-run → real triage on the tenant |
 | 0.2.1 | `f29c5f8` | + installer alias-normalize + values-file skip (holistic review) | staging coherent by digest (reproducible build, no churn) |
-| 0.2.1 | `85da7dc` | + version hygiene (published 0.2.1 reported `0.2.0` in openapi/adapter heartbeat/worker log/frontend package) + real charts-only recipe in the chart README | rows 1,2,4 **PASS** (real verdicts: 19,877 / 20,022 / 22,278 tokens); row 3 **BLOCKED** (needs Tailscale API key + manual ACL gate); rows 5–6 **NOT VALIDATED** |
+| 0.2.1 | `85da7dc` | + version hygiene (published 0.2.1 reported `0.2.0` in openapi/adapter heartbeat/worker log/frontend package) + real charts-only recipe in the chart README | rows 1–4 **PASS** — real verdicts on fresh VMs (19,877 / 20,022 / 19,807 / 22,278 tokens); rows 5–6 in progress |
 
 ## Known follow-ups
 
