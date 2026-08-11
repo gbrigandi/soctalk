@@ -64,16 +64,52 @@ environment/config and the cluster's Secrets — **not in this doc**.
    the deliberately-mutable, audited pointer. Only move to a new version when the
    operator explicitly decides it. So chart/template/values changes land on a
    `0.2.1` re-cut, never a `0.2.2`.
+9. **A re-cut is not shipped until EVERY install mechanism has been re-validated
+   against it.** A re-cut produces new digests, so the previous run's evidence is
+   void — it belonged to a different artifact. Re-run the whole *install matrix*
+   (below) on the new sha and record each outcome in the release log. "It only
+   changed a version string" is not an exemption: the point of rolling forward is
+   that the artifact you validated is the artifact you ship. If a mechanism
+   genuinely cannot be run, write it in the log as **NOT VALIDATED** with the
+   reason — never let silence imply coverage.
+
+## Install matrix (every mechanism must pass on the cut being shipped)
+
+Each row must reach a **real LLM triage verdict** (see the real-triage recipe),
+not merely "the install finished". Record every row's outcome per cut/re-cut.
+
+| # | Mechanism | How | Proof required |
+|---|---|---|---|
+| 1 | **One-click installer** | `curl -sfL https://raw.githubusercontent.com/soctalk/soctalk/vX.Y.Z/install.sh \| sudo -E bash -s -- --demo` on a fresh VM | cold VM → real verdict, zero manual intervention |
+| 2 | **Charts-only (raw Helm)** | `helm install … oci://ghcr.io/soctalk/charts/soctalk-system --version X.Y.Z` on stock k3s; see the chart README for the pre-created Secrets and required values | real verdict; pods on `X.Y.Z` digests |
+| 3 | **Launchpad L2 (cross-cluster)** | `soctalk-launchpad` provisions MSSP + tenant VMs over the overlay; installer pinned to the same tag | real verdict **on the tenant** (exercises cross-cluster claim + TLS) |
+| 4 | **Staging cluster** | `scripts/staging-released-bits.sh X.Y.Z --apply` | every container on the published digest, then a real verdict |
+| 5 | **VM appliance** | boot the released `.ova`/`.qcow2` image | first boot → reachable UI → real verdict |
+| 6 | **OS packages** | install the released `.deb` / `.rpm` | service comes up → real verdict |
+
+Rows 1–4 are the routinely-exercised paths. Rows 5–6 exist because the cut
+publishes those artifacts; if they are not run, they are **NOT VALIDATED** in the
+log, not silently assumed. Coverage is per *variant that changes a code path*,
+not per row alone: an `anthropic` provider and an `openai-compatible` gateway
+take different runtime branches (the latter 404s on the `gpt-4o` chart default
+without an explicit model), and plain-HTTP differs from a TLS install with
+cert-manager. State which variant a row covered.
 
 ## Current release
 
-- **`0.2.1` — git tag `v0.2.1` @ `f29c5f8`** (re-cut; see the log). Contains: the
+- **`0.2.1` — git tag `v0.2.1` @ `85da7dc`** (re-cut; see the log). Contains: the
   full #142 pricing/engine work, frontend audience-wall (#143/#144) + LLM
   base-URL-clear guard, installer LLM model-knob + provider-alias normalization +
   values-file validation skip, the L2 runs-worker `SOCTALK_API_VERIFY_SSL` fix,
-  the demo two-hostname topology, and `tests/e2e/pricing_enforcement.py`.
-- **Gated**: staging on released digests; real triage verdict on three deploy
-  paths (one-click VM, launchpad L2, staging). Demo tracks head via `deploy-demo`.
+  the demo two-hostname topology, `tests/e2e/pricing_enforcement.py`, version
+  hygiene (0.2.0 → 0.2.1 everywhere it surfaces), and the real charts-only
+  install recipe in the chart README.
+- **Gated**: ⚠️ **install matrix re-run PENDING for `85da7dc`.** The four
+  routinely-exercised mechanisms (one-click VM, charts-only, launchpad L2,
+  staging) all reached a real verdict on the *previous* build (`f29c5f8` / the
+  charts-only run) — that evidence does **not** carry over (hard rule 9); the
+  re-cut has new digests. Rows 5–6 (VM appliance, `.deb`/`.rpm`) are **NOT
+  VALIDATED** on any 0.2.1 build. Demo tracks head via `deploy-demo`.
 - **Open**: none blocking. #145 closed — stock k3s *does* enforce standard
   NetworkPolicy (kube-router), so tenant isolation holds on a default `--demo`
   box; the charts-only pre-install false-negative is documented
@@ -190,7 +226,12 @@ version tag immutable-per-release too, closing the one gap above.
 3. `gh workflow run cut-k8s-release.yml --ref main -f version=X.Y.Z -f create_release=true`.
    (Retry on transient `gh` TLS errors.) Then confirm the run built **HEAD sha**.
 4. Gate staging by digest (next recipe).
-5. Append a row to the *Release & validation log*.
+5. **Re-run the entire install matrix against this sha** (hard rule 9) — every
+   mechanism, each to a real triage verdict. A re-cut voids the prior run's
+   evidence: those digests no longer exist. Use fresh VMs, not VMs left over
+   from validating the previous build.
+6. Append a row to the *Release & validation log* recording **each** matrix row's
+   outcome, including any marked NOT VALIDATED and why.
 
 ## Recipe: gate staging by digest
 
@@ -293,6 +334,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 | 0.2.1 | `90b576c` | + installer LLM model-knob (gateway → `gpt-4o` 404) | fresh QEMU one-click → real triage, no patching |
 | 0.2.1 | `9a2a2dd` | + L2 runs-worker `SOCTALK_API_VERIFY_SSL` | launchpad L2 re-run → real triage on the tenant |
 | 0.2.1 | `f29c5f8` | + installer alias-normalize + values-file skip (holistic review) | staging coherent by digest (reproducible build, no churn) |
+| 0.2.1 | `85da7dc` | + version hygiene (published 0.2.1 reported `0.2.0` in openapi/adapter heartbeat/worker log/frontend package) + real charts-only recipe in the chart README | **matrix re-run PENDING** — see below |
 
 ## Known follow-ups
 
