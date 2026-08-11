@@ -72,6 +72,14 @@ environment/config and the cluster's Secrets — **not in this doc**.
    that the artifact you validated is the artifact you ship. If a mechanism
    genuinely cannot be run, write it in the log as **NOT VALIDATED** with the
    reason — never let silence imply coverage.
+   - The operator may **scope** a re-cut to the modes a fix touches (e.g. "only
+     re-run the mode that failed"). That is their call, not yours to assume.
+     When it happens, the log must say exactly which rows were re-run and which
+     were **not re-run on this cut** — never restate a previous build's PASS as
+     if it applied here. Before agreeing, check whether the fix is genuinely
+     mode-local: a change to a *shared* asset (the tenant chart, the installer,
+     an image every path pulls) affects every row even when the bug surfaced in
+     only one, and the scoped row must at least exercise that shared path.
 
 10. **Nothing a user installs may reference `latest` — everything pins to the
     release.** `latest` is a *producer-side* dev tag only (`publish-images`
@@ -452,6 +460,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 | 0.2.1 | `9a2a2dd` | + L2 runs-worker `SOCTALK_API_VERIFY_SSL` | launchpad L2 re-run → real triage on the tenant |
 | 0.2.1 | `f29c5f8` | + installer alias-normalize + values-file skip (holistic review) | staging coherent by digest (reproducible build, no churn) |
 | 0.2.1 | `85da7dc` | + version hygiene (published 0.2.1 reported `0.2.0` in openapi/adapter heartbeat/worker log/frontend package) + real charts-only recipe in the chart README | rows 1–4 **PASS** — real verdicts on fresh VMs (19,877 / 20,022 / 19,807 / 22,278 tokens); rows 5–6 in progress |
+| 0.2.1 | `7e4dcac` | + hard rule 10 enforcement: no shipped artifact consumes `latest` (setup wizard, packer examples + CI boot-test seed, packer chart-version defaults, `alpine/openssl` in the wazuh chart) | **scoped re-validation** — operator scoped this cut to the previously-failing mode: row 5 re-run in full (pinning + verdict). Rows 1–4, 6 were validated on `85da7dc` and **were NOT re-run on this cut** |
 
 ## Known follow-ups
 
