@@ -117,8 +117,28 @@ after a cut/re-cut and act on what it actually reports.
 
 ## Immutability model (what is fixed vs what moves)
 
-The release's identity is **immutable by content, audited by log** — but the
-version *tag* on the chart is deliberately mutable, so you never trust the tag.
+**The core discipline: on a bug you start over — you never patch in place.** An
+artifact is fixed the moment it is built; you do not edit a built image, a
+published chart, or a running pod to fix a defect. You rebuild a fresh artifact
+(new source → new digest) and **roll forward** — re-cut, re-publish, re-pull,
+replace. The release cycle is meant to *recur*: find a bug → land the fix on
+`main` → cut again → gate again, as many times as it takes. Every artifact in the
+loop is disposable and replaceable; nothing in it is hand-repaired. Concretely:
+- **Never hot-patch a running deployment** (`kubectl set env`/`edit`/`patch` to
+  "fix" a pod). The provisioning controller reverts it, and even where it sticks
+  it produces a pod whose bits no digest accounts for. Change source/config, cut,
+  and let the new image replace the old one.
+- **Never edit a published image or chart in place.** Roll a new build; the tag
+  moves to the new digest (see below). The old digest still exists, untouched —
+  that is what "immutable" protects.
+- **Re-pull, don't reuse.** `pullPolicy: Always` + forced rollout on apply,
+  because the point of rolling forward is defeated if a cached layer of the same
+  tag is reused.
+
+The release's identity is thus **immutable by content, audited by log** — the
+built bits never change; the version *tag* pointing at them is deliberately
+mutable during hardening (each re-cut is a fresh build, logged), so you never
+trust the tag, only the digest.
 
 - **Immutable — the content digest.** The image `sha256:…` digest is the source
   of truth for "what is running": a given digest is one exact set of bits. (The
