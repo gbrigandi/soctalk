@@ -267,7 +267,7 @@ def roles_for_config(
         # the built-in table or to `unknown`, even when the catalog priced it
         # perfectly well.
         #
-        # Found by driving the config form on the NUC. Adding it here fixes the
+        # Found by driving the config form on staging. Adding it here fixes the
         # pricing, and the config-time gate gets the same coverage for free
         # because both read this function.
         # ``chat_model`` overrides the tenant default when the CALLER knows

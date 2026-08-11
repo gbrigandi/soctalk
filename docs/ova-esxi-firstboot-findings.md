@@ -16,7 +16,7 @@ Status: fixed and validated on BOTH boot paths of the shipped v0.2.0 OVA
 ## What was tested
 
 The v0.2.0 release OVA (`soctalk-demo-0.2.0.ova`) was deployed to a real
-VMware ESXi 8.0.3 host (nested on the NUC) via `govc import.ova`, powered on,
+VMware ESXi 8.0.3 host (nested on staging) via `govc import.ova`, powered on,
 and driven to the setup wizard.
 
 ## Result

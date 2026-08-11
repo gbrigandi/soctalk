@@ -7,7 +7,7 @@ scanner traffic against real services, decoded by a real Wazuh manager.
 
 ## What it is
 
-`docker compose` stack (run on a throwaway host — this was captured on a NUC):
+`docker compose` stack (run on a throwaway host — this was captured on a staging host):
 
 - `wazuh-manager` — Wazuh 4.9.2 manager (manager-only; alerts read from
   `alerts.json`, no indexer/dashboard).

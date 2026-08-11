@@ -1110,7 +1110,7 @@ async def test_gate_covers_the_chat_model_not_only_triage_roles(monkeypatch):
     unpriced one. chat/agent.py resolves its model as `integ.llm_model or ...`,
     so that model DID run and its spend was silently unenforceable.
 
-    Found by driving the config form end to end on the NUC: the UI said "no
+    Found by driving the config form end to end on staging: the UI said "no
     price is known" and the save succeeded anyway.
     """
     from types import SimpleNamespace

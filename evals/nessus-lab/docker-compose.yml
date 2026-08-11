@@ -1,4 +1,4 @@
-# Dedicated Nessus capture lab (run on a throwaway host, e.g. the NUC).
+# Dedicated Nessus capture lab (run on a throwaway host, e.g. staging).
 #
 # Purpose: produce REAL Wazuh alerts from a REAL Nessus vulnerability-scan
 # CAMPAIGN across MULTIPLE hosts, so they can be captured once into a versioned
@@ -63,7 +63,7 @@ services:
     hostname: nessus
     networks: [lab]
     ports:
-      - "8834:8834"   # Nessus UI/API, reachable from the NUC for scan driving
+      - "8834:8834"   # Nessus UI/API, reachable from staging for scan driving
     environment:
       ACTIVATION_CODE: "${NESSUS_ACTIVATION_CODE}"
       USERNAME: "${NESSUS_USER:-admin}"

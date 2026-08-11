@@ -13,7 +13,7 @@ Everything is driven through the public REST API (no browser needed). Each step
 restores what it changed; the whole run leaves the tenant exactly as found.
 
 Env contract:
-- PRICING_BASE_URL     (required, e.g. https://100.102.223.8.nip.io)
+- PRICING_BASE_URL     (required, the target's base URL)
 - PRICING_ADMIN_EMAIL  (an mssp_admin)
 - PRICING_ADMIN_PW
 - PRICING_TENANT_ID    (the tenant to exercise)
@@ -54,7 +54,7 @@ PW = os.environ["PRICING_ADMIN_PW"]
 TENANT = os.environ["PRICING_TENANT_ID"]
 ADAPTER_TOKEN = os.environ.get("PRICING_ADAPTER_TOKEN", "").strip()
 
-# The NUC ingress serves a self-signed cert over the tailnet; a live demo box
+# The staging host ingress serves a self-signed cert over the tailnet; a live demo box
 # serves a real one. Accept both rather than pinning to one deployment.
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
