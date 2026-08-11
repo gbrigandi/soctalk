@@ -29,9 +29,8 @@ write_files:
         bootstrapAdmin:
           email: "ops@soctalk.example.com"
           password: "change-me-on-first-login"
-      image:
-        registry: ghcr.io/soctalk
-        tag: "latest"
+      # No `image:` block: inherit the bundled chart's pinned version.
+      # `tag: "latest"` would make this appliance run unreleased code.
       ingress:
         enabled: true
         className: traefik

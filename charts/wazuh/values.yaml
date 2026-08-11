@@ -75,3 +75,9 @@ credentials:
   indexerPassword: admin
   authdPassword: change-me-authd
   clusterKey: "c98b62a9b6169ac5f67dae55ae4a4ba4"
+
+# Init container that generates the self-signed indexer PKI. Pinned rather than
+# `latest` so a shipped release cannot pull a moving third-party image
+# (hard rule 10). Point this at a mirror/digest for air-gapped installs.
+certGen:
+  image: alpine/openssl:3.5.7

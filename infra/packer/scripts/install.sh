@@ -37,8 +37,12 @@ curl -sSfL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 |
 #    inflate the image to ~5 GB. Documented as a future optimization.
 # ---------------------------------------------------------------------
 install -d -m 755 /opt/soctalk/charts
+# No default: a silent fallback means the image gets LABELLED one version while
+# BUNDLING the chart of another, and the appliance then installs a release
+# nobody asked for. The release pipeline always passes this explicitly
+# (cut-k8s-release -> build-packer-images -> packer); a local build must too.
 helm pull oci://ghcr.io/soctalk/charts/soctalk-system \
-  --version "${SOCTALK_CHART_VERSION:-0.1.0}" \
+  --version "${SOCTALK_CHART_VERSION:?SOCTALK_CHART_VERSION must be set (the soctalk-system chart version to bundle) — refusing to guess and ship a mislabelled appliance}" \
   --destination /opt/soctalk/charts \
   --untar
 # Result: /opt/soctalk/charts/soctalk-system/  (chart dir, not tarball)

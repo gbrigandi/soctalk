@@ -56,7 +56,11 @@ spec:
           # ``apk add`` (which is blocked by the tenant namespace's
           # default-deny egress) and avoids relying on openssl being on
           # PATH in the wazuh-indexer image (it isn't).
-          image: alpine/openssl:latest
+          # Pinned, not ``latest``: this renders into every provisioned tenant,
+          # so a moving tag means an unpinned third-party image lands in a
+          # shipped release and can change under a released artifact
+          # (hard rule 10). Override via ``certGen.image`` for a mirror.
+          image: {{ (default dict .Values.certGen).image | default "alpine/openssl:3.5.7" }}
           # Default entrypoint is ``openssl``; override with sh.
           command: ["sh", "-ec"]
           args:

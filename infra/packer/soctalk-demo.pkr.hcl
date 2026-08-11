@@ -18,9 +18,12 @@ variable "version" {
 }
 
 variable "soctalk_chart_version" {
-  type        = string
-  default     = "0.1.2"
-  description = "soctalk-system chart version to pre-pull into the image."
+  type = string
+  # Deliberately no default. A stale default silently bundles the wrong chart
+  # into an image labelled with a different version. The release pipeline
+  # always passes this (cut-k8s-release -> build-packer-images); a local build
+  # must supply it too: -var soctalk_chart_version=X.Y.Z
+  description = "soctalk-system chart version to pre-pull into the image (required; must match the release being built)."
 }
 
 variable "aws_region" {

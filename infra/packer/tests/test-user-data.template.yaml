@@ -23,9 +23,8 @@ write_files:
         bootstrapAdmin:
           email: "ops@soctalk-boot-test.local"
           password: "boot-test-password"
-      image:
-        registry: ghcr.io/soctalk
-        tag: "latest"
+      # No `image:` block: the boot test must validate the SHIPPED pinning,
+      # not override it with a moving tag.
       ingress:
         enabled: false
       postgres:

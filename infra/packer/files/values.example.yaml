@@ -10,9 +10,10 @@ install:
     # initial password auth and require post-install bootstrap.
     password: ""
 
-image:
-  registry: ghcr.io/soctalk
-  tag: "latest"
+# No `image:` block on purpose: the bundled chart already defaults to the
+# release it shipped with. Setting `tag: "latest"` here makes a versioned
+# appliance install unreleased code that changes under you (hard rule 10).
+# Override `image.registry` ONLY for a private registry mirror.
 
 ingress:
   enabled: true
