@@ -104,12 +104,21 @@ cert-manager. State which variant a row covered.
   the demo two-hostname topology, `tests/e2e/pricing_enforcement.py`, version
   hygiene (0.2.0 → 0.2.1 everywhere it surfaces), and the real charts-only
   install recipe in the chart README.
-- **Gated**: ⚠️ **install matrix re-run PENDING for `85da7dc`.** The four
-  routinely-exercised mechanisms (one-click VM, charts-only, launchpad L2,
-  staging) all reached a real verdict on the *previous* build (`f29c5f8` / the
-  charts-only run) — that evidence does **not** carry over (hard rule 9); the
-  re-cut has new digests. Rows 5–6 (VM appliance, `.deb`/`.rpm`) are **NOT
-  VALIDATED** on any 0.2.1 build. Demo tracks head via `deploy-demo`.
+- **Gated** against `85da7dc` (matrix rows re-run on the re-cut, per hard rule 9):
+  - **Row 1 one-click — PASS.** Fresh VM, tag-pinned installer, tenant `active`,
+    all 5 images `0.2.1`, real verdict (19,877 tokens).
+  - **Row 2 charts-only — PASS.** Fresh stock-k3s VM, raw `helm install` per the
+    chart README, real verdict (20,022 tokens). This run found the no-TLS
+    origin/CSRF trap now documented in the chart README.
+  - **Row 3 launchpad L2 — BLOCKED, NOT VALIDATED.** Requires a
+    `TAILSCALE_API_KEY` and a manual operator ACL-paste gate
+    (`orchestrator.go`), so it cannot run unattended. Note the launchpad
+    binary must also be rebuilt to include the image-cache fix
+    (soctalk-launchpad#1) — the published artifacts predate it.
+  - **Row 4 staging — PASS.** Digest gate green on all containers, real verdict
+    (22,278 tokens), and the version fix confirmed live (`0.2.1`).
+  - **Rows 5–6 (VM appliance, `.deb`/`.rpm`) — NOT VALIDATED** on any 0.2.1 build.
+  Demo tracks head via `deploy-demo`.
 - **Open**: none blocking. #145 closed — stock k3s *does* enforce standard
   NetworkPolicy (kube-router), so tenant isolation holds on a default `--demo`
   box; the charts-only pre-install false-negative is documented
@@ -334,7 +343,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 | 0.2.1 | `90b576c` | + installer LLM model-knob (gateway → `gpt-4o` 404) | fresh QEMU one-click → real triage, no patching |
 | 0.2.1 | `9a2a2dd` | + L2 runs-worker `SOCTALK_API_VERIFY_SSL` | launchpad L2 re-run → real triage on the tenant |
 | 0.2.1 | `f29c5f8` | + installer alias-normalize + values-file skip (holistic review) | staging coherent by digest (reproducible build, no churn) |
-| 0.2.1 | `85da7dc` | + version hygiene (published 0.2.1 reported `0.2.0` in openapi/adapter heartbeat/worker log/frontend package) + real charts-only recipe in the chart README | **matrix re-run PENDING** — see below |
+| 0.2.1 | `85da7dc` | + version hygiene (published 0.2.1 reported `0.2.0` in openapi/adapter heartbeat/worker log/frontend package) + real charts-only recipe in the chart README | rows 1,2,4 **PASS** (real verdicts: 19,877 / 20,022 / 22,278 tokens); row 3 **BLOCKED** (needs Tailscale API key + manual ACL gate); rows 5–6 **NOT VALIDATED** |
 
 ## Known follow-ups
 
