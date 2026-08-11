@@ -73,6 +73,29 @@ environment/config and the cluster's Secrets — **not in this doc**.
    genuinely cannot be run, write it in the log as **NOT VALIDATED** with the
    reason — never let silence imply coverage.
 
+10. **Nothing a user installs may reference `latest` — everything pins to the
+    release.** `latest` is a *producer-side* dev tag only (`publish-images`
+    creates it on every main push). No artifact that ships may **consume** it:
+    not the chart's image tags, not tenant-provisioning tags, not a bundled
+    values file, not the installer URL, not a third-party image in a chart. An
+    artifact labelled `X.Y.Z` that pulls `latest` runs unreleased code and
+    silently changes behaviour over time while the artifact itself never
+    changes — the exact thing the immutability model forbids.
+    - **Verify it, don't assume it.** Every matrix row must assert *pinning* as
+      well as a verdict: list every running container image and confirm each is
+      `X.Y.Z` at the published digest. A working install proves nothing about
+      pinning — the 0.2.1 appliance reached a real verdict while running
+      `soctalk-api:latest` (fixed by dropping the wizard's hardcoded tag so the
+      bundled chart's own version applies).
+    - **Prefer "inherit the chart default" over a hardcoded version string.**
+      The chart's default tag *is* its version, so it cannot drift on the next
+      cut; a literal `"0.2.1"` written into a script is another `0.2.0`-style
+      drift waiting to happen.
+    - **The one deliberate exception** is the *demo environment*, which tracks
+      head on purpose (`deploy/demo-values.yaml` sets `tag: latest` with
+      `pullPolicy: Always`). That is an environment, not a shipped artifact.
+      Anything else using `latest` is a bug.
+
 ## Install matrix (every mechanism must pass on the cut being shipped)
 
 Each row must reach a **real LLM triage verdict** (see the real-triage recipe),
@@ -121,7 +144,14 @@ cert-manager. State which variant a row covered.
     and was already satisfied). VMs torn down afterwards.
   - **Row 4 staging — PASS.** Digest gate green on all containers, real verdict
     (22,278 tokens), and the version fix confirmed live (`0.2.1`).
-  - **Rows 5–6 (VM appliance, `.deb`/`.rpm`) — NOT VALIDATED** on any 0.2.1 build.
+  - **Row 5 VM appliance — verdict PASS, pinning FAIL.** Booted the released
+    `.qcow2` (checksum-verified), drove the real first-boot wizard, reached a
+    real verdict (20,031 tokens) — but it ran `soctalk-api:latest` /
+    `soctalk-app-ui:latest`, because the setup wizard hardcoded `tag: "latest"`.
+    Fixed (the wizard now inherits the bundled chart's version); **needs a
+    re-cut and a re-run of this row**.
+  - **Row 6 OS package (`.deb`) — PASS.** `dpkg -i` → `soctalk install --demo`,
+    all 5 images `0.2.1`, real verdict (19,871 tokens).
   Demo tracks head via `deploy-demo`.
 - **Open**: none blocking. #145 closed — stock k3s *does* enforce standard
   NetworkPolicy (kube-router), so tenant isolation holds on a default `--demo`
@@ -436,3 +466,20 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   **changed** content overwrites the tag to a new digest (GHCR allows it). That is
   the mutable-chart-tag reality rule 1 guards against. Not a pending code change —
   just don't read "idempotent" as "immutable".
+- **Remaining `latest` consumers (hard rule 10 violations), found by audit:**
+  - `charts/wazuh/templates/indexer.yaml` pulls **`alpine/openssl:latest`** — an
+    unpinned third-party image in a chart that ships to every tenant. Pin it to a
+    digest or a fixed tag.
+  - `infra/packer/files/values.example.yaml` and
+    `infra/packer/cloud-init.example.yaml` still show `tag: "latest"`. They are
+    operator-facing templates, so they teach the very bug just fixed in the
+    setup wizard.
+- **Appliance ships an unlocked build account.** The released image accepts SSH
+  as `ubuntu` / `packer` (password auth enabled) — the packer build credentials.
+  `infra/packer/README.md` documents locking it before shipping
+  (`passwd -l ubuntu`); the published image is not locked. Anyone booting the
+  appliance on a routable network has a known-credential `NOPASSWD:ALL` account.
+- **Appliance cannot use a self-hosted/gateway LLM.** The setup wizard offers
+  only `anthropic`/`openai` and collects no model or base URL, so the
+  openai-compatible path (the one with the `gpt-4o` 404 footgun) is unreachable
+  without reconfiguring after install.
