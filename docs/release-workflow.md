@@ -300,6 +300,34 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   the MSSP over a self-signed cert and must honor `SOCTALK_API_VERIFY_SSL`
   (rendered from `soctalkSystem.verifySsl`) or run-claims fail
   `CERTIFICATE_VERIFY_FAILED`.
+
+  Driving it from the **CLI** (the UI/HTTP-API path does some of this for you):
+  ```
+  LAUNCHPAD_DEV=1 LAUNCHPAD_PLUGIN_DIR=<dir-of-built-plugins> \
+  TAILSCALE_API_KEY=<from the launchpad network config> \
+    go run ./cmd/launchpad up --config <cfg>.yaml --state <fresh>.json \
+      --headless --auto-resolve-gates
+  ```
+  - `TAILSCALE_API_KEY` is **required** (minting per-device auth keys). The HTTP
+    API injects it from the stored network; the CLI does not — export it.
+  - `--auto-resolve-gates` skips the manual "paste the Tailscale ACL" gate. Only
+    legitimate when that ACL is already applied to the tailnet (it is one-time
+    per tailnet, not per run).
+  - The plugin `plugin_config` needs **`ssh_host` and `tailnet`**, not just
+    `work_dir`/`base_image` — without them `plugin.initialize` fails and every
+    later step reports the confusing `qemu.not_initialized`.
+  - `ssh_keys` must include the key of the machine **running launchpad**, since
+    it SSHes into the VMs it creates. Authorizing only the VM-host's key gives
+    `ops@…: Permission denied (publickey)` *after* the VMs come up healthy.
+  - A dev/`go run` build refuses to spawn plugins ("no signing public key
+    configured"). Build the plugin from source into a dir, fix its
+    `plugin.yaml` `sha256` to match, and use `LAUNCHPAD_DEV=1`. **Note this
+    means you validated against a locally built plugin, not a signed release —
+    say so in the log.**
+  - **Always `launchpad down` when a run fails.** VMs left running hold their
+    `disk.qcow2` open, so the next `up`/`--recreate` dies in `qemu-img create`.
+    Teardown *moves* work dirs to `/tmp/lp-destroyed-*`; those accumulate at
+    tens of GB and need periodic clearing.
 - **Playwright sweeps** run **outside** the target cluster. `domcontentloaded`
   (never `networkidle` — the app holds an open stream). CSRF over a port-forward
   needs `--host-resolver-rules=MAP <surface-hostname>:443 <listener-ip>:18443`
@@ -307,6 +335,28 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   address; the literal is a placeholder, not the string `host`). Assert no silent redirect
   / no page error / no 5xx / no non-allowlisted 403 / no error-boundary text, plus
   interactions — not just HTTP 200.
+- **VM appliance** (row 5): download the release asset, **verify it against the
+  release `SHA256SUMS.txt`**, `xz -dk` it, and boot it under qemu. It is a
+  genuinely different path — not install.sh in a box:
+  - `soctalk-setup-wizard.service` serves **:8443**; forward that port or you
+    cannot drive it. A one-time token is printed to the serial console and to
+    `/var/log/soctalk-setup-token`.
+  - Flow is **two-step**: `GET /` serves a *token-entry* form that posts to
+    `/auth`; only then do you get the setup form (and its `csrf`) to
+    `POST /submit`. A token in the query string alone does not land on the form.
+  - `soctalk-firstboot.service` does the k3s + helm install once the wizard
+    submits; watch the serial console for `soctalk-firstboot complete`.
+  - The wizard collects only `hostname, mssp_name, admin_email, admin_pw,
+    llm_provider, llm_api_key` and offers **only `anthropic`/`openai`** — no
+    model, no base URL. The appliance therefore **cannot** target an
+    openai-compatible/self-hosted gateway without reconfiguring after install.
+  - If a boot consumes the token, re-extract a **pristine** qcow2 from the `.xz`
+    rather than rebooting a dirty image — otherwise it is not a first boot.
+- **OS packages** (row 6): `dpkg -i` / `rpm -i` the release asset, then
+  `soctalk install --demo` with the `SOCTALK_LLM_*` env. The package is a thin
+  wrapper: `/usr/bin/soctalk` plus the bundled installer at
+  `/usr/libexec/soctalk/install.sh`, so it exercises the same installer the
+  one-click path fetches — but pinned by *package build*, not by URL tag.
 - **Pricing e2e**: `tests/e2e/pricing_enforcement.py` (env-contract). Real-run
   steps assert-if-completed / SKIP-if-slow.
 
@@ -337,6 +387,30 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   re-provision).
 - macOS runners have no `timeout`; use the tool's own timeout / `gtimeout`.
   Redirect stdin from `/dev/null` for long background commands.
+- **A gate that inspects nothing must fail, not pass.** The digest gate once
+  reported "every soctalk container runs the published digest" while checking
+  **zero** containers: its `kubectl` could not reach the cluster, the errors went
+  to stderr (discarded), and the loop simply never ran. Any verifier needs a
+  reachability preflight *and* an assertion that it examined a non-zero number of
+  things. Apply the same suspicion to your own scripts before trusting a green.
+- **Piping a long background command through `tail`/`head` buffers all output**,
+  so a run that is stalled or blocked looks identical to one that is working.
+  Stream to the file and inspect it, or you will discover an hour later that it
+  never started. Likewise `codex exec` without `< /dev/null` hangs on
+  "Reading additional input from stdin".
+- **`curl -sf` hides the response body**, so an auth/CSRF rejection reads as a
+  bare "failed". Re-run failures with `-w '%{http_code}'` and the body before
+  theorising.
+- **Poll the DB, not an endpoint you guessed.** Adapter-created investigations
+  are not readable through the legacy investigation bridge; a wrong poll URL
+  404s forever and the run self-reports a false SKIP while the verdict actually
+  succeeded. Confirm from `investigations` / `investigation_runs` (non-empty
+  summary + `tokens_used > 0`).
+- **Staging RAM is the binding constraint on matrix runs**, not disk or CPU.
+  Each validation VM wants 8–10 GiB against ~62 GiB total that already hosts
+  long-running VMs you do not own. Run rows sequentially, stop each VM once its
+  row has passed and its evidence is recorded, and never kill a VM you did not
+  create.
 
 ## Release & validation log (newest last — append every cut/gate)
 
