@@ -68,7 +68,8 @@ environment/config and the cluster's Secrets — **not in this doc**.
 - **Gated**: staging on released digests; real triage verdict on three deploy
   paths (one-click VM, launchpad L2, staging). Demo tracks head via `deploy-demo`.
 - **Open**: #145 (one-click flannel/no-NetworkPolicy PoC + charts-only NP-CNI).
-  Launchpad qemu-plugin false-cache-hit bug known, not yet filed.
+  The launchpad image-cache false-hit bug is fixed (soctalk-launchpad#1, host-keyed
+  + presence-verified memo).
 
 ## Mechanism: the moving parts
 
@@ -294,5 +295,3 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
   **changed** content overwrites the tag to a new digest (GHCR allows it). That is
   the mutable-chart-tag reality rule 1 guards against. Not a pending code change —
   just don't read "idempotent" as "immutable".
-- **File the launchpad qemu-plugin false-cache-hit bug** (reports a cache hit for
-  a base image absent on disk → `qemu-img create` fails).
