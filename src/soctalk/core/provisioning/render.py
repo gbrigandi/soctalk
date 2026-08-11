@@ -131,6 +131,54 @@ def _external_siem_hosts(integration: IntegrationConfig) -> list[str]:
     return hosts
 
 
+def _external_siem_endpoints(integration: IntegrationConfig) -> list[dict[str, object]]:
+    """``{host, port}`` pairs the adapter must reach for an external Wazuh.
+
+    Same sources as :func:`_external_siem_hosts`, but keeps the **port** as
+    well. The standard ``NetworkPolicy`` (the only one that applies on a
+    non-Cilium cluster) opens exactly these ports: hardcoding 9200/55000 there
+    silently drops a BYO Wazuh published behind a NodePort, load balancer, or
+    reverse proxy on any other port, while the tenant still reports healthy.
+    Mirrors the LLM egress port derivation above, which exists for the same
+    reason (self-hosted endpoints on non-standard ports).
+
+    Falls back to the scheme default when the URL omits an explicit port, so
+    the common ``https://wazuh.example.com`` case keeps working. Deduped on
+    ``(host, port)`` so a shared host+port yields one rule.
+    """
+    from urllib.parse import urlparse
+
+    endpoints: list[dict[str, object]] = []
+    seen: set[tuple[str, int]] = set()
+    for url, default_port in (
+        (integration.wazuh_indexer_url, 9200),
+        (integration.wazuh_api_url, 55000),
+    ):
+        if not url:
+            continue
+        parsed = urlparse(url)
+        host = parsed.hostname
+        if not host:
+            continue
+        try:
+            port = parsed.port or default_port
+        except ValueError as exc:
+            # Default only when the port is OMITTED. An explicitly supplied but
+            # unparseable port is operator error: silently substituting 9200 or
+            # 55000 would render an egress rule for a port the adapter never
+            # dials, reproducing the very "connects to nothing, looks healthy"
+            # failure this function exists to prevent.
+            raise ValueError(
+                f"external SIEM URL {url!r} has an invalid port: {exc}"
+            ) from exc
+        key = (host, int(port))
+        if key in seen:
+            continue
+        seen.add(key)
+        endpoints.append({"host": host, "port": int(port)})
+    return endpoints
+
+
 # Filenames must satisfy the chart schema's propertyNames pattern (and the k8s
 # ConfigMap key ceiling) or the whole helm install would fail on one odd file.
 _TRIAGE_POLICY_FILENAME_RE = re.compile(r"[A-Za-z0-9._-]{1,247}\.ya?ml")
@@ -448,6 +496,9 @@ def render_tenant_values(
     # external SIEM host the adapter talks to (indexer :9200 + API :55000).
     # Empty for in-cluster profiles (poc/persistent) — egress stays in-ns.
     external_siem_hosts = _external_siem_hosts(integration) if is_provided else []
+    external_siem_endpoints = (
+        _external_siem_endpoints(integration) if is_provided else []
+    )
 
     values: dict[str, Any] = {
         "tenant": {
@@ -555,6 +606,7 @@ def render_tenant_values(
             # Cilium FQDN egress allow-list for the external SIEM. Empty list
             # for in-cluster profiles; populated for 'provided'.
             "externalSiemHosts": external_siem_hosts,
+            "externalSiemEndpoints": external_siem_endpoints,
         },
         "resourceQuota": {
             "enabled": True,

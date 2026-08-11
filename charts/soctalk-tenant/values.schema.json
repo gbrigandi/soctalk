@@ -448,6 +448,28 @@
               "type": "boolean"
             }
           }
+        },
+        "externalSiemEndpoints": {
+          "type": "array",
+          "description": "External SIEM {host, port} pairs derived from the tenant's indexer/API URLs (provided profile). Ports come from the URLs so a BYO Wazuh on a non-standard port is not dropped by the egress policy.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "host",
+              "port"
+            ],
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              }
+            }
+          }
         }
       }
     },

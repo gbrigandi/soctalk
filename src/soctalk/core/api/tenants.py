@@ -1226,9 +1226,19 @@ async def update_tenant_external_siem(
         ).scalar_one_or_none()
         if cfg is None:
             raise HTTPException(404, "tenant has no integration config")
+        # Track whether anything CHART-RENDERED changed. URLs and verify_ssl
+        # are baked into the adapter/worker env and into the tenant's egress
+        # NetworkPolicy (including the SIEM ports derived from the URLs), so
+        # rewriting the Secret and rolling the pods is not enough — without a
+        # re-render, an operator who repairs a wrong URL or port via PATCH
+        # keeps the stale policy and the connection still fails.
+        _rerender_fields = {"indexer_url", "api_url", "verify_ssl"}
+        needs_rerender = False
         for src, dest in _EXTERNAL_SIEM_FIELD_MAP:
             value = getattr(payload, src)
             if value is not None:
+                if src in _rerender_fields and getattr(cfg, dest) != value:
+                    needs_rerender = True
                 setattr(cfg, dest, value)
         await session.flush()
     # Commit the Postgres row FIRST — before any K8s side effect. The
@@ -1249,7 +1259,48 @@ async def update_tenant_external_siem(
         ).scalar_one()
 
     await _apply_external_siem_k8s(tenant_id, tenant.slug, cfg)
+
+    # A changed URL / verify_ssl needs the release re-rendered, not just the
+    # Secret rewritten. Idempotent + ACTIVE-only, same contract as the triage
+    # policy reconcile.
+    if needs_rerender:
+        await _enqueue_external_siem_reconcile(session, tenant_id)
+        await session.commit()
+
     return _external_siem_read(cfg)
+
+
+async def _enqueue_external_siem_reconcile(
+    db: AsyncSession, tenant_id: UUID
+) -> None:
+    """Queue a tenant reconcile so changed external-SIEM URLs re-render the
+    chart (adapter/worker env + the egress NetworkPolicy ports derived from
+    those URLs). No-op for non-ACTIVE tenants; the active-job unique index
+    makes it idempotent. Mirrors ``_enqueue_triage_policy_reconcile``."""
+    from sqlalchemy import select as _select
+
+    from soctalk.core.tenancy.models import ProvisioningJob, TenantState
+
+    state = (
+        await db.execute(_select(Tenant.state).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if state != TenantState.ACTIVE.value:
+        return
+    existing = (
+        await db.execute(
+            _select(ProvisioningJob).where(
+                ProvisioningJob.tenant_id == tenant_id,
+                ProvisioningJob.kind == "tenant.reconcile",
+                ProvisioningJob.status.in_(["pending", "in_flight"]),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(
+            ProvisioningJob(
+                tenant_id=tenant_id, kind="tenant.reconcile", status="pending"
+            )
+        )
 
 
 async def _apply_external_siem_k8s(

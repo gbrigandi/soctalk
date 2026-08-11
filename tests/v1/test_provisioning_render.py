@@ -1945,3 +1945,94 @@ def test_price_overlay_is_no_longer_rendered_into_worker_env():
         profile="poc",
     )
     assert "modelPrices" not in v["llm"]
+
+
+# --- external SIEM egress PORTS (issue #147) --------------------------------
+#
+# The standard NetworkPolicy — the only one that applies on a non-Cilium
+# cluster — used to hardcode 9200/55000 while deriving only the host from the
+# tenant's URLs. A BYO Wazuh published on any other port (NodePort, load
+# balancer, reverse proxy) was then dropped at L3/L4 while the tenant still
+# reported healthy. These lock the port in.
+
+
+def _endpoints_for(indexer_url: str | None, api_url: str | None):
+    from soctalk.core.provisioning.render import _external_siem_endpoints
+
+    t = _make_tenant()
+    integration = _make_integration(t.id)
+    integration.wazuh_indexer_url = indexer_url
+    integration.wazuh_api_url = api_url
+    return _external_siem_endpoints(integration)
+
+
+def test_external_siem_endpoints_keep_non_standard_ports():
+    """A BYO Wazuh behind a NodePort must yield its ACTUAL ports."""
+    eps = _endpoints_for("https://10.0.2.2:31437", "https://10.0.2.2:30442")
+    assert eps == [
+        {"host": "10.0.2.2", "port": 31437},
+        {"host": "10.0.2.2", "port": 30442},
+    ]
+
+
+def test_external_siem_endpoints_default_per_endpoint_when_port_omitted():
+    """No explicit port → the well-known port for THAT endpoint, not 443."""
+    eps = _endpoints_for("https://siem.example.com", "https://siem.example.com")
+    assert eps == [
+        {"host": "siem.example.com", "port": 9200},
+        {"host": "siem.example.com", "port": 55000},
+    ]
+
+
+def test_external_siem_endpoints_dedupe_on_host_and_port():
+    """Same host AND port from both URLs collapses to one egress rule."""
+    eps = _endpoints_for("https://siem.example.com:9200", "https://siem.example.com:9200")
+    assert eps == [{"host": "siem.example.com", "port": 9200}]
+
+
+def test_external_siem_endpoints_skip_missing_urls():
+    assert _endpoints_for(None, None) == []
+    assert _endpoints_for("https://only.indexer:9200", None) == [
+        {"host": "only.indexer", "port": 9200}
+    ]
+
+
+def test_provided_values_carry_external_siem_endpoints():
+    """render_tenant_values must surface the endpoints for the chart."""
+    values = _provided_values_for_chart(
+        indexer_url="https://10.0.2.2:31437",
+        api_url="https://10.0.2.2:30442",
+        soctalk_url="https://l1.example.com",
+    )
+    assert values["networkPolicies"]["externalSiemEndpoints"] == [
+        {"host": "10.0.2.2", "port": 31437},
+        {"host": "10.0.2.2", "port": 30442},
+    ]
+
+
+def test_in_cluster_profiles_emit_no_external_siem_endpoints():
+    """poc/persistent must be untouched — no external egress rules."""
+    t = _make_tenant()
+    values = render_tenant_values(
+        tenant=t,
+        integration=_make_integration(t.id),
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    assert values["networkPolicies"]["externalSiemEndpoints"] == []
+
+
+def test_external_siem_endpoints_reject_malformed_explicit_port():
+    """An explicitly bad port must fail loudly, not silently become 9200.
+
+    Substituting the well-known port would render an egress rule for a port the
+    adapter never dials — the same "connects to nothing while looking healthy"
+    failure this derivation exists to prevent.
+    """
+    import pytest
+
+    with pytest.raises(ValueError, match="invalid port"):
+        _endpoints_for("https://siem.example.com:not-a-port", None)

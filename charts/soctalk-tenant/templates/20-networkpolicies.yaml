@@ -166,14 +166,37 @@ spec:
       adapter -> external Wazuh egress. FQDN hosts are skipped here; they
       are covered by the Cilium policy below when the CRD exists.
     */}}
+    {{- /*
+      External SIEM egress. Ports come from ``externalSiemEndpoints`` ({host,
+      port} derived from the tenant's configured indexer/API URLs), because a
+      BYO Wazuh may be published behind a NodePort / load balancer / reverse
+      proxy on something other than 9200/55000 — hardcoding those silently
+      drops it at L3/L4 while the tenant still looks healthy. Same reasoning as
+      the LLM egress port below. Falls back to the legacy host list on
+      9200/55000 for values rendered before endpoints existed.
+    */}}
+    {{- $ipRe := `^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$` }}
+    {{- $eps := .Values.networkPolicies.externalSiemEndpoints | default (list) }}
+    {{- if $eps }}
+    {{- range $e := $eps }}
+    {{- if regexMatch $ipRe $e.host }}
+    - to:
+        - ipBlock:
+            cidr: {{ printf "%s/32" $e.host | quote }}
+      ports:
+        - { port: {{ $e.port }}, protocol: TCP }
+    {{- end }}
+    {{- end }}
+    {{- else }}
     {{- range $h := .Values.networkPolicies.externalSiemHosts | default (list) }}
-    {{- if regexMatch `^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$` $h }}
+    {{- if regexMatch $ipRe $h }}
     - to:
         - ipBlock:
             cidr: {{ printf "%s/32" $h | quote }}
       ports:
         - { port: 9200,  protocol: TCP }
         - { port: 55000, protocol: TCP }
+    {{- end }}
     {{- end }}
     {{- end }}
 ---
@@ -233,14 +256,37 @@ spec:
       (issues #107/#109): same IP-literal ipBlock fallback as the
       adapter — the worker dials the external manager API (:55000) and
       indexer (:9200) during triage. */}}
+    {{- /*
+      External SIEM egress. Ports come from ``externalSiemEndpoints`` ({host,
+      port} derived from the tenant's configured indexer/API URLs), because a
+      BYO Wazuh may be published behind a NodePort / load balancer / reverse
+      proxy on something other than 9200/55000 — hardcoding those silently
+      drops it at L3/L4 while the tenant still looks healthy. Same reasoning as
+      the LLM egress port below. Falls back to the legacy host list on
+      9200/55000 for values rendered before endpoints existed.
+    */}}
+    {{- $ipRe := `^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$` }}
+    {{- $eps := .Values.networkPolicies.externalSiemEndpoints | default (list) }}
+    {{- if $eps }}
+    {{- range $e := $eps }}
+    {{- if regexMatch $ipRe $e.host }}
+    - to:
+        - ipBlock:
+            cidr: {{ printf "%s/32" $e.host | quote }}
+      ports:
+        - { port: {{ $e.port }}, protocol: TCP }
+    {{- end }}
+    {{- end }}
+    {{- else }}
     {{- range $h := .Values.networkPolicies.externalSiemHosts | default (list) }}
-    {{- if regexMatch `^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$` $h }}
+    {{- if regexMatch $ipRe $h }}
     - to:
         - ipBlock:
             cidr: {{ printf "%s/32" $h | quote }}
       ports:
         - { port: 9200,  protocol: TCP }
         - { port: 55000, protocol: TCP }
+    {{- end }}
     {{- end }}
     {{- end }}
     # Outbound LLM calls. Port derived from the configured LLM base URL so
@@ -397,6 +443,21 @@ spec:
         - ports:
             - { port: "443",   protocol: TCP }
             - { port: "80",    protocol: TCP }
-            - { port: "9200",  protocol: TCP }
-            - { port: "55000", protocol: TCP }
+            {{- /*
+              toFQDNs selects the destination; toPorts still restricts the
+              port, so a BYO Wazuh on a hostname URL with a non-standard port
+              (https://siem.example.com:31437) stays denied unless its port is
+              listed here too. Union in the derived endpoint ports, keeping
+              9200/55000 for values rendered before endpoints existed.
+            */}}
+            {{- $siemPorts := list }}
+            {{- range $e := (.Values.networkPolicies.externalSiemEndpoints | default (list)) }}
+            {{- $siemPorts = append $siemPorts (printf "%v" $e.port) }}
+            {{- end }}
+            {{- if not $siemPorts }}
+            {{- $siemPorts = list "9200" "55000" }}
+            {{- end }}
+            {{- range ($siemPorts | uniq) }}
+            - { port: {{ . | quote }}, protocol: TCP }
+            {{- end }}
 {{- end }}
