@@ -57,6 +57,13 @@ environment/config and the cluster's Secrets — **not in this doc**.
    `mssp_admin`, use it, delete it afterward.
 7. **Restore what you perturb.** Snapshot tenant LLM config / budgets before an
    e2e mutates them and restore after; verify the row is byte-identical.
+8. **Re-cut the current version; do not bump.** Through hardening, keep the same
+   version label (`0.2.1`) and **re-cut** it when a fix must ship (fresh build →
+   fresh digest → roll forward, audited as a release-log row). Do **not** open a
+   new patch version to avoid "mutating the released chart" — the version tag is
+   the deliberately-mutable, audited pointer. Only move to a new version when the
+   operator explicitly decides it. So chart/template/values changes land on a
+   `0.2.1` re-cut, never a `0.2.2`.
 
 ## Current release
 
@@ -70,8 +77,9 @@ environment/config and the cluster's Secrets — **not in this doc**.
 - **Open**: none blocking. #145 closed — stock k3s *does* enforce standard
   NetworkPolicy (kube-router), so tenant isolation holds on a default `--demo`
   box; the charts-only pre-install false-negative is documented
-  (`preInstallCheck.enabled=false`). The chart-side hook-broadening is a
-  next-version follow-up (#146). The launchpad image-cache false-hit is fixed
+  (`preInstallCheck.enabled=false`). The chart-side hook-broadening is an open
+  follow-up (#146) — lands on a **0.2.1 re-cut**, not a new version. The launchpad
+  image-cache false-hit is fixed
   (soctalk-launchpad#1, host-keyed + presence-verified memo).
 
 ## Mechanism: the moving parts
@@ -288,9 +296,10 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 
 ## Known follow-ups
 
-- **Separate the dev chart version from release versions** so a post-cut main
-  push can't move the published `X.Y.Z` chart (touches the demo pipeline — not
-  inside a release).
+- **Separate the dev chart version from release versions** — **deprioritized.**
+  The chosen workflow is to **re-cut the same version** (see the versioning rule),
+  not to freeze the chart tag per release, so this is not being pursued unless the
+  operator revisits it.
 - **`helm push` semantics, stated precisely** (the workflow comments in
   `publish-images.yml`/`cut-k8s-release.yml` still call it "idempotent", which is
   true only for the identical-content case): re-pushing a chart version with the
