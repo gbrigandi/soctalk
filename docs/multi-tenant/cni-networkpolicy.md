@@ -6,7 +6,7 @@ Gate artifact: Chooses the Container Network Interface for this release, defines
 
 Cilium is the supported CNI for SocTalk. Rationale:
 
-1. **NetworkPolicy enforcement**. K3s's default Flannel does not enforce `NetworkPolicy`: Without enforcement, tenant isolation at the network layer is a claim without backing. Cilium enforces standard `NetworkPolicy` out of the box.
+1. **FQDN egress, not baseline enforcement**. A common misconception is that stock k3s cannot enforce `NetworkPolicy`. It can: flannel-the-CNI does not implement `NetworkPolicy`, but k3s ships a *separate* kube-router-based NetworkPolicy controller that enforces standard `NetworkPolicy` out of the box (unless started with `--disable-network-policy`). This is verified empirically — on a stock k3s node with no Cilium/Calico, a default-deny ingress policy takes a pod from reachable (HTTP 200) to blocked. So **baseline tenant isolation via standard `NetworkPolicy` holds on stock k3s**; Cilium is not required for it. Cilium is preferred for the reason below, not because k3s leaves tenants unisolated.
 2. **FQDN egress policies**: standard `NetworkPolicy` permits only IP/CIDR-based egress. BYO LLM endpoints are hostnames (`api.openai.com`, customer-self-hosted endpoints behind CDNs with dynamic IPs). Cilium's `CiliumNetworkPolicy` with `toFQDNs` matches hostnames. This is the only way to enforce per-tenant LLM egress at the network layer without introducing a forward proxy.
 3. **eBPF-based enforcement**: higher performance, lower latency, no iptables bloat.
 4. **Observability (Hubble)**: flow-level visibility; operationally useful for debugging tenant isolation.
@@ -45,7 +45,25 @@ helm install cilium cilium/cilium --version 1.15.x \
     --set hubble.ui.enabled=true
 ```
 
-The `soctalk-system` chart's pre-install hook verifies Cilium is active and fails fast if not.
+The `soctalk-system` chart's pre-install hook verifies an NP-enforcing CNI is present (it looks for Cilium or Calico CRDs) and fails fast if not.
+
+### Charts-only install on stock k3s
+
+The pre-install hook's CRD check is a proxy for "an NP-enforcing CNI is present", and it is **stricter than baseline isolation requires**: it looks specifically for Cilium/Calico CRDs, which back the *optional* FQDN-egress feature (§1, reason 2), not the standard tenant `NetworkPolicy` isolation. Stock k3s enforces the standard policies (verified above) but has neither CRD, so a raw `helm install` fails the hook:
+
+```
+soctalk-system-preinstall-check: ERROR: neither Cilium nor Calico CRDs found.
+       SocTalk requires an NP-enforcing CNI.
+```
+
+On stock k3s this is a false negative. To proceed, disable just the pre-install hook — the standard tenant NetworkPolicies still render and are still enforced by k3s:
+
+```bash
+helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
+    --version <ver> --set preInstallCheck.enabled=false   # + your other values
+```
+
+The one-click `install.sh` already renders `preInstallCheck.enabled: false` for exactly this reason. The trade-off of running without Cilium: no FQDN-based egress control (§1, reason 2) — per-tenant LLM egress is allowed by IP/CIDR, not by hostname. If you need hostname-level egress enforcement, install Cilium first (§2 recipe) and leave the hook enabled. A future chart release will broaden the hook to accept any proven NP enforcer (including stock k3s) rather than gating on a specific CNI's CRDs.
 
 ## 3 NetworkPolicy architecture
 
