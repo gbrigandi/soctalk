@@ -67,9 +67,12 @@ environment/config and the cluster's Secrets — **not in this doc**.
   the demo two-hostname topology, and `tests/e2e/pricing_enforcement.py`.
 - **Gated**: staging on released digests; real triage verdict on three deploy
   paths (one-click VM, launchpad L2, staging). Demo tracks head via `deploy-demo`.
-- **Open**: #145 (one-click flannel/no-NetworkPolicy PoC + charts-only NP-CNI).
-  The launchpad image-cache false-hit bug is fixed (soctalk-launchpad#1, host-keyed
-  + presence-verified memo).
+- **Open**: none blocking. #145 closed — stock k3s *does* enforce standard
+  NetworkPolicy (kube-router), so tenant isolation holds on a default `--demo`
+  box; the charts-only pre-install false-negative is documented
+  (`preInstallCheck.enabled=false`). The chart-side hook-broadening is a
+  next-version follow-up (#146). The launchpad image-cache false-hit is fixed
+  (soctalk-launchpad#1, host-keyed + presence-verified memo).
 
 ## Mechanism: the moving parts
 
