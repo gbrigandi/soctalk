@@ -110,6 +110,35 @@ def _profile_tenant_overrides(profile: Profile) -> dict[str, Any]:
     return {}
 
 
+def _default_tenant_image_tag() -> str:
+    """Image tag for tenant workloads when the chart did not supply one.
+
+    This used to default to ``latest``. A tenant provisioned that way runs a
+    moving tag: whichever build ``latest`` happened to point at, changing under
+    the operator without the release changing — the failure mode the pinning
+    rule exists to prevent, and the reason the code below has to force
+    ``pullPolicy: Always`` to compensate.
+
+    The chart normally sets ``SOCTALK_TENANT_*_IMAGE_TAG`` from
+    ``tenantProvisioning.*ImageTag`` (default: the chart's own version), but it
+    only emits the env when the value is truthy, so an operator who clears it
+    lands here. Fall back to the version of the running control plane instead:
+    it *is* the release, so tenants pin to the same build as the API that
+    provisioned them, and unlike a literal it cannot go stale on the next cut.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("soctalk")
+    except PackageNotFoundError as exc:  # pragma: no cover - broken install
+        raise RuntimeError(
+            "cannot determine the SocTalk version to pin tenant images to, and "
+            "refusing to fall back to a moving 'latest' tag; set "
+            "tenantProvisioning.adapterImageTag / runsWorkerImageTag / "
+            "linuxEpImageTag explicitly"
+        ) from exc
+
+
 def _external_siem_hosts(integration: IntegrationConfig) -> list[str]:
     """Deduped hostnames the adapter must reach for an external Wazuh.
 
@@ -634,7 +663,7 @@ def render_tenant_values(
                     "SOCTALK_TENANT_ADAPTER_IMAGE_REPO",
                     "ghcr.io/soctalk/soctalk-adapter",
                 ),
-                "tag": (_adapter_tag := os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", "latest")),
+                "tag": (_adapter_tag := os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", _default_tenant_image_tag())),
                 # A moving `latest` tag MUST pull Always, or the node caches the
                 # first image it ever pulled and the tenant silently runs weeks-
                 # old code (IfNotPresent never re-pulls an unchanged tag) — the
@@ -688,7 +717,7 @@ def render_tenant_values(
                     "ghcr.io/soctalk/soctalk-orchestrator",
                 ),
                 "tag": (_worker_tag := os.getenv(
-                    "SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG", "latest"
+                    "SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG", _default_tenant_image_tag()
                 )),
                 # Always-pull a moving `latest` (see adapter above) — otherwise
                 # the runs-worker runs stale triage code cached on the node.
@@ -909,7 +938,7 @@ def render_linux_ep_values(
                 "SOCTALK_TENANT_LINUX_EP_IMAGE_REPO",
                 "ghcr.io/soctalk/soctalk-linux-ep",
             ),
-            "tag": (_linuxep_tag := os.getenv("SOCTALK_TENANT_LINUX_EP_IMAGE_TAG", "latest")),
+            "tag": (_linuxep_tag := os.getenv("SOCTALK_TENANT_LINUX_EP_IMAGE_TAG", _default_tenant_image_tag())),
             # Moving `latest` must pull Always (same reason as the adapter /
             # runs-worker above); a pinned release tag is immutable so
             # IfNotPresent is fine. Without an override the tenant would fall

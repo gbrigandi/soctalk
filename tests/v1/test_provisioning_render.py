@@ -178,9 +178,14 @@ def test_poc_profile_wires_linuxep_wazuh_manager():
     assert "linuxep" not in v2
 
 
-def test_moving_latest_tag_pulls_always():
+def test_moving_latest_tag_pulls_always(monkeypatch):
     # A moving `latest` image tag MUST render pullPolicy=Always or the node caches
     # stale code (the demo runs-worker/adapter ran weeks-old triage code).
+    # `latest` is no longer the DEFAULT (see the no-latest-by-default test below),
+    # so an operator has to ask for it explicitly — but when they do, the
+    # Always-pull guard still has to hold.
+    monkeypatch.setenv("SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG", "latest")
+    monkeypatch.setenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", "latest")
     t = _make_tenant("poc")
     v = render_tenant_values(
         tenant=t, integration=_make_integration(t.id), branding=_make_branding(t.id),
@@ -190,6 +195,36 @@ def test_moving_latest_tag_pulls_always():
     assert v["runsWorker"]["image"]["tag"] == "latest"
     assert v["runsWorker"]["image"]["pullPolicy"] == "Always"
     assert v["adapter"]["image"]["pullPolicy"] == "Always"
+
+
+def test_tenant_images_never_default_to_latest(monkeypatch):
+    """With no env from the chart, tenants must pin to the release — not `latest`.
+
+    The chart only emits SOCTALK_TENANT_*_IMAGE_TAG when the value is truthy, so
+    an operator who clears tenantProvisioning.adapterImageTag lands on this
+    default. It used to be `latest`, which silently gave every tenant a moving
+    tag whose build changed under them.
+    """
+    from importlib.metadata import version
+
+    for var in (
+        "SOCTALK_TENANT_ADAPTER_IMAGE_TAG",
+        "SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG",
+        "SOCTALK_TENANT_LINUX_EP_IMAGE_TAG",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t, integration=_make_integration(t.id), branding=_make_branding(t.id),
+        mssp_id=str(uuid4()), install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm", profile="poc",
+    )
+    release = version("soctalk")
+    for section in ("adapter", "runsWorker"):
+        assert v[section]["image"]["tag"] == release, section
+        assert v[section]["image"]["tag"] != "latest"
+        # A pinned tag is immutable, so IfNotPresent is correct and cheaper.
+        assert v[section]["image"]["pullPolicy"] == "IfNotPresent", section
 
 
 def test_persistent_profile_emits_larger_quota():
