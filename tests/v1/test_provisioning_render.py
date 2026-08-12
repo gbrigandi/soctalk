@@ -220,6 +220,9 @@ def test_tenant_images_never_default_to_latest(monkeypatch):
         llm_secret_name="tenant-x-llm", profile="poc",
     )
     release = version("soctalk")
+    # linux-ep is rendered from the same default and must not be forgotten.
+    assert v["linuxep"]["image"]["tag"] == release
+    assert v["linuxep"]["image"]["tag"] != "latest"
     for section in ("adapter", "runsWorker"):
         assert v[section]["image"]["tag"] == release, section
         assert v[section]["image"]["tag"] != "latest"
@@ -2071,3 +2074,35 @@ def test_external_siem_endpoints_reject_malformed_explicit_port():
 
     with pytest.raises(ValueError, match="invalid port"):
         _endpoints_for("https://siem.example.com:not-a-port", None)
+
+
+
+def test_explicit_tenant_tag_does_not_need_package_metadata(monkeypatch):
+    """An explicit env tag must win WITHOUT computing the version fallback.
+
+    The fallback was first written as `os.getenv(VAR, _default_tenant_image_tag())`,
+    which Python evaluates eagerly — so an install whose package metadata is
+    missing (source on PYTHONPATH rather than pip-installed) raised even when the
+    operator had set the tag explicitly, leaving them no way out.
+    """
+    import soctalk.core.provisioning.render as render_mod
+
+    def _boom() -> str:
+        raise RuntimeError("fallback must not be evaluated when the env is set")
+
+    monkeypatch.setattr(render_mod, "_default_tenant_image_tag", _boom)
+    for var in (
+        "SOCTALK_TENANT_ADAPTER_IMAGE_TAG",
+        "SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG",
+        "SOCTALK_TENANT_LINUX_EP_IMAGE_TAG",
+    ):
+        monkeypatch.setenv(var, "9.9.9")
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t, integration=_make_integration(t.id), branding=_make_branding(t.id),
+        mssp_id=str(uuid4()), install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm", profile="poc",
+    )
+    assert v["adapter"]["image"]["tag"] == "9.9.9"
+    assert v["runsWorker"]["image"]["tag"] == "9.9.9"
+    assert v["linuxep"]["image"]["tag"] == "9.9.9"

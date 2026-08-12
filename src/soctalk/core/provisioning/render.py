@@ -663,12 +663,20 @@ def render_tenant_values(
                     "SOCTALK_TENANT_ADAPTER_IMAGE_REPO",
                     "ghcr.io/soctalk/soctalk-adapter",
                 ),
-                "tag": (_adapter_tag := os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", _default_tenant_image_tag())),
+                "tag": (
+                    _adapter_tag := os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG")
+                    or _default_tenant_image_tag()
+                ),
                 # A moving `latest` tag MUST pull Always, or the node caches the
                 # first image it ever pulled and the tenant silently runs weeks-
                 # old code (IfNotPresent never re-pulls an unchanged tag) — the
-                # reason the demo runs-worker/adapter ran stale triage code. A
-                # pinned tag (SHA/version) is immutable, so IfNotPresent is fine.
+                # reason the demo runs-worker/adapter ran stale triage code.
+                # A pinned X.Y.Z keeps IfNotPresent: it is stable in normal
+                # operation. Note it is NOT strictly immutable here — a re-cut
+                # republishes the same version tag at a new digest — so after a
+                # re-cut a cached tenant image must be dropped and rolled
+                # (see scripts/staging-released-bits.sh); the digest gate is
+                # what proves which bits a tenant is actually running.
                 "pullPolicy": "Always" if _adapter_tag == "latest" else "IfNotPresent",
             },
             "resources": {
@@ -716,9 +724,10 @@ def render_tenant_values(
                     "SOCTALK_TENANT_RUNS_WORKER_IMAGE_REPO",
                     "ghcr.io/soctalk/soctalk-orchestrator",
                 ),
-                "tag": (_worker_tag := os.getenv(
-                    "SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG", _default_tenant_image_tag()
-                )),
+                "tag": (
+                    _worker_tag := os.getenv("SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG")
+                    or _default_tenant_image_tag()
+                ),
                 # Always-pull a moving `latest` (see adapter above) — otherwise
                 # the runs-worker runs stale triage code cached on the node.
                 "pullPolicy": "Always" if _worker_tag == "latest" else "IfNotPresent",
@@ -938,7 +947,10 @@ def render_linux_ep_values(
                 "SOCTALK_TENANT_LINUX_EP_IMAGE_REPO",
                 "ghcr.io/soctalk/soctalk-linux-ep",
             ),
-            "tag": (_linuxep_tag := os.getenv("SOCTALK_TENANT_LINUX_EP_IMAGE_TAG", _default_tenant_image_tag())),
+            "tag": (
+                _linuxep_tag := os.getenv("SOCTALK_TENANT_LINUX_EP_IMAGE_TAG")
+                or _default_tenant_image_tag()
+            ),
             # Moving `latest` must pull Always (same reason as the adapter /
             # runs-worker above); a pinned release tag is immutable so
             # IfNotPresent is fine. Without an override the tenant would fall

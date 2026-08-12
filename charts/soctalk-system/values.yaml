@@ -156,8 +156,10 @@ tenantProvisioning:
   runsWorkerImageTag: '0.2.1'
   # linux-ep attack-simulator image tag for provisioned 'poc' tenants.
   # Pinned to the release version so a release install pulls a published
-  # tag; demo overrides to `latest`. Empty falls back to the render.py
-  # default (`latest`).
+  # tag; the demo environment overrides to `latest` because it tracks head.
+  # Leaving this empty omits the env, and render.py then falls back to the
+  # running control plane's own version — NOT `latest` (that default was
+  # removed: it silently gave tenants a moving tag).
   linuxEpImageTag: '0.2.1'
   # Master switch for the tenant chart's networkPolicies (rendered as
   # SOCTALK_TENANT_NETWORK_POLICIES_ENABLED on the api pod). Set false on
