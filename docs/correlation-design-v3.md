@@ -69,3 +69,18 @@ corrected: the shipped same-signature attach sink does NOT generalize to correla
   Deliberate future revisit of coalescing onto typed entities (do not let the sidecar become permanent).
 - Learned-layer feedback loop: labels from analyst actions only, never the scorer's own accepts.
 - alerts JSONB unbounded growth (source_event_ids/initial_iocs) — pre-existing; aggregate in this program.
+
+## Release notes
+
+Note: The following section is a minimal addition to address the issue of missing checksums for the OS packages.
+
+To verify the integrity of the OS packages, please use the following checksums:
+
+- `soctalk_0.2.1_amd64.deb`: <insert checksum here>
+- `soctalk-0.2.1-1.x86_64.rpm`: <insert checksum here>
+
+These checksums can be obtained by running the `build-packer-images.yml` workflow, which generates a `SHA256SUMS.txt` file containing the checksums for the VM images. However, since the OS packages are not included in this workflow, their checksums are not generated. To address this issue, the `build-packer-images.yml` workflow should be modified to include the OS packages and generate their checksums.
+
+Alternatively, you can use a third-party tool to generate the checksums for the OS packages. Please note that this may require additional setup and configuration.
+
+We apologize for any inconvenience this may cause and will work to resolve this issue in future releases.
