@@ -69,3 +69,13 @@ corrected: the shipped same-signature attach sink does NOT generalize to correla
   Deliberate future revisit of coalescing onto typed entities (do not let the sidecar become permanent).
 - Learned-layer feedback loop: labels from analyst actions only, never the scorer's own accepts.
 - alerts JSONB unbounded growth (source_event_ids/initial_iocs) — pre-existing; aggregate in this program.
+
+## Minimal Fix
+To address the issue of missing checksums for OS packages, we need to generate checksums for the `.deb` and `.rpm` files in the `build-packer-images.yml` file. We can add the following lines to the `build-packer-images.yml` file, after the `*.xz` and `*.ova` files:
+
+```yml
+- "*.deb"
+- "*.rpm"
+```
+
+This will ensure that the `SHA256SUMS.txt` file includes the checksums for the OS packages.
