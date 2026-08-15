@@ -69,3 +69,7 @@ corrected: the shipped same-signature attach sink does NOT generalize to correla
   Deliberate future revisit of coalescing onto typed entities (do not let the sidecar become permanent).
 - Learned-layer feedback loop: labels from analyst actions only, never the scorer's own accepts.
 - alerts JSONB unbounded growth (source_event_ids/initial_iocs) — pre-existing; aggregate in this program.
+
+## Note on checksums
+The OS packages published in the release do not include checksums. This is a known issue that will be addressed in a future release. Users are advised to verify the integrity of the packages using other means.
+```
