@@ -11,7 +11,8 @@ export const SEGMENT_TO_LOCALE: Record<string, Locale> = {
 	'zh-cn': 'zh-CN',
 	'fr-fr': 'fr-FR',
 	'de-de': 'de-DE',
-	'it-it': 'it-IT'
+	'it-it': 'it-IT',
+	'zh-tw': 'zh-TW'
 };
 
 /** Native-name labels for the switcher — deliberately NOT translated. */
@@ -22,7 +23,8 @@ export const LOCALE_LABELS: Record<Locale, string> = {
 	'zh-CN': '中文（简体）',
 	'fr-FR': 'Français',
 	'de-DE': 'Deutsch',
-	'it-IT': 'Italiano'
+	'it-IT': 'Italiano',
+	'zh-TW': '中文（繁體）'
 };
 
 /** Compact codes for the collapsed switcher trigger in the narrow nav rail
@@ -34,7 +36,8 @@ export const LOCALE_SHORT: Record<Locale, string> = {
 	'zh-CN': '中文',
 	'fr-FR': 'FR',
 	'de-DE': 'DE',
-	'it-IT': 'IT'
+	'it-IT': 'IT',
+	'zh-TW': '繁中'
 };
 
 export const SUPPORTED_LOCALES = Object.values(SEGMENT_TO_LOCALE) as Locale[];
