@@ -168,6 +168,28 @@ const LOCALES = [
 		flow: 'Flusso',
 		flowDisposition: 'Disposizione effettiva',
 		firesAuto: 'scatta automaticamente'
+	},
+	{
+		prefix: '/zh-tw',
+		tag: 'zh-TW',
+		login: '登入',
+		submit: '登入',
+		email: '電子郵件',
+		navInvestigations: '調查',
+		navRp: '應變劇本',
+		navSettings: '設定',
+		rpNew: '+ 新增應變劇本',
+		rpEmpty: '尚無應變劇本。',
+		editorTitle: '新增應變劇本',
+		identity: '識別資訊',
+		appliesTo: '適用於',
+		capAnnotate: '為調查加註',
+		capExternal: '外部動作 (需審核)',
+		gatedHint: '需審核: 此動作會在執行前轉為需人工核准的提案。',
+		slugError: 'id 必須是 slug: 小寫字母、數字、連字號。',
+		flow: '流程',
+		flowDisposition: '實際處置',
+		firesAuto: '自動觸發'
 	}
 ] as const;
 
