@@ -3,7 +3,12 @@
 // runtime out of the hook bundle.
 import type { Locale } from '$lib/paraglide/runtime';
 
-/** URL segment (lowercase) → canonical BCP-47 locale. */
+/** URL segment (lowercase) → canonical BCP-47 locale.
+ *  `satisfies` makes this map COMPLETE at compile time: adding a locale to the
+ *  paraglide settings without a segment entry here is a type error, instead of
+ *  a locale that silently never routes (`/xx-yy/*` would 404 and the switcher
+ *  would omit it). The label maps below get the same guarantee from their
+ *  `Record<Locale, ...>` annotations. */
 export const SEGMENT_TO_LOCALE: Record<string, Locale> = {
 	'en-us': 'en-US',
 	'pt-br': 'pt-BR',
@@ -13,7 +18,7 @@ export const SEGMENT_TO_LOCALE: Record<string, Locale> = {
 	'de-de': 'de-DE',
 	'it-it': 'it-IT',
 	'zh-tw': 'zh-TW'
-};
+} satisfies Record<Lowercase<Locale>, Locale>;
 
 /** Native-name labels for the switcher — deliberately NOT translated. */
 export const LOCALE_LABELS: Record<Locale, string> = {
@@ -33,7 +38,7 @@ export const LOCALE_SHORT: Record<Locale, string> = {
 	'en-US': 'EN',
 	'pt-BR': 'PT',
 	'es-419': 'ES',
-	'zh-CN': '中文',
+	'zh-CN': '简中',
 	'fr-FR': 'FR',
 	'de-DE': 'DE',
 	'it-IT': 'IT',
@@ -55,6 +60,18 @@ export function segmentForLocale(locale: Locale): string | null {
 export function localeFromPathname(pathname: string): Locale | null {
 	const seg = segmentOf(pathname);
 	return seg ? SEGMENT_TO_LOCALE[seg] : null;
+}
+
+/** Re-prefix `target` with whatever locale segment `pathname` carries.
+ *  For legacy-path redirects (loads, window.location targets): `reroute`
+ *  resolves `/zh-tw/old-path` onto the route but leaves the pathname
+ *  prefixed, so a bare redirect target silently reverts the UI to en-US.
+ *  en-US arrives unprefixed and stays unprefixed; an explicit `/en-us/...`
+ *  keeps its prefix (accepted-for-symmetry, same as direct navigation).
+ *  Query strings on `target` ride through untouched. */
+export function relocalizedPath(pathname: string, target: string): string {
+	const seg = segmentOf(pathname);
+	return seg ? `/${seg}${target}` : target;
 }
 
 /** Strip a leading locale segment: `/pt-br/login` → `/login`. Identity for

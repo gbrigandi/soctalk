@@ -3,7 +3,7 @@
 	import { api, type MetricsOverview, type HourlyMetricsResponse, type InvestigationSummary } from '$lib/api/client';
 	import { recentEvents, isMsspScope, authSession } from '$lib/stores';
 	import { browser } from '$app/environment';
-	import { formatDecision, formatAction, formatDuration, formatPhase, formatStatus, formatSeverity } from '$lib/utils/formatters';
+	import { formatDecision, formatAction, formatDuration, formatPhase, formatStatus, formatSeverity, EVENT_TYPE_MESSAGES } from '$lib/utils/formatters';
 	import { m } from '$lib/paraglide/messages';
 	import { localizeHref } from '$lib/i18n';
 	import MsspDashboard from '$lib/components/MsspDashboard.svelte';
@@ -260,28 +260,23 @@
 		}
 	}
 
-	// Message FUNCTION refs in the map; called only when a row renders so the
-	// locale is already resolved (never evaluate m.x() at module scope).
+	// Labels come from the shared EVENT_TYPE_MESSAGES map in formatters.ts (one
+	// place to add an event type); only the badge variants are dashboard-local.
+	// Message functions are called only when a row renders so the locale is
+	// already resolved (never evaluate m.x() at module scope).
+	const EVENT_TYPE_VARIANTS: Record<string, string> = {
+		'investigation.created': 'variant-soft-primary',
+		'investigation.closed': 'variant-soft-success',
+		'human.review_requested': 'variant-soft-warning',
+		'human.decision_received': 'variant-soft-success',
+		'verdict.rendered': 'variant-soft-tertiary',
+		'enrichment.failed': 'variant-soft-error',
+		'thehive.case_created': 'variant-soft-success',
+		'supervisor.decision': 'variant-soft-tertiary'
+	};
 	function formatEventType(type: string): { label: string; variant: string } {
-		const mapping: Record<string, { label: () => string; variant: string }> = {
-			'investigation.created': { label: m.dash_evt_investigation_created, variant: 'variant-soft-primary' },
-			'investigation.closed': { label: m.dash_evt_investigation_closed, variant: 'variant-soft-success' },
-			'human.review_requested': { label: m.dash_evt_review_requested, variant: 'variant-soft-warning' },
-			'human.decision_received': { label: m.dash_evt_review_completed, variant: 'variant-soft-success' },
-			'verdict.rendered': { label: m.dash_evt_verdict_rendered, variant: 'variant-soft-tertiary' },
-			'enrichment.completed': { label: m.dash_evt_enrichment_done, variant: 'variant-soft' },
-			'enrichment.requested': { label: m.dash_evt_enrichment_started, variant: 'variant-soft' },
-			'enrichment.failed': { label: m.dash_evt_enrichment_failed, variant: 'variant-soft-error' },
-			'thehive.case_created': { label: m.dash_evt_case_created, variant: 'variant-soft-success' },
-			'phase.changed': { label: m.dash_evt_phase_changed, variant: 'variant-soft' },
-			'alert.correlated': { label: m.dash_evt_alert_added, variant: 'variant-soft' },
-			'observable.extracted': { label: m.dash_evt_observable_found, variant: 'variant-soft' },
-			'supervisor.decision': { label: m.dash_evt_supervisor_decision, variant: 'variant-soft-tertiary' },
-			'misp.context_retrieved': { label: m.dash_evt_misp_intel, variant: 'variant-soft' },
-			'wazuh.forensics_collected': { label: m.dash_evt_forensics_collected, variant: 'variant-soft' },
-		};
-		const hit = mapping[type];
-		if (hit) return { label: hit.label(), variant: hit.variant };
+		const label = EVENT_TYPE_MESSAGES[type];
+		if (label) return { label: label(), variant: EVENT_TYPE_VARIANTS[type] ?? 'variant-soft' };
 		return { label: type.replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), variant: 'variant-soft' };
 	}
 

@@ -1,5 +1,8 @@
 import { redirect } from '@sveltejs/kit';
-// Old editor URL kept working after the Playbooks -> Triage Policies rename.
+import { relocalizedPath } from '$lib/i18n/locales';
+
+// Old editor URL kept working after the Playbooks -> Triage Policies rename,
+// locale prefix included (see relocalizedPath).
 export const load = ({ url }: { url: URL }) => {
-	throw redirect(308, `/triage-policies/editor${url.search}`);
+	throw redirect(308, relocalizedPath(url.pathname, `/triage-policies/editor${url.search}`));
 };

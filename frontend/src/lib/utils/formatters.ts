@@ -30,32 +30,31 @@ export function formatDecision(value: string | null | undefined): string {
 	return map[clean]?.() ?? formatSnakeCase(value);
 }
 
+// Every label below exists in the message catalog as dash_evt_*. This is THE
+// event-type → message map: the Audit Log / timeline (via formatEventType) and
+// the dashboard's badge renderer both read it, so a new event type is added
+// exactly once. The dashboard keeps only its badge variants locally.
+export const EVENT_TYPE_MESSAGES: Record<string, () => string> = {
+	'investigation.created': m.dash_evt_investigation_created,
+	'investigation.closed': m.dash_evt_investigation_closed,
+	'human.review_requested': m.dash_evt_review_requested,
+	'human.decision_received': m.dash_evt_review_completed,
+	'verdict.rendered': m.dash_evt_verdict_rendered,
+	'enrichment.completed': m.dash_evt_enrichment_done,
+	'enrichment.requested': m.dash_evt_enrichment_started,
+	'enrichment.failed': m.dash_evt_enrichment_failed,
+	'thehive.case_created': m.dash_evt_case_created,
+	'phase.changed': m.dash_evt_phase_changed,
+	'alert.correlated': m.dash_evt_alert_added,
+	'observable.extracted': m.dash_evt_observable_found,
+	'supervisor.decision': m.dash_evt_supervisor_decision,
+	'misp.context_retrieved': m.dash_evt_misp_intel,
+	'wazuh.forensics_collected': m.dash_evt_forensics_collected
+};
+
 export function formatEventType(value: string | null | undefined): string {
 	if (!value) return m.common_unknown();
-
-	// Every label below already exists in the message catalog as dash_evt_* —
-	// they were just never wired up, so the Audit Log's Event Type column (and
-	// its filter dropdown) stayed English in every locale. Same shape as
-	// formatSeverity/formatDecision above: map to message functions, not literals.
-	const map: Record<string, () => string> = {
-		'investigation.created': m.dash_evt_investigation_created,
-		'investigation.closed': m.dash_evt_investigation_closed,
-		'human.review_requested': m.dash_evt_review_requested,
-		'human.decision_received': m.dash_evt_review_completed,
-		'verdict.rendered': m.dash_evt_verdict_rendered,
-		'enrichment.completed': m.dash_evt_enrichment_done,
-		'enrichment.requested': m.dash_evt_enrichment_started,
-		'enrichment.failed': m.dash_evt_enrichment_failed,
-		'thehive.case_created': m.dash_evt_case_created,
-		'phase.changed': m.dash_evt_phase_changed,
-		'alert.correlated': m.dash_evt_alert_added,
-		'observable.extracted': m.dash_evt_observable_found,
-		'supervisor.decision': m.dash_evt_supervisor_decision,
-		'misp.context_retrieved': m.dash_evt_misp_intel,
-		'wazuh.forensics_collected': m.dash_evt_forensics_collected
-	};
-
-	return map[value]?.() ?? formatSnakeCase(value.replace(/[._]/g, ' '));
+	return EVENT_TYPE_MESSAGES[value]?.() ?? formatSnakeCase(value.replace(/[._]/g, ' '));
 }
 
 export function formatSeverity(value: string | null | undefined): string {
