@@ -1,6 +1,7 @@
 /**
  * API client for SocTalk backend.
  */
+import { relocalizedPath, stripLocale } from '$lib/i18n/locales';
 
 const API_BASE = '/api';
 
@@ -178,9 +179,13 @@ async function request<T>(
 			response.status === 403 &&
 			message === 'password_change_required' &&
 			typeof window !== 'undefined' &&
-			!window.location.pathname.startsWith('/account/password')
+			!stripLocale(window.location.pathname).startsWith('/account/password')
 		) {
-			window.location.assign('/account/password?must_change=1');
+			// Keep the locale prefix (and compare with it stripped): a zh-tw user
+			// mid-password-change must neither loop nor get bounced to en-US.
+			window.location.assign(
+				relocalizedPath(window.location.pathname, '/account/password?must_change=1')
+			);
 		}
 		throw new ApiError(
 			response.status,

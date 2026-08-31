@@ -168,6 +168,28 @@ const LOCALES = [
 		flow: 'Flusso',
 		flowDisposition: 'Disposizione effettiva',
 		firesAuto: 'scatta automaticamente'
+	},
+	{
+		prefix: '/zh-tw',
+		tag: 'zh-TW',
+		login: '登入',
+		submit: '登入',
+		email: '電子郵件',
+		navInvestigations: '調查',
+		navRp: '應變劇本',
+		navSettings: '設定',
+		rpNew: '+ 新增應變劇本',
+		rpEmpty: '尚無應變劇本。',
+		editorTitle: '新增應變劇本',
+		identity: '識別資訊',
+		appliesTo: '適用於',
+		capAnnotate: '為調查加註',
+		capExternal: '外部動作（需審核）',
+		gatedHint: '需審核：此動作會在執行前轉為需人工核准的提案。',
+		slugError: 'id 必須是 slug：小寫字母、數字、連字號。',
+		flow: '流程',
+		flowDisposition: '實際處置',
+		firesAuto: '自動觸發'
 	}
 ] as const;
 
@@ -284,7 +306,10 @@ test.describe('i18n routing behavior', () => {
 		await mockAuthed(page);
 		await page.goto('/response-playbooks');
 		await expect(page.locator('h1')).toHaveText('Response Playbooks');
-		await page.locator('[data-testid="locale-switcher"]').selectOption('pt-BR');
+		// The switcher is a globe button with a portaled menu, not a <select> —
+		// selectOption throws on it. Open the menu and pick the full endonym.
+		await page.locator('[data-testid="locale-switcher"]').click();
+		await page.locator('[data-locale-menu]').getByText('Português (Brasil)').click();
 		await page.waitForURL((u) => u.pathname === '/pt-br/response-playbooks');
 		await expect(page.locator('h1')).toHaveText('Playbooks de Resposta');
 		const cookies = await page.context().cookies();

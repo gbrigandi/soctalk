@@ -30,30 +30,31 @@ export function formatDecision(value: string | null | undefined): string {
 	return map[clean]?.() ?? formatSnakeCase(value);
 }
 
+// Every label below exists in the message catalog as dash_evt_*. This is THE
+// event-type → message map: the Audit Log / timeline (via formatEventType) and
+// the dashboard's badge renderer both read it, so a new event type is added
+// exactly once. The dashboard keeps only its badge variants locally.
+export const EVENT_TYPE_MESSAGES: Record<string, () => string> = {
+	'investigation.created': m.dash_evt_investigation_created,
+	'investigation.closed': m.dash_evt_investigation_closed,
+	'human.review_requested': m.dash_evt_review_requested,
+	'human.decision_received': m.dash_evt_review_completed,
+	'verdict.rendered': m.dash_evt_verdict_rendered,
+	'enrichment.completed': m.dash_evt_enrichment_done,
+	'enrichment.requested': m.dash_evt_enrichment_started,
+	'enrichment.failed': m.dash_evt_enrichment_failed,
+	'thehive.case_created': m.dash_evt_case_created,
+	'phase.changed': m.dash_evt_phase_changed,
+	'alert.correlated': m.dash_evt_alert_added,
+	'observable.extracted': m.dash_evt_observable_found,
+	'supervisor.decision': m.dash_evt_supervisor_decision,
+	'misp.context_retrieved': m.dash_evt_misp_intel,
+	'wazuh.forensics_collected': m.dash_evt_forensics_collected
+};
+
 export function formatEventType(value: string | null | undefined): string {
 	if (!value) return m.common_unknown();
-
-	// Event-type prose is still English pending its own catalog section —
-	// tracked under #52's remaining-screens extraction.
-	const map: Record<string, string> = {
-		'investigation.created': 'Investigation Started',
-		'investigation.closed': 'Investigation Closed',
-		'human.review_requested': 'Review Requested',
-		'human.decision_received': 'Review Completed',
-		'verdict.rendered': 'Verdict Rendered',
-		'enrichment.completed': 'Enrichment Done',
-		'enrichment.requested': 'Enrichment Started',
-		'enrichment.failed': 'Enrichment Failed',
-		'thehive.case_created': 'Case Created',
-		'phase.changed': 'Phase Changed',
-		'alert.correlated': 'Alert Added',
-		'observable.extracted': 'Observable Found',
-		'supervisor.decision': 'Supervisor Decision',
-		'misp.context_retrieved': 'Threat Intel Retrieved',
-		'wazuh.forensics_collected': 'Forensics Collected'
-	};
-
-	return map[value] || formatSnakeCase(value.replace(/[._]/g, ' '));
+	return EVENT_TYPE_MESSAGES[value]?.() ?? formatSnakeCase(value.replace(/[._]/g, ' '));
 }
 
 export function formatSeverity(value: string | null | undefined): string {
